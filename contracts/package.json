@@ -12,6 +12,7 @@
     "clean": "rm -rf abi artifacts cache"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.10",
     "@nomicfoundation/hardhat-toolbox-viem": "^5.0.0",
     "@types/node": "^22.0.0",
     "hardhat": "^3.2",

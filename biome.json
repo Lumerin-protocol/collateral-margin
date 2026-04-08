@@ -1,0 +1,68 @@
+{
+  "$schema": "./contracts/node_modules/@biomejs/biome/configuration_schema.json",
+  "files": {
+    "includes": [
+      "**",
+      "!!**/generated",
+      "!!**/build",
+      "!!**/node_modules",
+      "!!**/coverage",
+      "!!**/artifacts",
+      "!!**/cache"
+    ]
+  },
+  "overrides": [
+    {
+      "includes": [
+        "indexer/src/**",
+        "indexer/tests/**"
+      ],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "noForEach": "off"
+          },
+          "correctness": {
+            "noUnusedImports": "warn"
+          },
+          "style": {
+            "useImportType": "off",
+            "useTemplate": "off"
+          },
+          "suspicious": {
+            "noShadowRestrictedNames": "off",
+            "noDoubleEquals": "off"
+          }
+        }
+      }
+    }
+  ],
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "off"
+      }
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true,
+      "suspicious": {
+        "noExplicitAny": "warn"
+      },
+      "style": {
+        "noNonNullAssertion": "warn",
+        "useImportType": "warn"
+      },
+      "complexity": {
+        "useArrowFunction": "off"
+      }
+    }
+  },
+  "formatter": {
+    "enabled": false,
+    "indentStyle": "space",
+    "indentWidth": 2
+  }
+}
