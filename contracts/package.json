@@ -1,0 +1,27 @@
+{
+  "name": "collateral-margin-contracts",
+  "version": "1.0.0",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "test": "hardhat test",
+    "build": "hardhat build && node scripts/export-abis.ts",
+    "clean": "rm -rf abi artifacts cache"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox-viem": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "hardhat": "^3.2",
+    "typescript": "^5.8.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "npm:@openzeppelin/contracts@5.1.0",
+    "@openzeppelin/contracts-upgradeable": "npm:@openzeppelin/contracts-upgradeable@5.1.0",
+    "dotenv": "^16.4.1",
+    "viem": "^2.42.1"
+  },
+  "packageManager": "pnpm@10.28.1"
+}
