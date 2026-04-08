@@ -38,6 +38,7 @@ contract CollateralVault is ICollateralVault, Initializable, UUPSUpgradeable, Ow
     event BalanceDebited(address indexed user, uint256 amount);
     event AuthorizedCallerSet(address indexed caller, bool authorized);
     event MarginEngineSet(address indexed marginEngine);
+    event InsuranceFundSet(address indexed account);
 
     // ── Storage ─────────────────────────────────────────────────────────────
 
@@ -48,7 +49,9 @@ contract CollateralVault is ICollateralVault, Initializable, UUPSUpgradeable, Ow
     ///      If set, withdrawals check: newBalance >= marginEngine.computePortfolioIM(user).
     address public marginEngine;
 
-    uint256[40] private __gap;
+    /// @dev Shared insurance ledger account (receipt token `balanceOf(insuranceFund)`).
+    ///      Set by owner; product engines move funds via existing authorized APIs.
+    address public insuranceFund;
 
     // ── Modifiers ───────────────────────────────────────────────────────────
 
@@ -93,6 +96,12 @@ contract CollateralVault is ICollateralVault, Initializable, UUPSUpgradeable, Ow
     function setMarginEngine(address _marginEngine) external onlyOwner {
         marginEngine = _marginEngine;
         emit MarginEngineSet(_marginEngine);
+    }
+
+    /// @notice Configure the insurance fund account (`address(0)` unsets).
+    function setInsuranceFund(address account) external onlyOwner {
+        insuranceFund = account;
+        emit InsuranceFundSet(account);
     }
 
     // ── User functions ──────────────────────────────────────────────────────
@@ -174,6 +183,13 @@ contract CollateralVault is ICollateralVault, Initializable, UUPSUpgradeable, Ow
     /// @notice Alias for balanceOf — satisfies ICollateralVault.
     function getBalance(address user) external view returns (uint256) {
         return balanceOf(user);
+    }
+
+    /// @notice Receipt balance of the configured insurance fund account.
+    function insuranceFundBalance() external view returns (uint256) {
+        address fund = insuranceFund;
+        if (fund == address(0)) return 0;
+        return balanceOf(fund);
     }
 
     // ── Upgrade ─────────────────────────────────────────────────────────────

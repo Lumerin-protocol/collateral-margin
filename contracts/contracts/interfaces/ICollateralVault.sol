@@ -15,6 +15,14 @@ interface ICollateralVault {
     /// @notice User's collateral balance in token decimals.
     function getBalance(address user) external view returns (uint256);
 
+    /// @notice Dedicated account (EOA or contract) for shared protocol insurance.
+    ///         Its balance is normal vault receipt tokens — credit via authorized
+    ///         `transfer` / `credit` / `depositFor`, same as any account.
+    function insuranceFund() external view returns (address);
+
+    /// @notice Receipt-token balance of `insuranceFund`, or zero if unset.
+    function insuranceFundBalance() external view returns (uint256);
+
     /// @notice Transfer balance between two accounts. Authorized callers only.
     function transfer(address from, address to, uint256 amount) external;
 

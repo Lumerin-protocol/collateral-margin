@@ -1,65 +1,40 @@
-import { describe, it, beforeEach } from "node:test";
+import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { encodeFunctionData, maxUint256, zeroAddress } from "viem";
+import { getAddress, maxUint256, zeroAddress } from "viem";
 import { network } from "hardhat";
-import type { NetworkConnection } from "hardhat/types/network";
+import {
+  VAULT_AUTH_OPS_ALICE_DEPOSIT,
+  deployVaultAuthorizedOperationsFixture,
+  deployVaultFixture,
+} from "./fixtures.js";
 
 const { viem, networkHelpers } = await network.connect();
 
-async function deployVaultFixture(conn: NetworkConnection) {
-  const { viem } = conn;
-  const [owner, alice, bob, engine] = await viem.getWalletClients();
-
-  const usdc = await viem.deployContract("USDCMock", []);
-  const vaultImpl = await viem.deployContract("CollateralVault", []);
-  const vaultProxy = await viem.deployContract("ERC1967Proxy", [
-    vaultImpl.address as `0x${string}`,
-    encodeFunctionData({
-      abi: vaultImpl.abi,
-      functionName: "initialize",
-      args: [usdc.address],
-    }),
-  ]);
-  const vault = await viem.getContractAt("CollateralVault", vaultProxy.address);
-
-  const topUp = 100_000_000_000n; // 100k USDC
-  for (const w of [alice, bob, engine]) {
-    await usdc.write.transfer([w.account.address, topUp], { account: owner.account });
-    const usdcAs = await viem.getContractAt("USDCMock", usdc.address, { client: { wallet: w } });
-    await usdcAs.write.approve([vault.address, maxUint256]);
-  }
-  await usdc.write.approve([vault.address, maxUint256], { account: owner.account });
-
-  return { vault, usdc, owner, alice, bob, engine };
-}
+/** 1 USDC (6 decimals). Shared across deposit / access-control setup tests. */
+const ONE_USDC = 1_000_000n;
+/** 0.5 USDC — blocked ERC20 transfer amounts. */
+const HALF_USDC = 500_000n;
+/** Deliberately larger than Alice's balance in authorized-ops tests. */
+const EXCESSIVE_DEBIT = 99_000_000n;
 
 describe("CollateralVault", () => {
-  let vault: Awaited<ReturnType<typeof deployVaultFixture>>["vault"];
-  let usdc: Awaited<ReturnType<typeof deployVaultFixture>>["usdc"];
-  let owner: Awaited<ReturnType<typeof deployVaultFixture>>["owner"];
-  let alice: Awaited<ReturnType<typeof deployVaultFixture>>["alice"];
-  let bob: Awaited<ReturnType<typeof deployVaultFixture>>["bob"];
-  let engine: Awaited<ReturnType<typeof deployVaultFixture>>["engine"];
-
-  beforeEach(async () => {
-    ({ vault, usdc, owner, alice, bob, engine } =
-      await networkHelpers.loadFixture(deployVaultFixture));
-  });
-
   // ── Initialization ──────────────────────────────────────────────────────
 
   describe("initialization", () => {
     it("sets collateral token", async () => {
+      const { vault, usdc } = await networkHelpers.loadFixture(deployVaultFixture);
       const token = await vault.read.collateralToken();
       assert.equal(token.toLowerCase(), usdc.address.toLowerCase());
     });
 
     it("sets name and symbol", async () => {
+      const { vault } = await networkHelpers.loadFixture(deployVaultFixture);
       assert.equal(await vault.read.name(), "Titan Collateral");
       assert.equal(await vault.read.symbol(), "tCOL");
     });
 
     it("starts with zero balances", async () => {
+      const { vault, alice } = await networkHelpers.loadFixture(deployVaultFixture);
       assert.equal(await vault.read.getBalance([alice.account.address]), 0n);
     });
   });
@@ -68,13 +43,16 @@ describe("CollateralVault", () => {
 
   describe("deposit", () => {
     it("mints receipt tokens and pulls USDC", async () => {
-      const amount = 1_000_000n; // 1 USDC
-      const aliceVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: alice },
-      });
+      const { vault, usdc, alice } = await networkHelpers.loadFixture(deployVaultFixture);
+      const amount = ONE_USDC;
 
       const usdcBefore = await usdc.read.balanceOf([alice.account.address]);
-      await aliceVault.write.deposit([amount]);
+      await viem.assertions.emitWithArgs(
+        vault.write.deposit([amount], { account: alice.account }),
+        vault,
+        "Deposited",
+        [getAddress(alice.account.address), amount, amount],
+      );
       const usdcAfter = await usdc.read.balanceOf([alice.account.address]);
 
       assert.equal(await vault.read.getBalance([alice.account.address]), amount);
@@ -83,23 +61,27 @@ describe("CollateralVault", () => {
     });
 
     it("reverts on zero amount", async () => {
-      const aliceVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: alice },
-      });
+      const { vault, alice } = await networkHelpers.loadFixture(deployVaultFixture);
       await viem.assertions.revertWithCustomError(
-        aliceVault.write.deposit([0n]),
+        vault.write.deposit([0n], { account: alice.account }),
         vault,
         "ZeroAmount",
       );
     });
 
     it("accumulates multiple deposits", async () => {
-      const aliceVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: alice },
-      });
-      await aliceVault.write.deposit([1_000_000n]);
-      await aliceVault.write.deposit([2_000_000n]);
-      assert.equal(await vault.read.getBalance([alice.account.address]), 3_000_000n);
+      const { vault, alice } = await networkHelpers.loadFixture(deployVaultFixture);
+      const secondDeposit = 2_000_000n;
+      const balanceAfter = ONE_USDC + secondDeposit;
+
+      await vault.write.deposit([ONE_USDC], { account: alice.account });
+      await viem.assertions.emitWithArgs(
+        vault.write.deposit([secondDeposit], { account: alice.account }),
+        vault,
+        "Deposited",
+        [getAddress(alice.account.address), secondDeposit, balanceAfter],
+      );
+      assert.equal(await vault.read.getBalance([alice.account.address]), balanceAfter);
     });
   });
 
@@ -107,49 +89,56 @@ describe("CollateralVault", () => {
 
   describe("withdraw", () => {
     it("burns receipt tokens and returns USDC", async () => {
-      const amount = 5_000_000n;
-      const aliceVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: alice },
-      });
-      await aliceVault.write.deposit([amount]);
+      const { vault, usdc, alice } = await networkHelpers.loadFixture(deployVaultFixture);
+      const depositAmount = 5_000_000n;
+      const withdrawAmount = 3_000_000n;
+      const balanceAfter = 2_000_000n;
+
+      await vault.write.deposit([depositAmount], { account: alice.account });
 
       const usdcBefore = await usdc.read.balanceOf([alice.account.address]);
-      await aliceVault.write.withdraw([3_000_000n]);
+      await viem.assertions.emitWithArgs(
+        vault.write.withdraw([withdrawAmount], { account: alice.account }),
+        vault,
+        "Withdrawn",
+        [getAddress(alice.account.address), withdrawAmount, balanceAfter],
+      );
       const usdcAfter = await usdc.read.balanceOf([alice.account.address]);
 
-      assert.equal(await vault.read.getBalance([alice.account.address]), 2_000_000n);
-      assert.equal(usdcAfter - usdcBefore, 3_000_000n);
+      assert.equal(await vault.read.getBalance([alice.account.address]), balanceAfter);
+      assert.equal(usdcAfter - usdcBefore, withdrawAmount);
     });
 
     it("reverts on zero amount", async () => {
-      const aliceVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: alice },
-      });
+      const { vault, alice } = await networkHelpers.loadFixture(deployVaultFixture);
       await viem.assertions.revertWithCustomError(
-        aliceVault.write.withdraw([0n]),
+        vault.write.withdraw([0n], { account: alice.account }),
         vault,
         "ZeroAmount",
       );
     });
 
     it("reverts on insufficient balance", async () => {
-      const aliceVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: alice },
-      });
-      await aliceVault.write.deposit([1_000_000n]);
+      const { vault, alice } = await networkHelpers.loadFixture(deployVaultFixture);
+      await vault.write.deposit([ONE_USDC], { account: alice.account });
       await viem.assertions.revertWithCustomError(
-        aliceVault.write.withdraw([2_000_000n]),
+        vault.write.withdraw([2_000_000n], { account: alice.account }),
         vault,
         "InsufficientBalance",
       );
     });
 
     it("allows full withdrawal when no margin engine", async () => {
-      const aliceVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: alice },
-      });
-      await aliceVault.write.deposit([5_000_000n]);
-      await aliceVault.write.withdraw([5_000_000n]);
+      const { vault, alice } = await networkHelpers.loadFixture(deployVaultFixture);
+      const depositAmount = 5_000_000n;
+
+      await vault.write.deposit([depositAmount], { account: alice.account });
+      await viem.assertions.emitWithArgs(
+        vault.write.withdraw([depositAmount], { account: alice.account }),
+        vault,
+        "Withdrawn",
+        [getAddress(alice.account.address), depositAmount, 0n],
+      );
       assert.equal(await vault.read.getBalance([alice.account.address]), 0n);
     });
   });
@@ -158,23 +147,32 @@ describe("CollateralVault", () => {
 
   describe("margin-gated withdrawal", () => {
     it("blocks withdrawal that would breach margin", async () => {
-      const aliceVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: alice },
-      });
-      await aliceVault.write.deposit([10_000_000n]);
+      const { vault, owner, alice } = await networkHelpers.loadFixture(deployVaultFixture);
+      const aliceDeposit = 10_000_000n;
+      const requiredIm = 8_000_000n;
+      const withdrawAmount = 2_000_000n;
 
-      // Deploy a mock margin engine that always requires 8M
+      await vault.write.deposit([aliceDeposit], { account: alice.account });
+
       const mock = await viem.deployContract("MarginEngineMock", []);
-      await vault.write.setMarginEngine([mock.address], { account: owner.account });
-      await mock.write.setIM([alice.account.address, 8_000_000n]);
+      await viem.assertions.emitWithArgs(
+        vault.write.setMarginEngine([mock.address], { account: owner.account }),
+        vault,
+        "MarginEngineSet",
+        [getAddress(mock.address)],
+      );
+      await mock.write.setIM([alice.account.address, requiredIm]);
 
-      // Can withdraw 2M (leaves 8M >= 8M required)
-      await aliceVault.write.withdraw([2_000_000n]);
-      assert.equal(await vault.read.getBalance([alice.account.address]), 8_000_000n);
+      await viem.assertions.emitWithArgs(
+        vault.write.withdraw([withdrawAmount], { account: alice.account }),
+        vault,
+        "Withdrawn",
+        [getAddress(alice.account.address), withdrawAmount, requiredIm],
+      );
+      assert.equal(await vault.read.getBalance([alice.account.address]), requiredIm);
 
-      // Cannot withdraw 1 more (would leave 7,999,999 < 8M)
       await viem.assertions.revertWithCustomError(
-        aliceVault.write.withdraw([1n]),
+        vault.write.withdraw([1n], { account: alice.account }),
         vault,
         "WithdrawalWouldBreachMargin",
       );
@@ -185,30 +183,26 @@ describe("CollateralVault", () => {
 
   describe("non-transferable", () => {
     it("reverts on ERC20 transfer", async () => {
-      const aliceVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: alice },
-      });
-      await aliceVault.write.deposit([1_000_000n]);
+      const { vault, alice, bob } = await networkHelpers.loadFixture(deployVaultFixture);
+      await vault.write.deposit([ONE_USDC], { account: alice.account });
 
       await viem.assertions.revertWithCustomError(
-        aliceVault.write.transfer([bob.account.address, 500_000n]),
+        vault.write.transfer([bob.account.address, HALF_USDC], { account: alice.account }),
         vault,
         "TransferDisabled",
       );
     });
 
     it("reverts on ERC20 transferFrom", async () => {
-      const aliceVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: alice },
-      });
-      await aliceVault.write.deposit([1_000_000n]);
-      await aliceVault.write.approve([bob.account.address, maxUint256]);
+      const { vault, alice, bob } = await networkHelpers.loadFixture(deployVaultFixture);
+      await vault.write.deposit([ONE_USDC], { account: alice.account });
+      await vault.write.approve([bob.account.address, maxUint256], { account: alice.account });
 
-      const bobVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: bob },
-      });
       await viem.assertions.revertWithCustomError(
-        bobVault.write.transferFrom([alice.account.address, bob.account.address, 500_000n]),
+        vault.write.transferFrom(
+          [alice.account.address, bob.account.address, HALF_USDC],
+          { account: bob.account },
+        ),
         vault,
         "TransferDisabled",
       );
@@ -218,71 +212,94 @@ describe("CollateralVault", () => {
   // ── Authorized transfer/credit/debit ────────────────────────────────────
 
   describe("authorized operations", () => {
-    beforeEach(async () => {
-      await vault.write.setAuthorizedCaller([engine.account.address, true], {
-        account: owner.account,
-      });
-
-      const aliceVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: alice },
-      });
-      await aliceVault.write.deposit([10_000_000n]);
-    });
-
     it("transfer moves balance between accounts", async () => {
-      const engineVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: engine },
-      });
-      await engineVault.write.transfer([alice.account.address, bob.account.address, 3_000_000n]);
+      const { vault, alice, bob, engine } = await networkHelpers.loadFixture(
+        deployVaultAuthorizedOperationsFixture,
+      );
+      const transferAmount = 3_000_000n;
+      const aliceAfter = 7_000_000n;
+      const bobAfter = 3_000_000n;
 
-      assert.equal(await vault.read.getBalance([alice.account.address]), 7_000_000n);
-      assert.equal(await vault.read.getBalance([bob.account.address]), 3_000_000n);
+      await viem.assertions.emitWithArgs(
+        vault.write.transfer([alice.account.address, bob.account.address, transferAmount], {
+          account: engine.account,
+        }),
+        vault,
+        "InternalTransfer",
+        [
+          getAddress(alice.account.address),
+          getAddress(bob.account.address),
+          transferAmount,
+        ],
+      );
+
+      assert.equal(await vault.read.getBalance([alice.account.address]), aliceAfter);
+      assert.equal(await vault.read.getBalance([bob.account.address]), bobAfter);
     });
 
     it("transfer reverts on insufficient balance", async () => {
-      const engineVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: engine },
-      });
+      const { vault, alice, bob, engine } = await networkHelpers.loadFixture(
+        deployVaultAuthorizedOperationsFixture,
+      );
       await viem.assertions.revertWithCustomError(
-        engineVault.write.transfer([alice.account.address, bob.account.address, 99_000_000n]),
+        vault.write.transfer([alice.account.address, bob.account.address, EXCESSIVE_DEBIT], {
+          account: engine.account,
+        }),
         vault,
         "InsufficientBalance",
       );
     });
 
     it("credit increases balance", async () => {
-      const engineVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: engine },
-      });
-      await engineVault.write.credit([bob.account.address, 5_000_000n]);
-      assert.equal(await vault.read.getBalance([bob.account.address]), 5_000_000n);
+      const { vault, bob, engine } = await networkHelpers.loadFixture(
+        deployVaultAuthorizedOperationsFixture,
+      );
+      const creditAmount = 5_000_000n;
+
+      await viem.assertions.emitWithArgs(
+        vault.write.credit([bob.account.address, creditAmount], { account: engine.account }),
+        vault,
+        "BalanceCredited",
+        [getAddress(bob.account.address), creditAmount],
+      );
+      assert.equal(await vault.read.getBalance([bob.account.address]), creditAmount);
     });
 
     it("debit decreases balance", async () => {
-      const engineVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: engine },
-      });
-      await engineVault.write.debit([alice.account.address, 4_000_000n]);
-      assert.equal(await vault.read.getBalance([alice.account.address]), 6_000_000n);
+      const { vault, alice, engine } = await networkHelpers.loadFixture(
+        deployVaultAuthorizedOperationsFixture,
+      );
+      const debitAmount = 4_000_000n;
+      const aliceAfter = VAULT_AUTH_OPS_ALICE_DEPOSIT - debitAmount;
+
+      await viem.assertions.emitWithArgs(
+        vault.write.debit([alice.account.address, debitAmount], { account: engine.account }),
+        vault,
+        "BalanceDebited",
+        [getAddress(alice.account.address), debitAmount],
+      );
+      assert.equal(await vault.read.getBalance([alice.account.address]), aliceAfter);
     });
 
     it("debit reverts on insufficient balance", async () => {
-      const engineVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: engine },
-      });
+      const { vault, alice, engine } = await networkHelpers.loadFixture(
+        deployVaultAuthorizedOperationsFixture,
+      );
       await viem.assertions.revertWithCustomError(
-        engineVault.write.debit([alice.account.address, 99_000_000n]),
+        vault.write.debit([alice.account.address, EXCESSIVE_DEBIT], { account: engine.account }),
         vault,
         "InsufficientBalance",
       );
     });
 
     it("transfer is no-op for zero amount", async () => {
-      const engineVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: engine },
+      const { vault, alice, bob, engine } = await networkHelpers.loadFixture(
+        deployVaultAuthorizedOperationsFixture,
+      );
+      await vault.write.transfer([alice.account.address, bob.account.address, 0n], {
+        account: engine.account,
       });
-      await engineVault.write.transfer([alice.account.address, bob.account.address, 0n]);
-      assert.equal(await vault.read.getBalance([alice.account.address]), 10_000_000n);
+      assert.equal(await vault.read.getBalance([alice.account.address]), VAULT_AUTH_OPS_ALICE_DEPOSIT);
     });
   });
 
@@ -290,58 +307,65 @@ describe("CollateralVault", () => {
 
   describe("access control", () => {
     it("unauthorized caller cannot transfer", async () => {
-      const aliceVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: alice },
-      });
-      await aliceVault.write.deposit([1_000_000n]);
+      const { vault, alice, bob } = await networkHelpers.loadFixture(deployVaultFixture);
+      await vault.write.deposit([ONE_USDC], { account: alice.account });
 
-      const bobVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: bob },
-      });
       await viem.assertions.revertWithCustomError(
-        bobVault.write.transfer([alice.account.address, bob.account.address, 500_000n]),
+        vault.write.transfer([alice.account.address, bob.account.address, HALF_USDC], {
+          account: bob.account,
+        }),
         vault,
         "NotAuthorized",
       );
     });
 
     it("unauthorized caller cannot credit", async () => {
-      const bobVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: bob },
-      });
+      const { vault, bob } = await networkHelpers.loadFixture(deployVaultFixture);
       await viem.assertions.revertWithCustomError(
-        bobVault.write.credit([bob.account.address, 1_000_000n]),
+        vault.write.credit([bob.account.address, ONE_USDC], { account: bob.account }),
         vault,
         "NotAuthorized",
       );
     });
 
     it("unauthorized caller cannot debit", async () => {
-      const bobVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: bob },
-      });
+      const { vault, alice, bob } = await networkHelpers.loadFixture(deployVaultFixture);
       await viem.assertions.revertWithCustomError(
-        bobVault.write.debit([alice.account.address, 1_000_000n]),
+        vault.write.debit([alice.account.address, ONE_USDC], { account: bob.account }),
         vault,
         "NotAuthorized",
       );
     });
 
     it("only owner can set authorized caller", async () => {
-      const aliceVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: alice },
-      });
-      await assert.rejects(aliceVault.write.setAuthorizedCaller([bob.account.address, true]));
+      const { vault, alice, bob } = await networkHelpers.loadFixture(deployVaultFixture);
+      await viem.assertions.revertWithCustomError(
+        vault.write.setAuthorizedCaller([bob.account.address, true], { account: alice.account }),
+        vault,
+        "OwnableUnauthorizedAccount",
+      );
     });
 
     it("only owner can set margin engine", async () => {
-      const aliceVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: alice },
-      });
-      await assert.rejects(aliceVault.write.setMarginEngine([bob.account.address]));
+      const { vault, alice, bob } = await networkHelpers.loadFixture(deployVaultFixture);
+      await viem.assertions.revertWithCustomError(
+        vault.write.setMarginEngine([bob.account.address], { account: alice.account }),
+        vault,
+        "OwnableUnauthorizedAccount",
+      );
+    });
+
+    it("only owner can set insurance fund", async () => {
+      const { vault, alice, bob } = await networkHelpers.loadFixture(deployVaultFixture);
+      await viem.assertions.revertWithCustomError(
+        vault.write.setInsuranceFund([bob.account.address], { account: alice.account }),
+        vault,
+        "OwnableUnauthorizedAccount",
+      );
     });
 
     it("cannot set zero address as authorized caller", async () => {
+      const { vault, owner } = await networkHelpers.loadFixture(deployVaultFixture);
       await viem.assertions.revertWithCustomError(
         vault.write.setAuthorizedCaller([zeroAddress, true], { account: owner.account }),
         vault,
@@ -350,21 +374,73 @@ describe("CollateralVault", () => {
     });
 
     it("can revoke authorized caller", async () => {
-      await vault.write.setAuthorizedCaller([engine.account.address, true], {
-        account: owner.account,
-      });
-      await vault.write.setAuthorizedCaller([engine.account.address, false], {
-        account: owner.account,
-      });
+      const { vault, owner, alice, engine } = await networkHelpers.loadFixture(deployVaultFixture);
+      await viem.assertions.emitWithArgs(
+        vault.write.setAuthorizedCaller([engine.account.address, true], {
+          account: owner.account,
+        }),
+        vault,
+        "AuthorizedCallerSet",
+        [getAddress(engine.account.address), true],
+      );
+      await viem.assertions.emitWithArgs(
+        vault.write.setAuthorizedCaller([engine.account.address, false], {
+          account: owner.account,
+        }),
+        vault,
+        "AuthorizedCallerSet",
+        [getAddress(engine.account.address), false],
+      );
 
-      const engineVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: engine },
-      });
       await viem.assertions.revertWithCustomError(
-        engineVault.write.credit([alice.account.address, 1_000_000n]),
+        vault.write.credit([alice.account.address, ONE_USDC], { account: engine.account }),
         vault,
         "NotAuthorized",
       );
+    });
+  });
+
+  // ── Insurance fund account ──────────────────────────────────────────────
+
+  describe("insurance fund", () => {
+    it("starts unset with zero balance view", async () => {
+      const { vault } = await networkHelpers.loadFixture(deployVaultFixture);
+      assert.equal(await vault.read.insuranceFund(), zeroAddress);
+      assert.equal(await vault.read.insuranceFundBalance(), 0n);
+    });
+
+    it("owner sets fund and authorized transfer credits it", async () => {
+      const { vault, owner, alice, bob, engine } = await networkHelpers.loadFixture(
+        deployVaultAuthorizedOperationsFixture,
+      );
+      const fund = bob.account.address;
+      const move = 2_000_000n;
+      const aliceAfter = VAULT_AUTH_OPS_ALICE_DEPOSIT - move;
+
+      await viem.assertions.emitWithArgs(
+        vault.write.setInsuranceFund([fund], { account: owner.account }),
+        vault,
+        "InsuranceFundSet",
+        [getAddress(fund)],
+      );
+      assert.equal(await vault.read.insuranceFund(), getAddress(fund));
+
+      await vault.write.transfer([alice.account.address, fund, move], { account: engine.account });
+      assert.equal(await vault.read.getBalance([alice.account.address]), aliceAfter);
+      assert.equal(await vault.read.balanceOf([fund]), move);
+      assert.equal(await vault.read.insuranceFundBalance(), move);
+    });
+
+    it("owner can clear insurance fund", async () => {
+      const { vault, owner, bob } = await networkHelpers.loadFixture(deployVaultFixture);
+      await vault.write.setInsuranceFund([bob.account.address], { account: owner.account });
+      await viem.assertions.emitWithArgs(
+        vault.write.setInsuranceFund([zeroAddress], { account: owner.account }),
+        vault,
+        "InsuranceFundSet",
+        [getAddress(zeroAddress)],
+      );
+      assert.equal(await vault.read.insuranceFund(), zeroAddress);
     });
   });
 
@@ -372,19 +448,35 @@ describe("CollateralVault", () => {
 
   describe("totalSupply", () => {
     it("tracks total deposited collateral", async () => {
-      const aliceVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: alice },
-      });
-      const bobVault = await viem.getContractAt("CollateralVault", vault.address, {
-        client: { wallet: bob },
-      });
+      const { vault, alice, bob } = await networkHelpers.loadFixture(deployVaultFixture);
+      const aliceDeposit = 5_000_000n;
+      const bobDeposit = 3_000_000n;
+      const aliceWithdraw = 2_000_000n;
+      const totalAfterDeposits = aliceDeposit + bobDeposit;
+      const aliceAfterWithdraw = aliceDeposit - aliceWithdraw;
+      const totalAfterWithdraw = totalAfterDeposits - aliceWithdraw;
 
-      await aliceVault.write.deposit([5_000_000n]);
-      await bobVault.write.deposit([3_000_000n]);
-      assert.equal(await vault.read.totalSupply(), 8_000_000n);
+      await viem.assertions.emitWithArgs(
+        vault.write.deposit([aliceDeposit], { account: alice.account }),
+        vault,
+        "Deposited",
+        [getAddress(alice.account.address), aliceDeposit, aliceDeposit],
+      );
+      await viem.assertions.emitWithArgs(
+        vault.write.deposit([bobDeposit], { account: bob.account }),
+        vault,
+        "Deposited",
+        [getAddress(bob.account.address), bobDeposit, bobDeposit],
+      );
+      assert.equal(await vault.read.totalSupply(), totalAfterDeposits);
 
-      await aliceVault.write.withdraw([2_000_000n]);
-      assert.equal(await vault.read.totalSupply(), 6_000_000n);
+      await viem.assertions.emitWithArgs(
+        vault.write.withdraw([aliceWithdraw], { account: alice.account }),
+        vault,
+        "Withdrawn",
+        [getAddress(alice.account.address), aliceWithdraw, aliceAfterWithdraw],
+      );
+      assert.equal(await vault.read.totalSupply(), totalAfterWithdraw);
     });
   });
 });
