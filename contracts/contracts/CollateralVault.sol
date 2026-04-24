@@ -23,7 +23,7 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     // ── Errors ──────────────────────────────────────────────────────────────
 
     error ZeroAmount();
-    error WithdrawalWouldBreachMargin();
+    error MarginBreach();
     error NotAuthorized();
     error ZeroAddress();
     error TransferDisabled();
@@ -37,6 +37,7 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     event BalanceDebited(address indexed user, uint256 amount);
     event AuthorizedCallerSet(address indexed caller, bool authorized);
     event MarginEngineSet(address indexed marginEngine);
+    event InsuranceFundDeposited(address indexed source, uint256 amount);
     event InsuranceFundWithdrawn(address indexed recipient, uint256 amount);
 
     // ── Storage ─────────────────────────────────────────────────────────────
@@ -101,12 +102,17 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
         emit MarginEngineSet(_marginEngine);
     }
 
+    /// @notice Deposit collateral into the insurance fund from `source`, minting its receipt tokens.
+    function depositInsuranceFund(address source, uint256 amount) external onlyOwner {
+        if (amount == 0) revert ZeroAmount();
+        _depositFor(source, INSURANCE_FUND_ADDR, amount);
+        emit InsuranceFundDeposited(source, amount);
+    }
+
     /// @notice Withdraw collateral from the insurance fund to `recipient`, burning its receipt tokens.
     function withdrawInsuranceFund(address recipient, uint256 amount) external onlyOwner {
-        // balance is checked by the _burn call
         if (amount == 0) revert ZeroAmount();
-        collateralToken.safeTransfer(recipient, amount);
-        _burn(INSURANCE_FUND_ADDR, amount);
+        _withdrawTo(INSURANCE_FUND_ADDR, recipient, amount);
         emit InsuranceFundWithdrawn(recipient, amount);
     }
 
@@ -115,27 +121,14 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     /// @notice Deposit collateral tokens; mints an equal amount of receipt tokens.
     function deposit(uint256 amount) external {
         if (amount == 0) revert ZeroAmount();
-        collateralToken.safeTransferFrom(_msgSender(), address(this), amount);
-        _mint(_msgSender(), amount);
-        emit Deposited(_msgSender(), amount, balanceOf(_msgSender()));
+        _depositFor(_msgSender(), _msgSender(), amount);
     }
 
     /// @notice Withdraw collateral tokens; burns receipt tokens.
     ///         Reverts if the withdrawal would breach portfolio margin requirements.
     function withdraw(uint256 amount) external {
         if (amount == 0) revert ZeroAmount();
-        // balance is checked by the _burn call
-        _burn(_msgSender(), amount);
-
-        uint256 newBalance = balanceOf(_msgSender());
-        address engine = marginEngine;
-        if (engine != address(0)) {
-            uint256 required = IPortfolioMarginEngine(engine).computePortfolioIM(_msgSender());
-            if (newBalance < required) revert WithdrawalWouldBreachMargin();
-        }
-
-        collateralToken.safeTransfer(_msgSender(), amount);
-        emit Withdrawn(_msgSender(), amount, newBalance);
+        _withdrawTo(_msgSender(), _msgSender(), amount);
     }
 
     // ── Authorized-only mutations ───────────────────────────────────────────
@@ -144,6 +137,13 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     function internalTransfer(address from, address to, uint256 amount) external onlyAuthorized {
         if (amount == 0) return;
         _transfer(from, to, amount);
+    }
+
+    /// @notice Move balance between two accounts, reverting if the sender's portfolio margin is breached.
+    function internalTransferWithMarginCheck(address from, address to, uint256 amount) external onlyAuthorized {
+        if (amount == 0) return;
+        _transfer(from, to, amount);
+        _checkMargin(from);
     }
 
     /// @notice Credit (increase) an account's balance.
@@ -164,15 +164,39 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     /// @notice Pull collateral from `source`, credit `account`'s balance.
     ///         `source` must have approved this vault for the collateral token.
     function depositFor(address source, address account, uint256 amount) external onlyAuthorized {
+        _depositFor(source, account, amount);
+    }
+
+    /// @notice Debit `account`'s balance and send collateral to `recipient`.
+    ///         Reverts if the withdrawal would breach `account`'s portfolio margin requirements.
+    function withdrawTo(address account, address recipient, uint256 amount) external onlyAuthorized {
+        _withdrawTo(account, recipient, amount);
+    }
+
+    // ── Internal helpers ────────────────────────────────────────────────────
+
+    /// @dev Pulls collateral from `source`, mints receipt tokens to `account`, and emits Deposited.
+    function _depositFor(address source, address account, uint256 amount) internal {
         collateralToken.safeTransferFrom(source, address(this), amount);
         _mint(account, amount);
         emit Deposited(account, amount, balanceOf(account));
     }
 
-    /// @notice Debit `account`'s balance and send collateral to `recipient`.
-    function withdrawTo(address account, address recipient, uint256 amount) external onlyAuthorized {
+    /// @dev Burns `amount` from `account`, checks margin, transfers collateral to `recipient`, and emits Withdrawn.
+    function _withdrawTo(address account, address recipient, uint256 amount) internal {
         _burn(account, amount);
+        _checkMargin(account);
         collateralToken.safeTransfer(recipient, amount);
+        emit Withdrawn(account, amount, balanceOf(account));
+    }
+
+    /// @dev Reverts if `account`'s current balance falls below its portfolio IM requirement.
+    ///      No-op when no margin engine is configured.
+    function _checkMargin(address account) internal view {
+        address engine = marginEngine;
+        if (engine == address(0)) return;
+        uint256 required = IPortfolioMarginEngine(engine).computePortfolioIM(account);
+        if (balanceOf(account) < required) revert MarginBreach();
     }
 
     // ── Views (ICollateralVault) ────────────────────────────────────────────

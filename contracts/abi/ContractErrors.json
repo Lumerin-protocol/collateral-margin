@@ -38,11 +38,6 @@
     "type": "error"
   },
   {
-    "inputs": [],
-    "name": "WithdrawalWouldBreachMargin",
-    "type": "error"
-  },
-  {
     "inputs": [
       {
         "internalType": "address",
@@ -73,6 +68,11 @@
       }
     ],
     "name": "SafeERC20FailedOperation",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "MarginBreach",
     "type": "error"
   },
   {

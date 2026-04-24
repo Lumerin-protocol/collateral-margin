@@ -38,11 +38,6 @@ export const contractErrors = [
     "type": "error"
   },
   {
-    "inputs": [],
-    "name": "WithdrawalWouldBreachMargin",
-    "type": "error"
-  },
-  {
     "inputs": [
       {
         "internalType": "address",
@@ -73,6 +68,11 @@ export const contractErrors = [
       }
     ],
     "name": "SafeERC20FailedOperation",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "MarginBreach",
     "type": "error"
   },
   {

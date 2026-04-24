@@ -22,11 +22,17 @@ interface ICollateralVault is IERC20 {
     /// @notice Receipt-token balance of the insurance fund.
     function insuranceFundBalance() external view returns (uint256);
 
+    /// @notice Pull collateral from `source` into the insurance fund. Owner only.
+    function depositInsuranceFund(address source, uint256 amount) external;
+
     /// @notice Burn insurance fund receipt tokens and transfer collateral to `recipient`. Owner only.
     function withdrawInsuranceFund(address recipient, uint256 amount) external;
 
     /// @notice Transfer balance between two accounts. Authorized callers only.
     function internalTransfer(address from, address to, uint256 amount) external;
+
+    /// @notice Transfer balance between two accounts, reverting if the sender breaches portfolio margin. Authorized callers only.
+    function internalTransferWithMarginCheck(address from, address to, uint256 amount) external;
 
     /// @notice Credit (increase) a user's balance. Authorized callers only.
     function credit(address user, uint256 amount) external;

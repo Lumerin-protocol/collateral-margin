@@ -129,6 +129,11 @@ export const CollateralVaultAbi = [
   },
   {
     "inputs": [],
+    "name": "MarginBreach",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "NotAuthorized",
     "type": "error"
   },
@@ -189,11 +194,6 @@ export const CollateralVaultAbi = [
       }
     ],
     "name": "UUPSUnsupportedProxiableUUID",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "WithdrawalWouldBreachMargin",
     "type": "error"
   },
   {
@@ -324,6 +324,25 @@ export const CollateralVaultAbi = [
       }
     ],
     "name": "Initialized",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "source",
+        "type": "address"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "amount",
+        "type": "uint256"
+      }
+    ],
+    "name": "InsuranceFundDeposited",
     "type": "event"
   },
   {
@@ -481,6 +500,19 @@ export const CollateralVaultAbi = [
   {
     "inputs": [],
     "name": "UPGRADE_INTERFACE_VERSION",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "VERSION",
     "outputs": [
       {
         "internalType": "string",
@@ -679,6 +711,24 @@ export const CollateralVaultAbi = [
     "inputs": [
       {
         "internalType": "address",
+        "name": "source",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "amount",
+        "type": "uint256"
+      }
+    ],
+    "name": "depositInsuranceFund",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
         "name": "_collateralToken",
         "type": "address"
       }
@@ -720,6 +770,29 @@ export const CollateralVaultAbi = [
       }
     ],
     "name": "internalTransfer",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "from",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "to",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "amount",
+        "type": "uint256"
+      }
+    ],
+    "name": "internalTransferWithMarginCheck",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
