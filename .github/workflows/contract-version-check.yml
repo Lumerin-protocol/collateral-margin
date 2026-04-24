@@ -1,0 +1,31 @@
+name: Contract version check
+
+on:
+  pull_request:
+    paths:
+      - "contracts/contracts/CollateralVault.sol"
+      - "contracts/contracts/PortfolioMarginEngine.sol"
+
+jobs:
+  version-bump:
+    name: Verify VERSION was bumped
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check CollateralVault VERSION
+        run: |
+          bash scripts/check-version-bump.sh \
+            contracts/contracts/CollateralVault.sol \
+            ${{ github.event.pull_request.base.sha }} \
+            ${{ github.event.pull_request.head.sha }}
+
+      - name: Check PortfolioMarginEngine VERSION
+        run: |
+          bash scripts/check-version-bump.sh \
+            contracts/contracts/PortfolioMarginEngine.sol \
+            ${{ github.event.pull_request.base.sha }} \
+            ${{ github.event.pull_request.head.sha }}

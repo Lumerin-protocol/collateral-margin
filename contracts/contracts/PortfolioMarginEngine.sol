@@ -9,6 +9,7 @@ import { ICollateralVault } from "./interfaces/ICollateralVault.sol";
 import { IHashPowerPerpsDEX } from "./interfaces/IHashPowerPerpsDEX.sol";
 import { IOptionsEnginePortfolioView } from "./interfaces/IOptionsEnginePortfolioView.sol";
 import { IPortfolioMarginEngine } from "./interfaces/IPortfolioMarginEngine.sol";
+import { Versionable } from "./interfaces/Versionable.sol";
 
 /// @title PortfolioMarginEngine — Cross-product portfolio margin
 /// @notice Aggregates net Greeks across perps (linear delta) and options
@@ -17,9 +18,10 @@ import { IPortfolioMarginEngine } from "./interfaces/IPortfolioMarginEngine.sol"
 ///
 ///         portfolioIM = max(stressLoss) + perpsOrderMargin + optionsReserved
 ///                       + max(0, -perpUnrealizedPnl) + max(0, perpPendingFunding)
-contract PortfolioMarginEngine is IPortfolioMarginEngine, Initializable, UUPSUpgradeable, OwnableUpgradeable {
+contract PortfolioMarginEngine is IPortfolioMarginEngine, Versionable, Initializable, UUPSUpgradeable, OwnableUpgradeable {
     uint256 private constant WAD = 1e18;
     uint256 private constant PERP_QTY_DECIMALS = 1e6;
+    string public constant VERSION = "1.0.0";
 
     // ── Storage ─────────────────────────────────────────────────────────────
 
@@ -111,12 +113,12 @@ contract PortfolioMarginEngine is IPortfolioMarginEngine, Initializable, UUPSUpg
 
     /// @notice Check if user is healthy (balance >= MM).
     function isHealthy(address user) external view returns (bool) {
-        return vault.getBalance(user) >= _computeMargin(user, false);
+        return vault.balanceOf(user) >= _computeMargin(user, false);
     }
 
     /// @notice Check if user can place an order requiring additionalIM (in token decimals).
     function canPlaceOrder(address user, uint256 additionalIM) external view returns (bool) {
-        return vault.getBalance(user) >= _computeMargin(user, true) + additionalIM;
+        return vault.balanceOf(user) >= _computeMargin(user, true) + additionalIM;
     }
 
     // ── Internal ────────────────────────────────────────────────────────────

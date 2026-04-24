@@ -1,7 +1,10 @@
 /**
- * 1. Emits `abi/<Contract>.ts` with `export const <Contract>Abi = … as const` from Hardhat artifacts.
+ * 1. Emits `abi/<Contract>.ts` with `export const <Contract>Abi = … as const` and
+ *    `abi/<Contract>.json` with the raw ABI array from Hardhat artifacts.
  * 2. Collects unique Solidity `error` ABI items (+ `Error` / `Panic` builtins) into
- *    `abi/ContractErrors.ts`.
+ *    `abi/ContractErrors.json` and `abi/ContractErrors.ts`.
+ *
+ * Replaces hardhat-abi-exporter for Hardhat v3.
  */
 import { mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -11,12 +14,14 @@ import { toFunctionSelector } from "viem";
 import { formatAbiItem } from "viem/utils";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(__dirname, "..");
+const REPO_ROOT = resolve(__dirname, "../..");
 const ARTIFACTS_DIR = resolve(REPO_ROOT, "artifacts");
 const OUT_DIR = resolve(REPO_ROOT, "abi");
 const OUT_ERRORS_TS = join(OUT_DIR, "ContractErrors.ts");
+const OUT_ERRORS_JSON = join(OUT_DIR, "ContractErrors.json");
 
-function main(): void {
+function main(contracts?: string[]): void {
+  // Clear abi directory
   rmSync(OUT_DIR, { recursive: true, force: true });
 
   const bucket = new Map<string, Accum>();
@@ -45,7 +50,7 @@ function main(): void {
 
   mkdirSync(OUT_DIR, { recursive: true });
 
-  for (const rel of listContractArtifactJson()) {
+  for (const rel of listContractArtifactJson(contracts)) {
     const src = resolve(ARTIFACTS_DIR, rel);
     const name = basename(rel, ".json");
     if (!name) {
@@ -67,6 +72,7 @@ function main(): void {
         dest,
         `export const ${name}Abi = ${JSON.stringify(artifact.abi, null, 2)} as const;\n`,
       );
+      writeFileSync(resolve(OUT_DIR, `${name}.json`), JSON.stringify(artifact.abi, null, 2) + "\n");
       console.log(`  exported ${name}`);
 
       for (const item of abi) {
@@ -88,6 +94,7 @@ function main(): void {
     `export const contractErrors = ${JSON.stringify(outAbi, null, 2)} as const;\n`,
     "utf-8",
   );
+  writeFileSync(OUT_ERRORS_JSON, JSON.stringify(outAbi, null, 2) + "\n", "utf-8");
 
   console.log(`contract errors: ${rows.length} unique → ${relative(REPO_ROOT, OUT_ERRORS_TS)}`);
   console.log("");
@@ -96,11 +103,19 @@ function main(): void {
   }
 }
 
-function listContractArtifactJson(): string[] {
+/** All .json under artifacts except build-info, optionally filtered by contract name patterns. */
+function listContractArtifactJson(contracts?: string[]): string[] {
   const relativePaths = readdirSync(ARTIFACTS_DIR, { recursive: true }) as string[];
-  return relativePaths.filter(
-    (rel) => rel.endsWith(".json") && !rel.split(/[/\\]/).includes("build-info"),
-  );
+  return relativePaths.filter((rel) => {
+    if (!rel.endsWith(".json") || rel.split(/[/\\]/).includes("build-info")) return false;
+    if (!contracts) return true;
+    const name = basename(rel, ".json");
+    return contracts.some((pattern) =>
+      pattern.includes("*")
+        ? new RegExp(`^${pattern.replace(/\*/g, ".*")}$`).test(name)
+        : name === pattern,
+    );
+  });
 }
 
 type AbiError = {
@@ -143,4 +158,4 @@ type Accum = {
   files: string[];
 };
 
-main();
+export { main };

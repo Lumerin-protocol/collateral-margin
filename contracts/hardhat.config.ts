@@ -1,11 +1,16 @@
 import { defineConfig } from "hardhat/config";
 import hardhatToolboxViem from "@nomicfoundation/hardhat-toolbox-viem";
-import dotenv from "dotenv";
+import codegenPlugin from "./plugins/codegen/index.ts";
+import { tryLoadEnvFile } from "./lib/env.ts";
 
-dotenv.config();
+tryLoadEnvFile("./../.env");
+tryLoadEnvFile(".env");
 
 export default defineConfig({
-  plugins: [hardhatToolboxViem],
+  plugins: [hardhatToolboxViem, codegenPlugin],
+  codegen: {
+    contracts: ["CollateralVault", "ICollateralVault"],
+  },
   paths: {
     tests: "tests",
   },

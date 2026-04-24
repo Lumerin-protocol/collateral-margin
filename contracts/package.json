@@ -7,8 +7,8 @@
     "node": "24.x"
   },
   "scripts": {
+    "compile": "hardhat compile",
     "test": "hardhat test",
-    "build": "hardhat build && node scripts/export-abis.ts",
     "clean": "rm -rf abi artifacts cache"
   },
   "devDependencies": {

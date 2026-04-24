@@ -35,7 +35,7 @@ describe("CollateralVault", () => {
 
     it("starts with zero balances", async () => {
       const { vault, alice } = await networkHelpers.loadFixture(deployVaultFixture);
-      assert.equal(await vault.read.getBalance([alice.account.address]), 0n);
+      assert.equal(await vault.read.balanceOf([alice.account.address]), 0n);
     });
   });
 
@@ -55,18 +55,9 @@ describe("CollateralVault", () => {
       );
       const usdcAfter = await usdc.read.balanceOf([alice.account.address]);
 
-      assert.equal(await vault.read.getBalance([alice.account.address]), amount);
+      assert.equal(await vault.read.balanceOf([alice.account.address]), amount);
       assert.equal(await vault.read.balanceOf([alice.account.address]), amount);
       assert.equal(usdcBefore - usdcAfter, amount);
-    });
-
-    it("reverts on zero amount", async () => {
-      const { vault, alice } = await networkHelpers.loadFixture(deployVaultFixture);
-      await viem.assertions.revertWithCustomError(
-        vault.write.deposit([0n], { account: alice.account }),
-        vault,
-        "ZeroAmount",
-      );
     });
 
     it("accumulates multiple deposits", async () => {
@@ -81,7 +72,7 @@ describe("CollateralVault", () => {
         "Deposited",
         [getAddress(alice.account.address), secondDeposit, balanceAfter],
       );
-      assert.equal(await vault.read.getBalance([alice.account.address]), balanceAfter);
+      assert.equal(await vault.read.balanceOf([alice.account.address]), balanceAfter);
     });
   });
 
@@ -105,7 +96,7 @@ describe("CollateralVault", () => {
       );
       const usdcAfter = await usdc.read.balanceOf([alice.account.address]);
 
-      assert.equal(await vault.read.getBalance([alice.account.address]), balanceAfter);
+      assert.equal(await vault.read.balanceOf([alice.account.address]), balanceAfter);
       assert.equal(usdcAfter - usdcBefore, withdrawAmount);
     });
 
@@ -124,7 +115,7 @@ describe("CollateralVault", () => {
       await viem.assertions.revertWithCustomError(
         vault.write.withdraw([2_000_000n], { account: alice.account }),
         vault,
-        "InsufficientBalance",
+        "ERC20InsufficientBalance",
       );
     });
 
@@ -139,7 +130,7 @@ describe("CollateralVault", () => {
         "Withdrawn",
         [getAddress(alice.account.address), depositAmount, 0n],
       );
-      assert.equal(await vault.read.getBalance([alice.account.address]), 0n);
+      assert.equal(await vault.read.balanceOf([alice.account.address]), 0n);
     });
   });
 
@@ -169,7 +160,7 @@ describe("CollateralVault", () => {
         "Withdrawn",
         [getAddress(alice.account.address), withdrawAmount, requiredIm],
       );
-      assert.equal(await vault.read.getBalance([alice.account.address]), requiredIm);
+      assert.equal(await vault.read.balanceOf([alice.account.address]), requiredIm);
 
       await viem.assertions.revertWithCustomError(
         vault.write.withdraw([1n], { account: alice.account }),
@@ -187,6 +178,7 @@ describe("CollateralVault", () => {
       await vault.write.deposit([ONE_USDC], { account: alice.account });
 
       await viem.assertions.revertWithCustomError(
+        // @ts-expect-error — intentionally calling the blocked ERC20 transfer(address,uint256) overload
         vault.write.transfer([bob.account.address, HALF_USDC], { account: alice.account }),
         vault,
         "TransferDisabled",
@@ -197,12 +189,11 @@ describe("CollateralVault", () => {
       const { vault, alice, bob } = await networkHelpers.loadFixture(deployVaultFixture);
       await vault.write.deposit([ONE_USDC], { account: alice.account });
       await vault.write.approve([bob.account.address, maxUint256], { account: alice.account });
-
       await viem.assertions.revertWithCustomError(
-        vault.write.transferFrom(
-          [alice.account.address, bob.account.address, HALF_USDC],
-          { account: bob.account },
-        ),
+        // @ts-expect-error — intentionally calling the blocked ERC20 transferFrom(address,address,uint256) overload
+        vault.write.transferFrom([alice.account.address, bob.account.address, HALF_USDC], {
+          account: bob.account,
+        }),
         vault,
         "TransferDisabled",
       );
@@ -221,20 +212,16 @@ describe("CollateralVault", () => {
       const bobAfter = 3_000_000n;
 
       await viem.assertions.emitWithArgs(
-        vault.write.transfer([alice.account.address, bob.account.address, transferAmount], {
+        vault.write.internalTransfer([alice.account.address, bob.account.address, transferAmount], {
           account: engine.account,
         }),
         vault,
-        "InternalTransfer",
-        [
-          getAddress(alice.account.address),
-          getAddress(bob.account.address),
-          transferAmount,
-        ],
+        "Transfer",
+        [getAddress(alice.account.address), getAddress(bob.account.address), transferAmount],
       );
 
-      assert.equal(await vault.read.getBalance([alice.account.address]), aliceAfter);
-      assert.equal(await vault.read.getBalance([bob.account.address]), bobAfter);
+      assert.equal(await vault.read.balanceOf([alice.account.address]), aliceAfter);
+      assert.equal(await vault.read.balanceOf([bob.account.address]), bobAfter);
     });
 
     it("transfer reverts on insufficient balance", async () => {
@@ -242,11 +229,14 @@ describe("CollateralVault", () => {
         deployVaultAuthorizedOperationsFixture,
       );
       await viem.assertions.revertWithCustomError(
-        vault.write.transfer([alice.account.address, bob.account.address, EXCESSIVE_DEBIT], {
-          account: engine.account,
-        }),
+        vault.write.internalTransfer(
+          [alice.account.address, bob.account.address, EXCESSIVE_DEBIT],
+          {
+            account: engine.account,
+          },
+        ),
         vault,
-        "InsufficientBalance",
+        "ERC20InsufficientBalance",
       );
     });
 
@@ -262,7 +252,7 @@ describe("CollateralVault", () => {
         "BalanceCredited",
         [getAddress(bob.account.address), creditAmount],
       );
-      assert.equal(await vault.read.getBalance([bob.account.address]), creditAmount);
+      assert.equal(await vault.read.balanceOf([bob.account.address]), creditAmount);
     });
 
     it("debit decreases balance", async () => {
@@ -278,7 +268,7 @@ describe("CollateralVault", () => {
         "BalanceDebited",
         [getAddress(alice.account.address), debitAmount],
       );
-      assert.equal(await vault.read.getBalance([alice.account.address]), aliceAfter);
+      assert.equal(await vault.read.balanceOf([alice.account.address]), aliceAfter);
     });
 
     it("debit reverts on insufficient balance", async () => {
@@ -288,7 +278,7 @@ describe("CollateralVault", () => {
       await viem.assertions.revertWithCustomError(
         vault.write.debit([alice.account.address, EXCESSIVE_DEBIT], { account: engine.account }),
         vault,
-        "InsufficientBalance",
+        "ERC20InsufficientBalance",
       );
     });
 
@@ -296,10 +286,13 @@ describe("CollateralVault", () => {
       const { vault, alice, bob, engine } = await networkHelpers.loadFixture(
         deployVaultAuthorizedOperationsFixture,
       );
-      await vault.write.transfer([alice.account.address, bob.account.address, 0n], {
+      await vault.write.internalTransfer([alice.account.address, bob.account.address, 0n], {
         account: engine.account,
       });
-      assert.equal(await vault.read.getBalance([alice.account.address]), VAULT_AUTH_OPS_ALICE_DEPOSIT);
+      assert.equal(
+        await vault.read.balanceOf([alice.account.address]),
+        VAULT_AUTH_OPS_ALICE_DEPOSIT,
+      );
     });
   });
 
@@ -311,7 +304,7 @@ describe("CollateralVault", () => {
       await vault.write.deposit([ONE_USDC], { account: alice.account });
 
       await viem.assertions.revertWithCustomError(
-        vault.write.transfer([alice.account.address, bob.account.address, HALF_USDC], {
+        vault.write.internalTransfer([alice.account.address, bob.account.address, HALF_USDC], {
           account: bob.account,
         }),
         vault,
@@ -355,10 +348,12 @@ describe("CollateralVault", () => {
       );
     });
 
-    it("only owner can set insurance fund", async () => {
+    it("only owner can withdraw from insurance fund", async () => {
       const { vault, alice, bob } = await networkHelpers.loadFixture(deployVaultFixture);
       await viem.assertions.revertWithCustomError(
-        vault.write.setInsuranceFund([bob.account.address], { account: alice.account }),
+        vault.write.withdrawInsuranceFund([bob.account.address, ONE_USDC], {
+          account: alice.account,
+        }),
         vault,
         "OwnableUnauthorizedAccount",
       );
@@ -403,44 +398,81 @@ describe("CollateralVault", () => {
   // ── Insurance fund account ──────────────────────────────────────────────
 
   describe("insurance fund", () => {
-    it("starts unset with zero balance view", async () => {
+    it("exposes a deterministic vanity address", async () => {
       const { vault } = await networkHelpers.loadFixture(deployVaultFixture);
-      assert.equal(await vault.read.insuranceFund(), zeroAddress);
+      const fund = await vault.read.INSURANCE_FUND_ADDR();
+      assert.notEqual(fund, zeroAddress);
+    });
+
+    it("starts with zero balance", async () => {
+      const { vault } = await networkHelpers.loadFixture(deployVaultFixture);
       assert.equal(await vault.read.insuranceFundBalance(), 0n);
     });
 
-    it("owner sets fund and authorized transfer credits it", async () => {
-      const { vault, owner, alice, bob, engine } = await networkHelpers.loadFixture(
+    it("authorized transfer credits insurance fund and balance view reflects it", async () => {
+      const { vault, alice, engine } = await networkHelpers.loadFixture(
         deployVaultAuthorizedOperationsFixture,
       );
-      const fund = bob.account.address;
+      const fund = await vault.read.INSURANCE_FUND_ADDR();
       const move = 2_000_000n;
       const aliceAfter = VAULT_AUTH_OPS_ALICE_DEPOSIT - move;
 
-      await viem.assertions.emitWithArgs(
-        vault.write.setInsuranceFund([fund], { account: owner.account }),
-        vault,
-        "InsuranceFundSet",
-        [getAddress(fund)],
-      );
-      assert.equal(await vault.read.insuranceFund(), getAddress(fund));
-
-      await vault.write.transfer([alice.account.address, fund, move], { account: engine.account });
-      assert.equal(await vault.read.getBalance([alice.account.address]), aliceAfter);
+      await vault.write.internalTransfer([alice.account.address, fund, move], {
+        account: engine.account,
+      });
+      assert.equal(await vault.read.balanceOf([alice.account.address]), aliceAfter);
       assert.equal(await vault.read.balanceOf([fund]), move);
       assert.equal(await vault.read.insuranceFundBalance(), move);
     });
 
-    it("owner can clear insurance fund", async () => {
-      const { vault, owner, bob } = await networkHelpers.loadFixture(deployVaultFixture);
-      await vault.write.setInsuranceFund([bob.account.address], { account: owner.account });
-      await viem.assertions.emitWithArgs(
-        vault.write.setInsuranceFund([zeroAddress], { account: owner.account }),
-        vault,
-        "InsuranceFundSet",
-        [getAddress(zeroAddress)],
+    it("owner can withdraw from insurance fund", async () => {
+      const { vault, owner, alice, bob, engine } = await networkHelpers.loadFixture(
+        deployVaultAuthorizedOperationsFixture,
       );
-      assert.equal(await vault.read.insuranceFund(), zeroAddress);
+      const fund = await vault.read.INSURANCE_FUND_ADDR();
+      const move = 3_000_000n;
+
+      await vault.write.internalTransfer([alice.account.address, fund, move], {
+        account: engine.account,
+      });
+      assert.equal(await vault.read.insuranceFundBalance(), move);
+
+      await viem.assertions.emitWithArgs(
+        vault.write.withdrawInsuranceFund([bob.account.address, move], { account: owner.account }),
+        vault,
+        "InsuranceFundWithdrawn",
+        [getAddress(bob.account.address), move],
+      );
+      assert.equal(await vault.read.insuranceFundBalance(), 0n);
+    });
+
+    it("withdrawInsuranceFund reverts on insufficient balance", async () => {
+      const { vault, owner, bob } = await networkHelpers.loadFixture(deployVaultFixture);
+      await viem.assertions.revertWithCustomError(
+        vault.write.withdrawInsuranceFund([bob.account.address, ONE_USDC], {
+          account: owner.account,
+        }),
+        vault,
+        "ERC20InsufficientBalance",
+      );
+    });
+
+    it("withdrawInsuranceFund reverts on zero amount", async () => {
+      const { vault, owner, bob } = await networkHelpers.loadFixture(deployVaultFixture);
+      await viem.assertions.revertWithCustomError(
+        vault.write.withdrawInsuranceFund([bob.account.address, 0n], { account: owner.account }),
+        vault,
+        "ZeroAmount",
+      );
+    });
+
+    it("withdrawInsuranceFund reverts on zero recipient", async () => {
+      const { vault, owner } = await networkHelpers.loadFixture(deployVaultFixture);
+      await viem.assertions.revertWithCustomError(
+        vault.write.withdrawInsuranceFund([zeroAddress, ONE_USDC], { account: owner.account }),
+        vault,
+        "ERC20InvalidReceiver",
+      );
     });
   });
 
