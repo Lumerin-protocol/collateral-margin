@@ -51,7 +51,7 @@ describe("Cross-Margin Integration", () => {
       await viem.assertions.revertWithCustomError(
         vault.write.withdraw([40_000_000_000n], { account: alice.account }),
         vault,
-        "WithdrawalWouldBreachMargin",
+        "MarginBreach",
       );
     });
 
@@ -92,7 +92,7 @@ describe("Cross-Margin Integration", () => {
       await viem.assertions.revertWithCustomError(
         vault.write.withdraw([withdrawAmount], { account: alice.account }),
         vault,
-        "WithdrawalWouldBreachMargin",
+        "MarginBreach",
       );
 
       // Offset with options delta: perpDelta = 3e18, need optionsDelta = -3e18
@@ -158,7 +158,7 @@ describe("Cross-Margin Integration", () => {
       await viem.assertions.revertWithCustomError(
         vault.write.withdraw([20_000_000_000n], { account: alice.account }),
         vault,
-        "WithdrawalWouldBreachMargin",
+        "MarginBreach",
       );
     });
   });
@@ -189,7 +189,7 @@ describe("Cross-Margin Integration", () => {
       await viem.assertions.revertWithCustomError(
         vault.write.withdraw([excessWithdrawAttempt], { account: alice.account }),
         vault,
-        "WithdrawalWouldBreachMargin",
+        "MarginBreach",
       );
 
       await viem.assertions.emitWithArgs(

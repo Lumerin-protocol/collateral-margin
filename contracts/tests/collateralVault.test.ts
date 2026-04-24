@@ -165,7 +165,7 @@ describe("CollateralVault", () => {
       await viem.assertions.revertWithCustomError(
         vault.write.withdraw([1n], { account: alice.account }),
         vault,
-        "WithdrawalWouldBreachMargin",
+        "MarginBreach",
       );
     });
   });
@@ -468,6 +468,8 @@ describe("CollateralVault", () => {
 
     it("withdrawInsuranceFund reverts on zero recipient", async () => {
       const { vault, owner } = await networkHelpers.loadFixture(deployVaultFixture);
+      // Fund the insurance fund first so the burn succeeds and we reach the token transfer
+      await vault.write.depositInsuranceFund([owner.account.address, ONE_USDC], { account: owner.account });
       await viem.assertions.revertWithCustomError(
         vault.write.withdrawInsuranceFund([zeroAddress, ONE_USDC], { account: owner.account }),
         vault,

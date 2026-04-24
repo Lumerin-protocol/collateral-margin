@@ -1,26 +1,35 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 
-import { ICollateralVault } from "./interfaces/ICollateralVault.sol";
-import { IHashPowerPerpsDEX } from "./interfaces/IHashPowerPerpsDEX.sol";
-import { IOptionsEnginePortfolioView } from "./interfaces/IOptionsEnginePortfolioView.sol";
-import { IPortfolioMarginEngine } from "./interfaces/IPortfolioMarginEngine.sol";
-import { Versionable } from "./interfaces/Versionable.sol";
+import {ICollateralVault} from "./interfaces/ICollateralVault.sol";
+import {IFutures} from "./interfaces/IFutures.sol";
+import {IHashPowerPerpsDEX} from "./interfaces/IHashPowerPerpsDEX.sol";
+import {IOptionsEnginePortfolioView} from "./interfaces/IOptionsEnginePortfolioView.sol";
+import {IPortfolioMarginEngine} from "./interfaces/IPortfolioMarginEngine.sol";
+import {Versionable} from "./interfaces/Versionable.sol";
 
 /// @title PortfolioMarginEngine — Cross-product portfolio margin
-/// @notice Aggregates net Greeks across perps (linear delta) and options
-///         (delta/gamma/vega), runs 4-scenario stress tests, and computes
-///         the unified portfolio IM/MM requirement.
+/// @notice Aggregates net Greeks across perps (linear delta), futures (linear
+///         delta), and options (delta/gamma/vega), runs 4-scenario stress tests,
+///         and computes the unified portfolio IM/MM requirement.
+///         All three product legs (perps, futures, options) are optional and can
+///         be registered or swapped at any time by the owner via the set* helpers.
 ///
-///         portfolioIM = max(stressLoss) + perpsOrderMargin + optionsReserved
-///                       + max(0, -perpUnrealizedPnl) + max(0, perpPendingFunding)
-contract PortfolioMarginEngine is IPortfolioMarginEngine, Versionable, Initializable, UUPSUpgradeable, OwnableUpgradeable {
+///         portfolioIM = max(stressLoss) + perpsOrderMargin + futuresOrderMargin
+///                       + optionsReserved + max(0, -perpUnrealizedPnl)
+///                       + max(0, -futuresUnrealizedPnl) + max(0, perpPendingFunding)
+contract PortfolioMarginEngine is
+    IPortfolioMarginEngine,
+    Versionable,
+    Initializable,
+    UUPSUpgradeable,
+    OwnableUpgradeable
+{
     uint256 private constant WAD = 1e18;
-    uint256 private constant PERP_QTY_DECIMALS = 1e6;
     string public constant VERSION = "1.0.0";
 
     // ── Storage ─────────────────────────────────────────────────────────────
@@ -38,11 +47,17 @@ contract PortfolioMarginEngine is IPortfolioMarginEngine, Versionable, Initializ
     /// @dev Vol shock for MM.
     uint256 public mmVolShock;
 
-    uint256[40] private __gap;
+    /// @dev Optional futures contract. address(0) means no futures book is registered.
+    IFutures public futures;
+
+    uint256[39] private __gap;
 
     // ── Events ──────────────────────────────────────────────────────────────
 
     event ShocksUpdated(uint256 imSpot, uint256 mmSpot, uint256 imVol, uint256 mmVol);
+    event PerpsDexUpdated(address perpsDex);
+    event OptionsEngineUpdated(address optionsEngine);
+    event FuturesUpdated(address futures);
 
     // ── Errors ──────────────────────────────────────────────────────────────
 
@@ -55,17 +70,13 @@ contract PortfolioMarginEngine is IPortfolioMarginEngine, Versionable, Initializ
         _disableInitializers();
     }
 
-    function initialize(address _vault, address _perpsDex, address _optionsEngine) external initializer {
+    function initialize(address _vault) external initializer {
         __Ownable_init(_msgSender());
         __UUPSUpgradeable_init();
 
-        if (_vault == address(0) || _perpsDex == address(0) || _optionsEngine == address(0)) {
-            revert ZeroAddress();
-        }
+        if (_vault == address(0)) revert ZeroAddress();
 
         vault = ICollateralVault(_vault);
-        perpsDex = IHashPowerPerpsDEX(_perpsDex);
-        optionsEngine = IOptionsEnginePortfolioView(_optionsEngine);
 
         imSpotShock = 0.1e18; // 10% — matches DEX marginPercent
         mmSpotShock = 0.05e18; // 5%  — matches DEX maintenanceMarginPercent
@@ -90,12 +101,22 @@ contract PortfolioMarginEngine is IPortfolioMarginEngine, Versionable, Initializ
         vault = ICollateralVault(_vault);
     }
 
-    function setPerpsDex(address _perpsDex) external onlyOwner {
-        perpsDex = IHashPowerPerpsDEX(_perpsDex);
+    /// @notice Register (or deregister) the perps DEX. Pass address(0) to disable.
+    function setPerps(address _perpsEngine) external onlyOwner {
+        perpsDex = IHashPowerPerpsDEX(_perpsEngine);
+        emit PerpsDexUpdated(_perpsEngine);
     }
 
-    function setOptionsEngine(address _optionsEngine) external onlyOwner {
+    /// @notice Register (or deregister) the options engine. Pass address(0) to disable.
+    function setOptions(address _optionsEngine) external onlyOwner {
         optionsEngine = IOptionsEnginePortfolioView(_optionsEngine);
+        emit OptionsEngineUpdated(_optionsEngine);
+    }
+
+    /// @notice Register (or deregister) the futures contract. Pass address(0) to disable.
+    function setFutures(address _futuresEngine) external onlyOwner {
+        futures = IFutures(_futuresEngine);
+        emit FuturesUpdated(_futuresEngine);
     }
 
     // ── Core views ─────────────────────────────────────────────────────────
@@ -130,39 +151,64 @@ contract PortfolioMarginEngine is IPortfolioMarginEngine, Versionable, Initializ
         // 2. Four-scenario stress loss (WAD-scaled)
         uint256 worstLoss = _worstStressLoss(netDelta, netGamma, netVega, isIM);
 
-        // 3. Perps resting-order margin (token decimals)
-        uint256 perpOrderMargin = perpsDex.getOrderMargin(user);
+        // 3. Perps add-ons (optional)
+        uint256 perpOrderMargin = 0;
+        uint256 unrealizedLoss = 0;
+        uint256 fundingOwed = 0;
+        if (address(perpsDex) != address(0)) {
+            perpOrderMargin = perpsDex.getOrderMargin(user);
 
-        // 4. Options reserved margin (WAD → token decimals)
-        uint256 optReserved = optionsEngine.getOptionsReservedMargin(user);
-        uint256 optReservedTokens = _fromWad(optReserved);
+            int256 perpPnl = perpsDex.getUnrealizedPnl(user);
+            unrealizedLoss = perpPnl < 0 ? uint256(-perpPnl) : 0;
 
-        // 5. Unrealized perp losses (token decimals; only count negative PnL)
-        int256 perpPnl = perpsDex.getUnrealizedPnl(user);
-        uint256 unrealizedLoss = perpPnl < 0 ? uint256(-perpPnl) : 0;
+            int256 pendingFunding = perpsDex.getPendingFunding(user);
+            fundingOwed = pendingFunding > 0 ? uint256(pendingFunding) : 0;
+        }
 
-        // 6. Pending funding owed (token decimals; only count positive = user owes)
-        int256 pendingFunding = perpsDex.getPendingFunding(user);
-        uint256 fundingOwed = pendingFunding > 0 ? uint256(pendingFunding) : 0;
+        // 4. Options reserved margin (WAD → token decimals, optional)
+        uint256 optReservedTokens = 0;
+        if (address(optionsEngine) != address(0)) {
+            optReservedTokens = _fromWad(optionsEngine.getOptionsReservedMargin(user));
+        }
+
+        // 5. Futures add-ons (optional)
+        uint256 futuresOrderMargin = 0;
+        uint256 futuresUnrealizedLoss = 0;
+        if (address(futures) != address(0)) {
+            futuresOrderMargin = futures.getFuturesOrderMargin(user);
+            int256 futuresPnl = futures.getFuturesUnrealizedPnl(user);
+            futuresUnrealizedLoss = futuresPnl < 0 ? uint256(-futuresPnl) : 0;
+        }
 
         // Convert stress loss from WAD to token decimals
         uint256 stressTokens = _fromWad(worstLoss);
 
-        return stressTokens + perpOrderMargin + optReservedTokens + unrealizedLoss + fundingOwed;
+        return stressTokens + perpOrderMargin + futuresOrderMargin + optReservedTokens + unrealizedLoss
+            + futuresUnrealizedLoss + fundingOwed;
     }
 
-    /// @dev Aggregate net Greeks across perps (linear delta) and options (delta/gamma/vega).
+    /// @dev Aggregate net Greeks across perps (linear delta), futures (linear delta),
+    ///      and options (delta/gamma/vega). Each leg is queried only when registered.
     function _aggregateGreeks(address user) private view returns (int256 netDelta, uint256 netGamma, uint256 netVega) {
-        // Perps delta: qty * WAD / PERP_QTY_DECIMALS
-        IHashPowerPerpsDEX.Position memory pos = perpsDex.getUserPosition(user);
-        int256 perpDelta = pos.netQuantity * int256(WAD) / int256(PERP_QTY_DECIMALS);
+        // Perps delta: qty * WAD / 10^quantityDecimals (optional)
+        if (address(perpsDex) != address(0)) {
+            IHashPowerPerpsDEX.Position memory pos = perpsDex.getUserPosition(user);
+            int256 qtyScale = int256(10 ** uint256(perpsDex.QUANTITY_DECIMALS()));
+            netDelta += pos.netQuantity * int256(WAD) / qtyScale;
+        }
 
-        // Options Greeks (already WAD-scaled and signed delta)
-        (int256 optDelta, uint256 optGamma, uint256 optVega) = optionsEngine.getNetGreeks(user);
+        // Futures delta: sum(deliveryDurationDays * qty) * WAD per active position (optional)
+        if (address(futures) != address(0)) {
+            netDelta += futures.getNetPositionDelta(user);
+        }
 
-        netDelta = perpDelta + optDelta;
-        netGamma = optGamma;
-        netVega = optVega;
+        // Options Greeks — WAD-scaled signed delta, unsigned gamma/vega (optional)
+        if (address(optionsEngine) != address(0)) {
+            (int256 optDelta, uint256 optGamma, uint256 optVega) = optionsEngine.getNetGreeks(user);
+            netDelta += optDelta;
+            netGamma = optGamma;
+            netVega = optVega;
+        }
     }
 
     /// @dev Evaluate 4 stress scenarios and return the worst-case loss (WAD).
@@ -216,17 +262,32 @@ contract PortfolioMarginEngine is IPortfolioMarginEngine, Versionable, Initializ
         return pnl < 0 ? uint256(-pnl) : 0;
     }
 
-    /// @dev Read spot price from the perps DEX oracle and scale to WAD.
+    /// @dev Read spot price and scale to WAD. Tries perpsDex first, then futures.
+    ///      Returns 0 (no stress scenarios) when neither price source is registered.
     function _getSpotPriceWad() private view returns (uint256) {
-        uint256 priceTokenDecimals = perpsDex.getMarketPrice();
-        return priceTokenDecimals * 1e12; // token decimals (6) → WAD (18)
+        if (address(perpsDex) != address(0)) {
+            return perpsDex.getMarketPrice() * _wadScale(perpsDex.decimals());
+        }
+        if (address(futures) != address(0)) {
+            return futures.getMarketPrice() * _wadScale(futures.decimals());
+        }
+        return 0;
     }
 
-    function _fromWad(uint256 wadAmount) private pure returns (uint256) {
-        return wadAmount / 1e12; // USDC 6 decimals: WAD / 10^12
+    function _fromWad(uint256 wadAmount) private view returns (uint256) {
+        uint8 dec;
+        if (address(perpsDex) != address(0)) dec = perpsDex.decimals();
+        else if (address(futures) != address(0)) dec = futures.decimals();
+        return wadAmount / _wadScale(dec);
+    }
+
+    /// @dev 10^(18 − dec): multiply a `dec`-decimal value by this to get WAD,
+    ///      divide a WAD value by this to get `dec`-decimal units.
+    function _wadScale(uint8 dec) private pure returns (uint256) {
+        return 10 ** (18 - dec);
     }
 
     // ── Upgrade ─────────────────────────────────────────────────────────────
 
-    function _authorizeUpgrade(address) internal override onlyOwner { }
+    function _authorizeUpgrade(address) internal override onlyOwner {}
 }

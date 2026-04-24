@@ -45,10 +45,12 @@ export async function deployPortfolioMarginEngineStack(
     encodeFunctionData({
       abi: pmeImpl.abi,
       functionName: "initialize",
-      args: [vaultAddress, perpsMock.address, optionsMock.address],
+      args: [vaultAddress],
     }),
   ]);
   const pme = await viem.getContractAt("PortfolioMarginEngine", pmeProxy.address);
+  await pme.write.setPerps([perpsMock.address]);
+  await pme.write.setOptions([optionsMock.address]);
   return { perpsMock, optionsMock, pme };
 }
 
