@@ -23,6 +23,7 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     // ── Errors ──────────────────────────────────────────────────────────────
 
     error ZeroAmount();
+    /// @dev Post-op balance is below `marginEngine.computePortfolioIM(account)`.
     error MarginBreach();
     error NotAuthorized();
     error ZeroAddress();
@@ -30,11 +31,8 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
 
     // ── Events ──────────────────────────────────────────────────────────────
 
-    event Deposited(address indexed user, uint256 amount, uint256 newBalance);
-    event Withdrawn(address indexed user, uint256 amount, uint256 newBalance);
-    event InternalTransfer(address indexed from, address indexed to, uint256 amount);
-    event BalanceCredited(address indexed user, uint256 amount);
-    event BalanceDebited(address indexed user, uint256 amount);
+    event Deposited(address indexed user, uint256 amount);
+    event Withdrawn(address indexed user, uint256 amount);
     event AuthorizedCallerSet(address indexed caller, bool authorized);
     event MarginEngineSet(address indexed marginEngine);
     event InsuranceFundDeposited(address indexed source, uint256 amount);
@@ -151,14 +149,12 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     function credit(address user, uint256 amount) external onlyAuthorized {
         if (amount == 0) return;
         _mint(user, amount);
-        emit BalanceCredited(user, amount);
     }
 
     /// @notice Debit (decrease) a user's balance.
     function debit(address user, uint256 amount) external onlyAuthorized {
         if (amount == 0) return;
         _burn(user, amount);
-        emit BalanceDebited(user, amount);
     }
 
     /// @notice Pull collateral from `source`, credit `account`'s balance.
@@ -179,7 +175,7 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     function _depositFor(address source, address account, uint256 amount) internal {
         collateralToken.safeTransferFrom(source, address(this), amount);
         _mint(account, amount);
-        emit Deposited(account, amount, balanceOf(account));
+        emit Deposited(account, amount);
     }
 
     /// @dev Burns `amount` from `account`, checks margin, transfers collateral to `recipient`, and emits Withdrawn.
@@ -187,7 +183,7 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
         _burn(account, amount);
         _checkMargin(account);
         collateralToken.safeTransfer(recipient, amount);
-        emit Withdrawn(account, amount, balanceOf(account));
+        emit Withdrawn(account, amount);
     }
 
     /// @dev Reverts if `account`'s current balance falls below its portfolio IM requirement.

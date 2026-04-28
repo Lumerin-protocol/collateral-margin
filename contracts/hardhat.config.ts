@@ -9,7 +9,12 @@ tryLoadEnvFile(".env");
 export default defineConfig({
   plugins: [hardhatToolboxViem, codegenPlugin],
   codegen: {
-    contracts: ["CollateralVault", "ICollateralVault"],
+    contracts: [
+      "CollateralVault",
+      "ICollateralVault",
+      "PortfolioMarginEngine",
+      "IPortfolioMarginEngine",
+    ],
   },
   paths: {
     tests: "tests",

@@ -4,7 +4,6 @@ pragma solidity ^0.8.20;
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-
 import {ICollateralVault} from "./interfaces/ICollateralVault.sol";
 import {IFutures} from "./interfaces/IFutures.sol";
 import {IHashPowerPerpsDEX} from "./interfaces/IHashPowerPerpsDEX.sol";
@@ -37,6 +36,7 @@ contract PortfolioMarginEngine is
     ICollateralVault public vault;
     IHashPowerPerpsDEX public perpsDex;
     IOptionsEnginePortfolioView public optionsEngine;
+    IFutures public futures;
 
     /// @dev Spot shock for IM (WAD fraction, e.g. 0.15e18 = 15%).
     uint256 public imSpotShock;
@@ -47,17 +47,13 @@ contract PortfolioMarginEngine is
     /// @dev Vol shock for MM.
     uint256 public mmVolShock;
 
-    /// @dev Optional futures contract. address(0) means no futures book is registered.
-    IFutures public futures;
-
-    uint256[39] private __gap;
-
     // ── Events ──────────────────────────────────────────────────────────────
 
     event ShocksUpdated(uint256 imSpot, uint256 mmSpot, uint256 imVol, uint256 mmVol);
     event PerpsDexUpdated(address perpsDex);
     event OptionsEngineUpdated(address optionsEngine);
     event FuturesUpdated(address futures);
+    event VaultUpdated(address vault);
 
     // ── Errors ──────────────────────────────────────────────────────────────
 
@@ -99,6 +95,7 @@ contract PortfolioMarginEngine is
 
     function setVault(address _vault) external onlyOwner {
         vault = ICollateralVault(_vault);
+        emit VaultUpdated(_vault);
     }
 
     /// @notice Register (or deregister) the perps DEX. Pass address(0) to disable.

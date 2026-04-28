@@ -31,7 +31,7 @@ describe("Cross-Margin Integration", () => {
         vault.write.withdraw([fullBalance], { account: alice.account }),
         vault,
         "Withdrawn",
-        [getAddress(aliceAddr), fullBalance, 0n],
+        [getAddress(aliceAddr), fullBalance],
       );
       const balAfter = await usdc.read.balanceOf([aliceAddr]);
 
@@ -60,7 +60,6 @@ describe("Cross-Margin Integration", () => {
         await networkHelpers.loadFixture(deployCrossMarginIntegrationFixture);
 
       const withdrawAmount = 30_000_000_000n;
-      const balanceAfterWithdraw = 20_000_000_000n;
 
       // 3 lots → IM = $15k
       await perpsMock.write.setUserPosition([aliceAddr, THREE_LOTS_QTY, DEFAULT_MARKET_PRICE]);
@@ -70,7 +69,7 @@ describe("Cross-Margin Integration", () => {
         vault.write.withdraw([withdrawAmount], { account: alice.account }),
         vault,
         "Withdrawn",
-        [getAddress(aliceAddr), withdrawAmount, balanceAfterWithdraw],
+        [getAddress(aliceAddr), withdrawAmount],
       );
       const balAfter = await usdc.read.balanceOf([aliceAddr]);
 
@@ -102,7 +101,7 @@ describe("Cross-Margin Integration", () => {
         vault.write.withdraw([withdrawAmount], { account: alice.account }),
         vault,
         "Withdrawn",
-        [getAddress(aliceAddr), withdrawAmount, balanceAfterWithdraw],
+        [getAddress(aliceAddr), withdrawAmount],
       );
 
       const remaining = await vault.read.balanceOf([aliceAddr]);
@@ -196,7 +195,7 @@ describe("Cross-Margin Integration", () => {
         vault.write.withdraw([maxWithdraw], { account: alice.account }),
         vault,
         "Withdrawn",
-        [getAddress(aliceAddr), maxWithdraw, orderMargin],
+        [getAddress(aliceAddr), maxWithdraw],
       );
       const bal = await vault.read.balanceOf([aliceAddr]);
       assert.equal(bal, orderMargin);

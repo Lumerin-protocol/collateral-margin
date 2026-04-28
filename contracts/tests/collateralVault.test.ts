@@ -51,7 +51,7 @@ describe("CollateralVault", () => {
         vault.write.deposit([amount], { account: alice.account }),
         vault,
         "Deposited",
-        [getAddress(alice.account.address), amount, amount],
+        [getAddress(alice.account.address), amount],
       );
       const usdcAfter = await usdc.read.balanceOf([alice.account.address]);
 
@@ -70,7 +70,7 @@ describe("CollateralVault", () => {
         vault.write.deposit([secondDeposit], { account: alice.account }),
         vault,
         "Deposited",
-        [getAddress(alice.account.address), secondDeposit, balanceAfter],
+        [getAddress(alice.account.address), secondDeposit],
       );
       assert.equal(await vault.read.balanceOf([alice.account.address]), balanceAfter);
     });
@@ -92,7 +92,7 @@ describe("CollateralVault", () => {
         vault.write.withdraw([withdrawAmount], { account: alice.account }),
         vault,
         "Withdrawn",
-        [getAddress(alice.account.address), withdrawAmount, balanceAfter],
+        [getAddress(alice.account.address), withdrawAmount],
       );
       const usdcAfter = await usdc.read.balanceOf([alice.account.address]);
 
@@ -128,7 +128,7 @@ describe("CollateralVault", () => {
         vault.write.withdraw([depositAmount], { account: alice.account }),
         vault,
         "Withdrawn",
-        [getAddress(alice.account.address), depositAmount, 0n],
+        [getAddress(alice.account.address), depositAmount],
       );
       assert.equal(await vault.read.balanceOf([alice.account.address]), 0n);
     });
@@ -158,7 +158,7 @@ describe("CollateralVault", () => {
         vault.write.withdraw([withdrawAmount], { account: alice.account }),
         vault,
         "Withdrawn",
-        [getAddress(alice.account.address), withdrawAmount, requiredIm],
+        [getAddress(alice.account.address), withdrawAmount],
       );
       assert.equal(await vault.read.balanceOf([alice.account.address]), requiredIm);
 
@@ -249,8 +249,8 @@ describe("CollateralVault", () => {
       await viem.assertions.emitWithArgs(
         vault.write.credit([bob.account.address, creditAmount], { account: engine.account }),
         vault,
-        "BalanceCredited",
-        [getAddress(bob.account.address), creditAmount],
+        "Transfer",
+        [zeroAddress, getAddress(bob.account.address), creditAmount],
       );
       assert.equal(await vault.read.balanceOf([bob.account.address]), creditAmount);
     });
@@ -265,8 +265,8 @@ describe("CollateralVault", () => {
       await viem.assertions.emitWithArgs(
         vault.write.debit([alice.account.address, debitAmount], { account: engine.account }),
         vault,
-        "BalanceDebited",
-        [getAddress(alice.account.address), debitAmount],
+        "Transfer",
+        [getAddress(alice.account.address), zeroAddress, debitAmount],
       );
       assert.equal(await vault.read.balanceOf([alice.account.address]), aliceAfter);
     });
@@ -487,20 +487,19 @@ describe("CollateralVault", () => {
       const bobDeposit = 3_000_000n;
       const aliceWithdraw = 2_000_000n;
       const totalAfterDeposits = aliceDeposit + bobDeposit;
-      const aliceAfterWithdraw = aliceDeposit - aliceWithdraw;
       const totalAfterWithdraw = totalAfterDeposits - aliceWithdraw;
 
       await viem.assertions.emitWithArgs(
         vault.write.deposit([aliceDeposit], { account: alice.account }),
         vault,
         "Deposited",
-        [getAddress(alice.account.address), aliceDeposit, aliceDeposit],
+        [getAddress(alice.account.address), aliceDeposit],
       );
       await viem.assertions.emitWithArgs(
         vault.write.deposit([bobDeposit], { account: bob.account }),
         vault,
         "Deposited",
-        [getAddress(bob.account.address), bobDeposit, bobDeposit],
+        [getAddress(bob.account.address), bobDeposit],
       );
       assert.equal(await vault.read.totalSupply(), totalAfterDeposits);
 
@@ -508,7 +507,7 @@ describe("CollateralVault", () => {
         vault.write.withdraw([aliceWithdraw], { account: alice.account }),
         vault,
         "Withdrawn",
-        [getAddress(alice.account.address), aliceWithdraw, aliceAfterWithdraw],
+        [getAddress(alice.account.address), aliceWithdraw],
       );
       assert.equal(await vault.read.totalSupply(), totalAfterWithdraw);
     });
