@@ -9,11 +9,16 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
-    "clean": "rm -rf abi artifacts cache"
+    "clean": "rm -rf abi artifacts cache",
+    "deploy:vault": "hardhat run scripts/deploy-collateral-vault.ts",
+    "deploy:pme": "hardhat run scripts/deploy-portfolio-margin-engine.ts",
+    "upgrade:vault": "hardhat run scripts/update-collateral-vault.ts",
+    "upgrade:pme": "hardhat run scripts/update-portfolio-margin-engine.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.10",
     "@nomicfoundation/hardhat-toolbox-viem": "^5.0.0",
+    "@nomicfoundation/hardhat-verify": "^3.0.0",
     "@types/node": "^22.0.0",
     "hardhat": "^3.2",
     "typescript": "^5.8.0"
