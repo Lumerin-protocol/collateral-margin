@@ -10,6 +10,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {Versionable} from "./interfaces/Versionable.sol";
 import {ICollateralVault} from "./interfaces/ICollateralVault.sol";
 import {IPortfolioMarginEngine} from "./interfaces/IPortfolioMarginEngine.sol";
+import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 /// @title CollateralVault — Unified USDC custody for perps + options
 /// @notice ERC20 receipt token (non-transferable) representing deposited collateral.
@@ -53,7 +54,7 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     /// @dev Margin engine that computes combined portfolio IM.
     ///      If set, withdrawals check: newBalance >= marginEngine.computePortfolioIM(user).
     address public marginEngine;
-
+    uint8 private _decimals; // decimals of the wrapped token
     // ── Modifiers ───────────────────────────────────────────────────────────
 
     modifier onlyAuthorized() {
@@ -75,6 +76,7 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
 
         if (_collateralToken == address(0)) revert ZeroAddress();
         collateralToken = IERC20(_collateralToken);
+        _decimals = IERC20Metadata(address(_collateralToken)).decimals();
     }
 
     // ── Block public ERC20 transfers ────────────────────────────────────────
@@ -200,6 +202,10 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     /// @notice Receipt balance of the insurance fund.
     function insuranceFundBalance() external view returns (uint256) {
         return balanceOf(INSURANCE_FUND_ADDR);
+    }
+
+    function decimals() public view override returns (uint8) {
+        return _decimals;
     }
 
     // ── Upgrade ─────────────────────────────────────────────────────────────
