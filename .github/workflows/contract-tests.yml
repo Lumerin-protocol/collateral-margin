@@ -1,0 +1,61 @@
+name: Contract tests
+
+on:
+  pull_request:
+    paths:
+      - "contracts/**"
+      - ".github/workflows/contract-tests.yml"
+  push:
+    branches:
+      - main
+      - stg
+      - dev
+    paths:
+      - "contracts/**"
+      - ".github/workflows/contract-tests.yml"
+
+jobs:
+  pre:
+    name: Skip duplicate runs
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.skip-check.outputs.should_skip }}
+    steps:
+      - id: skip-check
+        uses: fkirc/skip-duplicate-actions@v5
+        with:
+          concurrent_skipping: never
+          skip_after_successful_duplicate: "true"
+          paths_ignore: '["**/*.md"]'
+
+  test:
+    name: Contract tests
+    needs: pre
+    if: needs.pre.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: ./contracts
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: contracts/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: contracts/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run tests
+        run: pnpm test
