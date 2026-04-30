@@ -28,12 +28,12 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     error MarginBreach();
     error NotAuthorized();
     error ZeroAddress();
-    error TransferDisabled();
+    error FunctionDisabled();
 
     // ── Events ──────────────────────────────────────────────────────────────
 
-    event Deposited(address indexed user, uint256 amount);
-    event Withdrawn(address indexed user, uint256 amount);
+    event Deposited(address indexed user, uint256 amount, address indexed sender);
+    event Withdrawn(address indexed user, uint256 amount, address indexed recipient);
     event AuthorizedCallerSet(address indexed caller, bool authorized);
     event MarginEngineSet(address indexed marginEngine);
     event InsuranceFundDeposited(address indexed source, uint256 amount);
@@ -81,12 +81,20 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
 
     // ── Block public ERC20 transfers ────────────────────────────────────────
 
+    function approve(address, uint256) public pure override(ERC20Upgradeable, IERC20) returns (bool) {
+        revert FunctionDisabled();
+    }
+
+    function allowance(address, address) public pure override(ERC20Upgradeable, IERC20) returns (uint256) {
+        revert FunctionDisabled();
+    }
+
     function transfer(address, uint256) public pure override(ERC20Upgradeable, IERC20) returns (bool) {
-        revert TransferDisabled();
+        revert FunctionDisabled();
     }
 
     function transferFrom(address, address, uint256) public pure override(ERC20Upgradeable, IERC20) returns (bool) {
-        revert TransferDisabled();
+        revert FunctionDisabled();
     }
 
     // ── Admin ───────────────────────────────────────────────────────────────
@@ -103,15 +111,13 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     }
 
     /// @notice Deposit collateral into the insurance fund from `source`, minting its receipt tokens.
-    function depositInsuranceFund(address source, uint256 amount) external onlyOwner {
-        if (amount == 0) revert ZeroAmount();
-        _depositFor(source, INSURANCE_FUND_ADDR, amount);
-        emit InsuranceFundDeposited(source, amount);
+    function depositInsuranceFund(uint256 amount) external {
+        _depositFor(_msgSender(), INSURANCE_FUND_ADDR, amount);
+        emit InsuranceFundDeposited(_msgSender(), amount);
     }
 
     /// @notice Withdraw collateral from the insurance fund to `recipient`, burning its receipt tokens.
     function withdrawInsuranceFund(address recipient, uint256 amount) external onlyOwner {
-        if (amount == 0) revert ZeroAmount();
         _withdrawTo(INSURANCE_FUND_ADDR, recipient, amount);
         emit InsuranceFundWithdrawn(recipient, amount);
     }
@@ -120,15 +126,21 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
 
     /// @notice Deposit collateral tokens; mints an equal amount of receipt tokens.
     function deposit(uint256 amount) external {
-        if (amount == 0) revert ZeroAmount();
         _depositFor(_msgSender(), _msgSender(), amount);
     }
 
     /// @notice Withdraw collateral tokens; burns receipt tokens.
     ///         Reverts if the withdrawal would breach portfolio margin requirements.
     function withdraw(uint256 amount) external {
-        if (amount == 0) revert ZeroAmount();
         _withdrawTo(_msgSender(), _msgSender(), amount);
+    }
+
+    function depositFor(address recipient, uint256 amount) external onlyAuthorized {
+        _depositFor(_msgSender(), recipient, amount);
+    }
+
+    function withdrawTo(address recipient, uint256 amount) external onlyAuthorized {
+        _withdrawTo(_msgSender(), recipient, amount);
     }
 
     // ── Authorized-only mutations ───────────────────────────────────────────
@@ -146,46 +158,25 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
         _checkMargin(from);
     }
 
-    /// @notice Credit (increase) an account's balance.
-    ///         The vault must already hold sufficient backing tokens.
-    function credit(address user, uint256 amount) external onlyAuthorized {
-        if (amount == 0) return;
-        _mint(user, amount);
-    }
-
-    /// @notice Debit (decrease) a user's balance.
-    function debit(address user, uint256 amount) external onlyAuthorized {
-        if (amount == 0) return;
-        _burn(user, amount);
-    }
-
-    /// @notice Pull collateral from `source`, credit `account`'s balance.
-    ///         `source` must have approved this vault for the collateral token.
-    function depositFor(address source, address account, uint256 amount) external onlyAuthorized {
-        _depositFor(source, account, amount);
-    }
-
-    /// @notice Debit `account`'s balance and send collateral to `recipient`.
-    ///         Reverts if the withdrawal would breach `account`'s portfolio margin requirements.
-    function withdrawTo(address account, address recipient, uint256 amount) external onlyAuthorized {
-        _withdrawTo(account, recipient, amount);
-    }
-
     // ── Internal helpers ────────────────────────────────────────────────────
 
     /// @dev Pulls collateral from `source`, mints receipt tokens to `account`, and emits Deposited.
     function _depositFor(address source, address account, uint256 amount) internal {
+        // recipient is checked to be non-zero in safeTransferFrom
+        if (account == address(0)) revert ZeroAddress();
         collateralToken.safeTransferFrom(source, address(this), amount);
         _mint(account, amount);
-        emit Deposited(account, amount);
+        emit Deposited(account, amount, source);
     }
 
     /// @dev Burns `amount` from `account`, checks margin, transfers collateral to `recipient`, and emits Withdrawn.
     function _withdrawTo(address account, address recipient, uint256 amount) internal {
+        // recipient is checked to be non-zero in safeTransfer
+        if (amount == 0) revert ZeroAmount();
         _burn(account, amount);
         _checkMargin(account);
         collateralToken.safeTransfer(recipient, amount);
-        emit Withdrawn(account, amount);
+        emit Withdrawn(account, amount, recipient);
     }
 
     /// @dev Reverts if `account`'s current balance falls below its portfolio IM requirement.
@@ -211,8 +202,4 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     // ── Upgrade ─────────────────────────────────────────────────────────────
 
     function _authorizeUpgrade(address) internal override onlyOwner {}
-
-    function updateDecimalsCache() external onlyOwner {
-        _decimals = IERC20Metadata(address(collateralToken)).decimals();
-    }
 }

@@ -14,19 +14,7 @@ interface ICollateralVault is IERC20 {
     function collateralToken() external view returns (IERC20);
 
     /// @notice Constant vanity address used as the shared insurance fund ledger account.
-    ///         Its balance is normal vault receipt tokens — credit via authorized
-    ///         `transfer` / `credit` / `depositFor`, same as any account.
-    ///         Owner withdraws actual collateral via `withdrawInsuranceFund`.
     function INSURANCE_FUND_ADDR() external pure returns (address);
-
-    /// @notice Receipt-token balance of the insurance fund.
-    function insuranceFundBalance() external view returns (uint256);
-
-    /// @notice Pull collateral from `source` into the insurance fund. Owner only.
-    function depositInsuranceFund(address source, uint256 amount) external;
-
-    /// @notice Burn insurance fund receipt tokens and transfer collateral to `recipient`. Owner only.
-    function withdrawInsuranceFund(address recipient, uint256 amount) external;
 
     /// @notice Transfer balance between two accounts. Authorized callers only.
     function internalTransfer(address from, address to, uint256 amount) external;
@@ -34,17 +22,7 @@ interface ICollateralVault is IERC20 {
     /// @notice Transfer balance between two accounts, reverting if the sender breaches portfolio margin. Authorized callers only.
     function internalTransferWithMarginCheck(address from, address to, uint256 amount) external;
 
-    /// @notice Credit (increase) a user's balance. Authorized callers only.
-    function credit(address user, uint256 amount) external;
-
-    /// @notice Debit (decrease) a user's balance. Authorized callers only.
-    function debit(address user, uint256 amount) external;
-
-    /// @notice Pull collateral from `source`, credit `account`'s balance.
-    ///         `source` must have approved this vault. Authorized callers only.
-    function depositFor(address source, address account, uint256 amount) external;
-
-    /// @notice Debit `account`'s balance and send collateral to `recipient`.
-    ///         Authorized callers only.
-    function withdrawTo(address account, address recipient, uint256 amount) external;
+    /// @notice Withdraw collateral tokens; burns receipt tokens.
+    ///         Reverts if the withdrawal would breach portfolio margin requirements.
+    function withdrawTo(address recipient, uint256 amount) external;
 }

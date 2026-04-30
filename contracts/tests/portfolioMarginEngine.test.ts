@@ -28,7 +28,9 @@ describe("PortfolioMarginEngine", () => {
 
   describe("perps-only position", () => {
     it("computes margin from perps delta stress", async () => {
-      const { pme, perpsMock, user } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
+      const { pme, perpsMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
 
       await perpsMock.write.setUserPosition([user, ONE_LOT_QTY, DEFAULT_MARKET_PRICE]);
 
@@ -37,7 +39,9 @@ describe("PortfolioMarginEngine", () => {
     });
 
     it("includes unrealized loss in margin", async () => {
-      const { pme, perpsMock, user } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
+      const { pme, perpsMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
       const lossUsdc = 1_000_000_000n;
 
       await perpsMock.write.setUserPosition([user, ONE_LOT_QTY, DEFAULT_MARKET_PRICE]);
@@ -50,7 +54,9 @@ describe("PortfolioMarginEngine", () => {
     });
 
     it("does not include unrealized profit in margin", async () => {
-      const { pme, perpsMock, user } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
+      const { pme, perpsMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
       const profitUsdc = 1_000_000_000n;
 
       await perpsMock.write.setUserPosition([user, ONE_LOT_QTY, DEFAULT_MARKET_PRICE]);
@@ -63,7 +69,9 @@ describe("PortfolioMarginEngine", () => {
     });
 
     it("includes pending funding owed in margin", async () => {
-      const { pme, perpsMock, user } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
+      const { pme, perpsMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
       const fundingOwed = 500_000_000n;
 
       await perpsMock.write.setUserPosition([user, ONE_LOT_QTY, DEFAULT_MARKET_PRICE]);
@@ -76,7 +84,9 @@ describe("PortfolioMarginEngine", () => {
     });
 
     it("includes perps order margin", async () => {
-      const { pme, perpsMock, user } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
+      const { pme, perpsMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
       const orderMargin = 2_000_000_000n;
 
       await perpsMock.write.setOrderMargin([user, orderMargin]);
@@ -88,7 +98,9 @@ describe("PortfolioMarginEngine", () => {
 
   describe("hedging offsets", () => {
     it("long + short perps cancel out delta", async () => {
-      const { pme, perpsMock, user } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
+      const { pme, perpsMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
 
       await perpsMock.write.setUserPosition([user, ONE_LOT_QTY, DEFAULT_MARKET_PRICE]);
       const imLong = await pme.read.computePortfolioIM([user]);
@@ -101,7 +113,9 @@ describe("PortfolioMarginEngine", () => {
     });
 
     it("options delta offsets perps delta", async () => {
-      const { pme, perpsMock, optionsMock, user } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
+      const { pme, perpsMock, optionsMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
 
       await perpsMock.write.setUserPosition([user, ONE_LOT_QTY, DEFAULT_MARKET_PRICE]);
       const imPerpsOnly = await pme.read.computePortfolioIM([user]);
@@ -116,7 +130,9 @@ describe("PortfolioMarginEngine", () => {
 
   describe("MM vs IM", () => {
     it("MM is less than IM for same position", async () => {
-      const { pme, perpsMock, user } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
+      const { pme, perpsMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
 
       await perpsMock.write.setUserPosition([user, ONE_LOT_QTY, DEFAULT_MARKET_PRICE]);
       const im = await pme.read.computePortfolioIM([user]);
@@ -128,7 +144,9 @@ describe("PortfolioMarginEngine", () => {
 
   describe("isHealthy", () => {
     it("returns false when balance < MM", async () => {
-      const { pme, perpsMock, user } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
+      const { pme, perpsMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
 
       await perpsMock.write.setUserPosition([user, 1_000_000_000_000n, DEFAULT_MARKET_PRICE]);
 
@@ -153,7 +171,9 @@ describe("PortfolioMarginEngine", () => {
 
   describe("admin", () => {
     it("owner can update shocks", async () => {
-      const { pme, perpsMock, user } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
+      const { pme, perpsMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
 
       await perpsMock.write.setUserPosition([user, ONE_LOT_QTY, DEFAULT_MARKET_PRICE]);
       const imBefore = await pme.read.computePortfolioIM([user]);
@@ -173,7 +193,9 @@ describe("PortfolioMarginEngine", () => {
 
   describe("gamma and vega", () => {
     it("gamma reduces stress loss for long gamma position", async () => {
-      const { pme, optionsMock, user } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
+      const { pme, optionsMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
 
       await optionsMock.write.setNetGreeks([user, 0n, WAD, 0n]);
       const im = await pme.read.computePortfolioIM([user]);
@@ -182,7 +204,9 @@ describe("PortfolioMarginEngine", () => {
     });
 
     it("short gamma increases stress loss", async () => {
-      const { pme, perpsMock, optionsMock, user } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
+      const { pme, perpsMock, optionsMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
 
       await perpsMock.write.setUserPosition([user, 0n, 0n]);
       await optionsMock.write.setNetGreeks([user, 0n, 0n, 0n]);
@@ -191,7 +215,9 @@ describe("PortfolioMarginEngine", () => {
     });
 
     it("vega exposure adds to margin", async () => {
-      const { pme, optionsMock, user } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
+      const { pme, optionsMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
 
       await optionsMock.write.setNetGreeks([user, 0n, 0n, WAD]);
       const im = await pme.read.computePortfolioIM([user]);
