@@ -124,6 +124,11 @@ export const CollateralVaultAbi = [
   },
   {
     "inputs": [],
+    "name": "FunctionDisabled",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "InvalidInitialization",
     "type": "error"
   },
@@ -173,11 +178,6 @@ export const CollateralVaultAbi = [
       }
     ],
     "name": "SafeERC20FailedOperation",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "TransferDisabled",
     "type": "error"
   },
   {
@@ -264,6 +264,12 @@ export const CollateralVaultAbi = [
         "internalType": "uint256",
         "name": "amount",
         "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "sender",
+        "type": "address"
       }
     ],
     "name": "Deposited",
@@ -404,6 +410,12 @@ export const CollateralVaultAbi = [
         "internalType": "uint256",
         "name": "amount",
         "type": "uint256"
+      },
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "recipient",
+        "type": "address"
       }
     ],
     "name": "Withdrawn",
@@ -452,12 +464,12 @@ export const CollateralVaultAbi = [
     "inputs": [
       {
         "internalType": "address",
-        "name": "owner",
+        "name": "",
         "type": "address"
       },
       {
         "internalType": "address",
-        "name": "spender",
+        "name": "",
         "type": "address"
       }
     ],
@@ -469,19 +481,19 @@ export const CollateralVaultAbi = [
         "type": "uint256"
       }
     ],
-    "stateMutability": "view",
+    "stateMutability": "pure",
     "type": "function"
   },
   {
     "inputs": [
       {
         "internalType": "address",
-        "name": "spender",
+        "name": "",
         "type": "address"
       },
       {
         "internalType": "uint256",
-        "name": "value",
+        "name": "",
         "type": "uint256"
       }
     ],
@@ -493,7 +505,7 @@ export const CollateralVaultAbi = [
         "type": "bool"
       }
     ],
-    "stateMutability": "nonpayable",
+    "stateMutability": "pure",
     "type": "function"
   },
   {
@@ -548,42 +560,6 @@ export const CollateralVaultAbi = [
     "type": "function"
   },
   {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "user",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "amount",
-        "type": "uint256"
-      }
-    ],
-    "name": "credit",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "user",
-        "type": "address"
-      },
-      {
-        "internalType": "uint256",
-        "name": "amount",
-        "type": "uint256"
-      }
-    ],
-    "name": "debit",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
     "inputs": [],
     "name": "decimals",
     "outputs": [
@@ -613,12 +589,7 @@ export const CollateralVaultAbi = [
     "inputs": [
       {
         "internalType": "address",
-        "name": "source",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "account",
+        "name": "recipient",
         "type": "address"
       },
       {
@@ -634,11 +605,6 @@ export const CollateralVaultAbi = [
   },
   {
     "inputs": [
-      {
-        "internalType": "address",
-        "name": "source",
-        "type": "address"
-      },
       {
         "internalType": "uint256",
         "name": "amount",
@@ -955,11 +921,6 @@ export const CollateralVaultAbi = [
   },
   {
     "inputs": [
-      {
-        "internalType": "address",
-        "name": "account",
-        "type": "address"
-      },
       {
         "internalType": "address",
         "name": "recipient",

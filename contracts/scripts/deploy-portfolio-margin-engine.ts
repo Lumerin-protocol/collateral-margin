@@ -1,11 +1,7 @@
 import fs from "node:fs";
 import { type Address, encodeFunctionData, getAddress } from "viem";
 import hre from "hardhat";
-import {
-  readOptionalAddress,
-  readOptionalBigInt,
-  requireAddress,
-} from "../lib/env.ts";
+import { readOptionalAddress, readOptionalBigInt, requireAddress } from "../lib/env.ts";
 import { writeAndWait } from "../lib/writeContract.ts";
 import { verifyContract } from "../lib/verify.ts";
 import { addrUrl, txUrl } from "../lib/explorer.ts";
@@ -14,7 +10,7 @@ import { logInfo, logPrompt, logStep, logSuccess, logTitle } from "../lib/log.ts
 async function main() {
   logTitle("PortfolioMarginEngine Deployment");
 
-  const { viem } = await hre.network.connect();
+  const { viem } = await hre.network.getOrCreate();
 
   const vaultAddress = requireAddress("VAULT_ADDRESS");
   const SAFE_OWNER_ADDRESS = readOptionalAddress("SAFE_OWNER_ADDRESS");
@@ -39,8 +35,7 @@ async function main() {
   // ── Verify vault & whether deployer can wire it ─────────────────────────
   const vault = await viem.getContractAt("CollateralVault", vaultAddress);
   const vaultOwner = await vault.read.owner();
-  const deployerIsVaultOwner =
-    getAddress(vaultOwner) === getAddress(deployer.account.address);
+  const deployerIsVaultOwner = getAddress(vaultOwner) === getAddress(deployer.account.address);
   logInfo("vault", {
     Address: addrUrl(pc, vault.address),
     Version: await vault.read.VERSION(),
@@ -88,11 +83,9 @@ async function main() {
     functionName: "initialize",
     args: [vault.address],
   });
-  const pmeProxy = await viem.deployContract(
-    "ERC1967Proxy",
-    [pmeImpl.address, pmeInitData],
-    { confirmations: 5 },
-  );
+  const pmeProxy = await viem.deployContract("ERC1967Proxy", [pmeImpl.address, pmeInitData], {
+    confirmations: 5,
+  });
   logStep("Deployed", addrUrl(pc, pmeProxy.address));
   await verifyContract(pmeProxy.address, [pmeImpl.address, pmeInitData]);
   logStep("Verified", addrUrl(pc, pmeProxy.address));

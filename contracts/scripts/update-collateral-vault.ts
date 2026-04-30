@@ -9,7 +9,7 @@ import { logInfo, logPrompt, logStep, logSuccess, logTitle } from "../lib/log.ts
 async function main() {
   logTitle("CollateralVault Upgrade");
 
-  const { viem } = await hre.network.connect();
+  const { viem } = await hre.network.getOrCreate();
 
   const proxyAddress = requireAddress("VAULT_ADDRESS");
 

@@ -10,7 +10,7 @@ import { logInfo, logPrompt, logStep, logSuccess, logTitle } from "../lib/log.ts
 async function main() {
   logTitle("CollateralVault Deployment");
 
-  const { viem } = await hre.network.connect();
+  const { viem } = await hre.network.getOrCreate();
 
   const collateralTokenAddress = requireAddress("COLLATERAL_TOKEN_ADDRESS");
   const SAFE_OWNER_ADDRESS = readOptionalAddress("SAFE_OWNER_ADDRESS");

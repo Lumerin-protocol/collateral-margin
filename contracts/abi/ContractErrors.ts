@@ -109,11 +109,6 @@ export const contractErrors = [
     "type": "error"
   },
   {
-    "inputs": [],
-    "name": "TransferDisabled",
-    "type": "error"
-  },
-  {
     "inputs": [
       {
         "internalType": "bytes32",
@@ -127,6 +122,11 @@ export const contractErrors = [
   {
     "inputs": [],
     "name": "ERC1967NonPayable",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "FunctionDisabled",
     "type": "error"
   },
   {
