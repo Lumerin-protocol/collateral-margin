@@ -7,8 +7,8 @@
       "!!**/build",
       "!!**/node_modules",
       "!!**/coverage",
-      "!!**/artifacts",
-      "!!**/cache"
+      "!!**/cache",
+      "!!**/artifacts"
     ]
   },
   "overrides": [
