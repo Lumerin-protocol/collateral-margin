@@ -1,0 +1,79 @@
+name: Indexer tests
+
+on:
+  pull_request:
+    paths:
+      - "indexer/**"
+      - "contracts/abi/CollateralVault.json"
+      - ".github/workflows/indexer-tests.yml"
+  push:
+    branches:
+      - main
+      - stg
+      - dev
+    paths:
+      - "indexer/**"
+      - "contracts/abi/CollateralVault.json"
+      - ".github/workflows/indexer-tests.yml"
+
+jobs:
+  pre:
+    name: Skip duplicate runs
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.skip-check.outputs.should_skip }}
+    steps:
+      - id: skip-check
+        uses: fkirc/skip-duplicate-actions@v5
+        with:
+          concurrent_skipping: never
+          skip_after_successful_duplicate: "true"
+          paths_ignore: '["**/*.md"]'
+
+  test:
+    name: Indexer tests
+    needs: pre
+    if: needs.pre.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: ./indexer
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: indexer/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: indexer/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Render subgraph.yaml from the template using the dummy values shipped
+      # in .env.example so codegen has something to chew on. Real addresses
+      # are only needed at deploy time.
+      - name: Prepare subgraph (with .env.example defaults)
+        run: |
+          set -a && source .env.example && set +a
+          pnpm prepare:env
+          echo "--- subgraph.yaml ---"
+          cat subgraph.yaml
+
+      - name: Codegen
+        run: pnpm codegen
+
+      - name: Build
+        run: pnpm build
+
+      - name: Run matchstick tests
+        run: pnpm test
