@@ -6,6 +6,7 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Versionable} from "./interfaces/Versionable.sol";
 import {ICollateralVault} from "./interfaces/ICollateralVault.sol";
@@ -129,13 +130,26 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
         _depositFor(_msgSender(), _msgSender(), amount);
     }
 
+    /// @notice Deposit collateral tokens using an ERC-2612 permit (approve + deposit in one tx).
+    /// @param amount   Amount of collateral to deposit.
+    /// @param deadline Permit signature deadline.
+    /// @param v        Permit signature v.
+    /// @param r        Permit signature r.
+    /// @param s        Permit signature s.
+    function depositForPermit(address recipient, uint256 amount, uint256 deadline, uint8 v, bytes32 r, bytes32 s)
+        external
+    {
+        IERC20Permit(address(collateralToken)).permit(_msgSender(), address(this), amount, deadline, v, r, s);
+        _depositFor(_msgSender(), recipient, amount);
+    }
+
     /// @notice Withdraw collateral tokens; burns receipt tokens.
     ///         Reverts if the withdrawal would breach portfolio margin requirements.
     function withdraw(uint256 amount) external {
         _withdrawTo(_msgSender(), _msgSender(), amount);
     }
 
-    function depositFor(address recipient, uint256 amount) external onlyAuthorized {
+    function depositFor(address recipient, uint256 amount) external {
         _depositFor(_msgSender(), recipient, amount);
     }
 

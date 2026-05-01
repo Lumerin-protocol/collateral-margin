@@ -428,6 +428,198 @@ describe("CollateralVault", () => {
     });
   });
 
+  // ── depositForPermit ────────────────────────────────────────────────────
+
+  describe("depositForPermit", () => {
+    const PERMIT_TYPES = {
+      Permit: [
+        { name: "owner", type: "address" },
+        { name: "spender", type: "address" },
+        { name: "value", type: "uint256" },
+        { name: "nonce", type: "uint256" },
+        { name: "deadline", type: "uint256" },
+      ],
+    } as const;
+
+    type VaultFixture = Awaited<ReturnType<typeof deployVaultFixture>>;
+    type Wallet = VaultFixture["alice"];
+    type Usdc = VaultFixture["usdc"];
+
+    /** Build an ERC-2612 permit signature for {owner=signer | override} → spender. */
+    async function buildPermitSig(opts: {
+      signer: Wallet;
+      usdc: Usdc;
+      spender: `0x${string}`;
+      value: bigint;
+      deadline: bigint;
+      /** Override the `owner` field in the typed message (for invalid-signer tests). */
+      owner?: `0x${string}`;
+    }) {
+      const owner = opts.owner ?? opts.signer.account.address;
+      const [, name, version, chainId, verifyingContract] = await opts.usdc.read.eip712Domain();
+      const nonce = await opts.usdc.read.nonces([owner]);
+      const sig = await opts.signer.signTypedData({
+        account: opts.signer.account,
+        domain: { name, version, chainId, verifyingContract },
+        types: PERMIT_TYPES,
+        primaryType: "Permit",
+        message: {
+          owner,
+          spender: opts.spender,
+          value: opts.value,
+          nonce,
+          deadline: opts.deadline,
+        },
+      });
+      return {
+        r: `0x${sig.slice(2, 66)}` as `0x${string}`,
+        s: `0x${sig.slice(66, 130)}` as `0x${string}`,
+        v: Number.parseInt(sig.slice(130, 132), 16),
+      };
+    }
+
+    it("permits and deposits in a single tx without prior allowance", async () => {
+      const { vault, usdc, owner } = await networkHelpers.loadFixture(deployVaultFixture);
+      // Use a wallet that has NOT approved the vault, to prove the permit path is the only
+      // thing setting allowance.
+      const wallets = await viem.getWalletClients();
+      const fresh = wallets[4];
+      const amount = 5_000_000n;
+      await usdc.write.transfer([fresh.account.address, amount], { account: owner.account });
+      assert.equal(await usdc.read.allowance([fresh.account.address, vault.address]), 0n);
+
+      const latest = await networkHelpers.time.latest();
+      const deadline = BigInt(latest + 600);
+      const { v, r, s } = await buildPermitSig({
+        signer: fresh,
+        usdc,
+        spender: vault.address,
+        value: amount,
+        deadline,
+      });
+
+      await viem.assertions.emitWithArgs(
+        vault.write.depositForPermit([fresh.account.address, amount, deadline, v, r, s], {
+          account: fresh.account,
+        }),
+        vault,
+        "Deposited",
+        [getAddress(fresh.account.address), amount, getAddress(fresh.account.address)],
+      );
+
+      assert.equal(await vault.read.balanceOf([fresh.account.address]), amount);
+      assert.equal(await usdc.read.balanceOf([fresh.account.address]), 0n);
+      // Permit consumed the entire allowance — none left over for replay.
+      assert.equal(await usdc.read.allowance([fresh.account.address, vault.address]), 0n);
+      assert.equal(await usdc.read.nonces([fresh.account.address]), 1n);
+    });
+
+    it("can mint receipt tokens to a different recipient than the signer", async () => {
+      const { vault, usdc, alice, bob } = await networkHelpers.loadFixture(deployVaultFixture);
+      const amount = 2_000_000n;
+      const latest = await networkHelpers.time.latest();
+      const deadline = BigInt(latest + 600);
+
+      const { v, r, s } = await buildPermitSig({
+        signer: alice,
+        usdc,
+        spender: vault.address,
+        value: amount,
+        deadline,
+      });
+
+      await viem.assertions.emitWithArgs(
+        vault.write.depositForPermit([bob.account.address, amount, deadline, v, r, s], {
+          account: alice.account,
+        }),
+        vault,
+        "Deposited",
+        [getAddress(bob.account.address), amount, getAddress(alice.account.address)],
+      );
+
+      assert.equal(await vault.read.balanceOf([bob.account.address]), amount);
+      assert.equal(await vault.read.balanceOf([alice.account.address]), 0n);
+    });
+
+    it("reverts on expired deadline", async () => {
+      const { vault, usdc, alice } = await networkHelpers.loadFixture(deployVaultFixture);
+      const amount = 1_000_000n;
+      const latest = await networkHelpers.time.latest();
+      const deadline = BigInt(latest - 1);
+
+      const { v, r, s } = await buildPermitSig({
+        signer: alice,
+        usdc,
+        spender: vault.address,
+        value: amount,
+        deadline,
+      });
+
+      await viem.assertions.revertWithCustomError(
+        vault.write.depositForPermit([alice.account.address, amount, deadline, v, r, s], {
+          account: alice.account,
+        }),
+        usdc,
+        "ERC2612ExpiredSignature",
+      );
+    });
+
+    it("reverts when the signature was not produced by msg.sender", async () => {
+      const { vault, usdc, alice, bob } = await networkHelpers.loadFixture(deployVaultFixture);
+      const amount = 1_000_000n;
+      const latest = await networkHelpers.time.latest();
+      const deadline = BigInt(latest + 600);
+
+      // Bob signs a permit message that claims owner = alice. The contract calls
+      // permit(msg.sender = alice, …) so the recovered signer (bob) won't match owner (alice).
+      const { v, r, s } = await buildPermitSig({
+        signer: bob,
+        usdc,
+        spender: vault.address,
+        value: amount,
+        deadline,
+        owner: alice.account.address,
+      });
+
+      await viem.assertions.revertWithCustomError(
+        vault.write.depositForPermit([alice.account.address, amount, deadline, v, r, s], {
+          account: alice.account,
+        }),
+        usdc,
+        "ERC2612InvalidSigner",
+      );
+    });
+
+    it("reverts on signature replay (nonce already consumed)", async () => {
+      const { vault, usdc, alice } = await networkHelpers.loadFixture(deployVaultFixture);
+      const amount = 1_000_000n;
+      const latest = await networkHelpers.time.latest();
+      const deadline = BigInt(latest + 600);
+
+      const { v, r, s } = await buildPermitSig({
+        signer: alice,
+        usdc,
+        spender: vault.address,
+        value: amount,
+        deadline,
+      });
+
+      await vault.write.depositForPermit(
+        [alice.account.address, amount, deadline, v, r, s],
+        { account: alice.account },
+      );
+
+      // Same signature can't be reused: nonce was bumped, so the recovered signer mismatches.
+      await viem.assertions.revertWithCustomError(
+        vault.write.depositForPermit([alice.account.address, amount, deadline, v, r, s], {
+          account: alice.account,
+        }),
+        usdc,
+        "ERC2612InvalidSigner",
+      );
+    });
+  });
+
   // ── totalSupply tracks deposits ─────────────────────────────────────────
 
   describe("totalSupply", () => {
