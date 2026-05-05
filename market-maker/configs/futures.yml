@@ -1,0 +1,80 @@
+# Titan Market Maker - Futures configuration.
+#
+# Required env vars (loaded via ${VAR}):
+#   MAKER_PRIVATE_KEY       - hex private key of the market-making wallet
+#   ETH_NODE_ADDRESS        - JSON-RPC or websocket endpoint
+#   FUTURES_ADDRESS         - Futures contract address on the configured network
+#   NETWORK                 - one of: arbitrum, arbitrum-sepolia, base, base-sepolia, hardhat
+#
+# Optional env vars (with defaults expressed below):
+#   ETH_PRICE_FEED_ADDRESS  - Chainlink ETH/USD aggregator (omit to disable USD gas accounting)
+#   COMMIT_HASH             - injected by CI for /health diagnostics
+#   NODE_ENV                - "development" or "production"
+#   MAKER_LOG_LEVEL         - pino level
+
+nodeEnv: ${NODE_ENV:-development}
+commitHash: ${COMMIT_HASH:-unknown}
+logLevel: ${MAKER_LOG_LEVEL:-info}
+dryRun: false
+
+wallets:
+  primary:
+    privateKey: ${MAKER_PRIVATE_KEY}
+
+network:
+  name: ${NETWORK}
+  rpcUrl: ${ETH_NODE_ADDRESS}
+  ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
+
+venue:
+  kind: futures
+  address: ${FUTURES_ADDRESS}
+  wallet: primary
+  # Seed BookTracker/InventoryManager from this block on startup (events scan).
+  # Default: use the contract's "list" view functions instead when available.
+  # eventsFromBlock: 0
+
+pricing:
+  strategy: reservation-price
+  # Avellaneda–Stoikov risk aversion γ.
+  # With oracle.volatility in units of "per poll" (~3 s) and marginCallTimeSeconds
+  # in seconds, tune riskAversion so that at max inventory the mid shifts by ~1 tick.
+  riskAversion: 0.001
+  # Fallback remaining time (seconds) when InstrumentContext.deliveryDate is unavailable.
+  marginCallTimeSeconds: 3600
+  minSpreadBps: 15
+  volatilityMultiplier: 2.5
+  # No inventorySkewGamma: reservation-price absorbs inventory through the formula.
+  maxSkewTicks: 0
+
+sizing:
+  strategy: geometric-taper
+  # Total per-side budget in USDC base units (6 decimals).
+  # 500 USDC per side = 500_000_000
+  baseQuantity: "500000000"
+  numLevelsPerSide: 4
+  # alpha: 0.6 → each level is 60% of the previous
+  taperRatio: 0.6
+
+risk:
+  maxPositionSize: "100000000"
+  maxUtilizationPct: 80
+  minCollateralBalance: "100000000"
+  maxDailyLossUsd: "1000000000"
+  maxGasBudgetPerHourUsd: "50000000"
+  maxGasBudgetPerDayUsd: "500000000"
+  gasSpikeThresholdPct: 200
+  gasPenaltyBps: 5
+  urgentRequoteThresholdTicks: 10
+
+gas:
+  gasCapMultiplier: 2.0
+
+timing:
+  pollIntervalMs: 3000
+  requoteThresholdTicks: 2
+  requoteCooldownMs: 1000
+  resyncIntervalMs: 60000
+
+health:
+  port: 3001

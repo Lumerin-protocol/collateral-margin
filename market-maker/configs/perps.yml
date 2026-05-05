@@ -1,0 +1,67 @@
+# Titan Market Maker - Perps configuration.
+#
+# Required env vars (loaded via ${VAR}):
+#   MAKER_PRIVATE_KEY       - hex private key of the market-making wallet
+#   ETH_NODE_ADDRESS        - JSON-RPC or websocket endpoint
+#   PERPS_ADDRESS           - HashPowerPerpsDEX address on the configured network
+#   NETWORK                 - one of: arbitrum, arbitrum-sepolia, base, base-sepolia, hardhat
+#
+# Optional env vars (with defaults expressed below):
+#   ETH_PRICE_FEED_ADDRESS  - Chainlink ETH/USD aggregator (omit to disable USD gas accounting)
+#   COMMIT_HASH             - injected by CI for /health diagnostics
+#   NODE_ENV                - "development" or "production"
+#   MAKER_LOG_LEVEL         - pino level
+
+nodeEnv: ${NODE_ENV:-development}
+commitHash: ${COMMIT_HASH:-unknown}
+logLevel: ${MAKER_LOG_LEVEL:-info}
+dryRun: false
+
+wallets:
+  primary:
+    privateKey: ${MAKER_PRIVATE_KEY}
+
+network:
+  name: ${NETWORK}
+  rpcUrl: ${ETH_NODE_ADDRESS}
+  ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
+
+venue:
+  kind: perps
+  address: ${PERPS_ADDRESS}
+  wallet: primary
+
+pricing:
+  strategy: effective-spread
+  minSpreadBps: 10
+  volatilityMultiplier: 2.0
+  inventorySkewGamma: 0.5
+  maxSkewTicks: 20
+
+sizing:
+  strategy: linear
+  baseQuantity: "1000000"
+  numLevelsPerSide: 5
+
+risk:
+  maxPositionSize: "100000000"
+  maxUtilizationPct: 80
+  minCollateralBalance: "100000000"
+  maxDailyLossUsd: "1000000000"
+  maxGasBudgetPerHourUsd: "50000000"
+  maxGasBudgetPerDayUsd: "500000000"
+  gasSpikeThresholdPct: 200
+  gasPenaltyBps: 5
+  urgentRequoteThresholdTicks: 10
+
+gas:
+  gasCapMultiplier: 2.0
+
+timing:
+  pollIntervalMs: 3000
+  requoteThresholdTicks: 2
+  requoteCooldownMs: 1000
+  resyncIntervalMs: 60000
+
+health:
+  port: 3001
