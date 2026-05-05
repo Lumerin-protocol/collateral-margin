@@ -15,9 +15,8 @@ describe("futures app config smoke", () => {
       const path = resolve(import.meta.dirname, `../../../configs/futures.${e}.yml`);
       const env: NodeJS.ProcessEnv = {
         PRIVATE_KEY: "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
-        ETH_NODE_ADDRESS: "https://example.com/rpc",
+        ALCHEMY_API_KEY: "stub-alchemy-key",
         FUTURES_ADDRESS: "0x1234567890123456789012345678901234567890",
-        NETWORK: "arbitrum",
       };
       const cfg = loadFuturesConfig({ path, env });
       assert.equal(cfg.venue.kind, "futures");

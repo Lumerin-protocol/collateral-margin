@@ -11,10 +11,13 @@ export class FuturesVenueEvents implements VenueEvents {
   private listeners = new Set<(event: VenueEvent) => void>();
   private unwatch: WatchContractEventReturnType | null = null;
 
-  constructor(
-    private readonly publicClient: PublicClient,
-    private readonly address: `0x${string}`,
-  ) {}
+  private readonly publicClient: PublicClient;
+  private readonly address: `0x${string}`;
+
+  constructor(publicClient: PublicClient, address: `0x${string}`) {
+    this.publicClient = publicClient;
+    this.address = address;
+  }
 
   subscribe(cb: (event: VenueEvent) => void): Unsubscribe {
     this.listeners.add(cb);

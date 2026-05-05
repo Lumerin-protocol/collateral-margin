@@ -35,11 +35,12 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
   }
 
   async getIndexPrice(): Promise<bigint> {
-    return await this.venue.publicClient.readContract({
-      address: this.venue.address,
-      abi: FuturesAbi,
-      functionName: "getMarketPrice",
-    });
+    // Read the raw oracle answer rebased to token decimals — `Futures.getMarketPrice`
+    // would round to the nearest tick, which collapses our reservation-price
+    // shift onto a tick boundary and forces a 2-tick min spread. The unrounded
+    // mid lets `roundDownToTick(r) → bidMid` and `roundUpToTick(r) → askMid`
+    // produce a 1-tick spread naturally.
+    return await this.venue.getRawMarketPrice();
   }
 
   async getPosition(): Promise<Position> {
@@ -47,14 +48,20 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
     // engine view exposed for this purpose: getNetPositionDelta returns
     // `Σ qty_i * deliveryDurationDays` × 1e18 in WAD. Convert back to
     // contracts by dividing by `deliveryDurationDays * 1e18`.
-    const [netDeltaWad, durationDays, marketPrice] = await this.venue.publicClient.multicall({
-      allowFailure: false,
-      contracts: [
-        { address: this.venue.address, abi: FuturesAbi, functionName: "getNetPositionDelta", args: [this.venue.wallet.account.address] },
-        { address: this.venue.address, abi: FuturesAbi, functionName: "deliveryDurationDays" },
-        { address: this.venue.address, abi: FuturesAbi, functionName: "getMarketPrice" },
-      ],
-    });
+    const [netDeltaWad, durationDays, marketPrice] = await Promise.all([
+      this.venue.publicClient.readContract({
+        address: this.venue.address,
+        abi: FuturesAbi,
+        functionName: "getNetPositionDelta",
+        args: [this.venue.wallet.account.address],
+      }),
+      this.venue.publicClient.readContract({
+        address: this.venue.address,
+        abi: FuturesAbi,
+        functionName: "deliveryDurationDays",
+      }),
+      this.venue.getRawMarketPrice(),
+    ]);
     const days = BigInt(durationDays);
     const denom = days * 10n ** 18n;
     const netQuantity = denom === 0n ? 0n : netDeltaWad / denom;
@@ -163,7 +170,10 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
  */
 class FuturesBook implements BookSource {
   readonly matchingMode: MatchingMode = "exact";
-  constructor(private readonly inst: FuturesInstrumentAdapter) {}
+  private readonly inst: FuturesInstrumentAdapter;
+  constructor(inst: FuturesInstrumentAdapter) {
+    this.inst = inst;
+  }
 
   async tick(): Promise<bigint> {
     return this.inst.getMinTick();

@@ -18,6 +18,12 @@ const MAX_ERROR_DELAY_MS = 3 * 60_000;
 
 export interface RunnerOpts {
   pollIntervalMs: number;
+  /**
+   * If true (default), SIGINT/SIGTERM trigger `executor.cancelAll()` before
+   * exit. Set false to leave resting orders on the book — handy for fast
+   * restarts where you don't want to pay cancel-then-reopen gas.
+   */
+  cancelOrdersOnShutdown?: boolean;
   instrument: InstrumentAdapter;
   oracle: OracleTracker;
   gas: GasTracker;
@@ -49,6 +55,7 @@ export interface RunnerOpts {
  */
 export async function runMakerLoop(opts: RunnerOpts): Promise<void> {
   const { pollIntervalMs, instrument, oracle, gas, book, inventory, collateral, risk, quoter, executor, health, logger } = opts;
+  const cancelOrdersOnShutdown = opts.cancelOrdersOnShutdown ?? true;
   const mmAddress = instrument.venue.wallet.account.address;
 
   health.executorStats = executor.stats;
@@ -98,11 +105,15 @@ export async function runMakerLoop(opts: RunnerOpts): Promise<void> {
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    logger.info("shutting down…");
-    try {
-      await executor.cancelAll();
-    } catch (err) {
-      logger.error({ err }, "failed to cancel orders during shutdown");
+    logger.info({ cancelOrdersOnShutdown }, "shutting down…");
+    if (cancelOrdersOnShutdown) {
+      try {
+        await executor.cancelAll();
+      } catch (err) {
+        logger.error({ err }, "failed to cancel orders during shutdown");
+      }
+    } else {
+      logger.info("cancelOrdersOnShutdown=false; leaving resting orders on the book");
     }
     book.stop();
     await health.stop();

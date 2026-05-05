@@ -13,6 +13,9 @@ nodeEnv: development
 commitHash: ${COMMIT_HASH:-dev}
 logLevel: ${MAKER_LOG_LEVEL:-debug}
 dryRun: ${MAKER_DRY_RUN:-true}
+# Local/dev iterates fast; leave resting orders on the hardhat book on Ctrl-C
+# so you don't pay the cancel-then-reopen round-trip on every restart.
+cancelOrdersOnShutdown: false
 
 wallets:
   primary:
@@ -20,7 +23,7 @@ wallets:
 
 network:
   name: ${NETWORK:-hardhat}
-  rpcUrl: ${ETH_NODE_ADDRESS:-http://127.0.0.1:8545}
+  rpcUrl: http://127.0.0.1:8545
   ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
 
 venue:
@@ -37,16 +40,17 @@ pricing:
 
 sizing:
   strategy: linear
-  baseQuantity: "100000"   # 0.1 USDC per level — tiny
+  baseQuantity: "100000"   # venue-native units (hashrate base)
   numLevelsPerSide: 3
 
 risk:
-  maxPositionSize: "10000000"          # 10 USDC
+  # All *Usd fields are USD (decimals OK). Loader converts to 6-dec USDC.
+  maxPositionSize: 10
   maxUtilizationPct: 80
-  minCollateralBalance: "1000000"      # 1 USDC
-  maxDailyLossUsd: "100000000"         # 100 USDC
-  maxGasBudgetPerHourUsd: "50000000"
-  maxGasBudgetPerDayUsd: "500000000"
+  minCollateralBalance: 1
+  maxDailyLossUsd: 100
+  maxGasBudgetPerHourUsd: 50
+  maxGasBudgetPerDayUsd: 500
   gasSpikeThresholdPct: 200
   gasPenaltyBps: 5
   urgentRequoteThresholdTicks: 10
@@ -55,16 +59,17 @@ gas:
   gasCapMultiplier: 2.0
 
 timing:
-  pollIntervalMs: 3000
+  # All *Sec fields are seconds (decimals OK). Loader converts to ms.
+  pollIntervalSec: 3
   requoteThresholdTicks: 2
-  requoteCooldownMs: 1000
-  resyncIntervalMs: 60000
+  requoteCooldownSec: 1
+  resyncIntervalSec: 60
   levelSpacingTicks: 5
 
 collateral:
   # Off in dev so you can inspect un-deposited wallet balance.
   autoDeposit: false
-  autoDepositMinAmount: "0"
+  autoDepositMinAmount: 0
 
 health:
   port: ${MAKER_HEALTH_PORT:-3001}

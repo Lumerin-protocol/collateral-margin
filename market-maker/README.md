@@ -113,13 +113,13 @@ node src/apps/perps/main.ts --config /tmp/my-perps.yml
 
 ### Required
 
-| Variable | Description |
-|---|---|
-| `NETWORK` | Chain identifier: `arbitrum`, `arbitrum-sepolia`, or `hardhat` |
-| `ETH_NODE_ADDRESS` | RPC endpoint (HTTP or WebSocket) |
-| `PERPS_ADDRESS` | Deployed HashPowerPerpsDEX proxy contract address (perps app) |
-| `FUTURES_ADDRESS` | Deployed Futures proxy contract address (futures app) |
-| `PRIVATE_KEY` | Hex-encoded private key for the MM wallet |
+| Variable | Used by | Description |
+|---|---|---|
+| `PRIVATE_KEY` | all envs | Hex-encoded private key for the MM wallet |
+| `ALCHEMY_API_KEY` | dev/stg/prd | Alchemy API key. The bundled configs compose the RPC URL (`https://base-sepolia.g.alchemy.com/v2/${ALCHEMY_API_KEY}` for dev, `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}` for stg/prd). |
+| `PERPS_ADDRESS` | perps app | Deployed HashPowerPerpsDEX proxy contract address |
+| `FUTURES_ADDRESS` | futures app | Deployed Futures proxy contract address |
+| `ETH_PRICE_FEED_ADDRESS` | optional | Chainlink ETH/USD aggregator. Required to surface gas cost in USD; leave unset for local hardhat. |
 
 ### Quoting
 
@@ -218,11 +218,10 @@ pnpm prd:futures
 ### Example `.env`
 
 ```env
-NETWORK=arbitrum-sepolia
-ETH_NODE_ADDRESS=https://sepolia-rollup.arbitrum.io/rpc
+PRIVATE_KEY=0x...
+ALCHEMY_API_KEY=...
 PERPS_ADDRESS=0x...
 FUTURES_ADDRESS=0x...
-PRIVATE_KEY=0x...
 MAKER_DRY_RUN=false
 MAKER_HEALTH_PORT=3001
 ```

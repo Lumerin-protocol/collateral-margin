@@ -2,7 +2,7 @@
 # Titan Market Maker - Futures - STAGING (base-mainnet).
 #
 #   PRIVATE_KEY             - hex private key of the staging market-making wallet
-#   ETH_NODE_ADDRESS        - base-mainnet JSON-RPC endpoint
+#   ALCHEMY_API_KEY         - Alchemy API key (URL is composed below)
 #   FUTURES_ADDRESS         - Futures address on base-mainnet (staging deployment)
 #   ETH_PRICE_FEED_ADDRESS  - Chainlink ETH/USD aggregator on base-mainnet
 
@@ -10,6 +10,9 @@ nodeEnv: staging
 commitHash: ${COMMIT_HASH:-unknown}
 logLevel: ${MAKER_LOG_LEVEL:-debug}
 dryRun: ${MAKER_DRY_RUN:-false}
+# Cancel resting orders on SIGINT/SIGTERM. Set false for hot-restart deploys
+# where you'd rather absorb the brief stale-quote risk than pay cancel gas.
+cancelOrdersOnShutdown: ${MAKER_CANCEL_ORDERS_ON_SHUTDOWN:-true}
 
 wallets:
   primary:
@@ -17,7 +20,7 @@ wallets:
 
 network:
   name: base
-  rpcUrl: ${ETH_NODE_ADDRESS}
+  rpcUrl: https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}
   ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
 
 venue:
@@ -28,24 +31,24 @@ venue:
 pricing:
   strategy: reservation-price
   riskAversion: 0.001
-  marginCallTimeSeconds: 3600
+  marginCallTimeSec: 3600
   minSpreadBps: 15
   volatilityMultiplier: 2.5
   maxSkewTicks: 0
 
 sizing:
   strategy: geometric-taper
-  baseQuantity: "100000000"       # 100 USDC per side total
+  baseQuantity: "100000000"       # venue-native (contracts base units)
   numLevelsPerSide: 4
   taperRatio: 0.6
 
 risk:
-  maxPositionSize: "50000000"
+  maxPositionSize: 50
   maxUtilizationPct: 80
-  minCollateralBalance: "10000000"
-  maxDailyLossUsd: "500000000"
-  maxGasBudgetPerHourUsd: "50000000"
-  maxGasBudgetPerDayUsd: "500000000"
+  minCollateralBalance: 10
+  maxDailyLossUsd: 500
+  maxGasBudgetPerHourUsd: 50
+  maxGasBudgetPerDayUsd: 500
   gasSpikeThresholdPct: 200
   gasPenaltyBps: 5
   urgentRequoteThresholdTicks: 10
@@ -54,15 +57,15 @@ gas:
   gasCapMultiplier: 2.0
 
 timing:
-  pollIntervalMs: 3000
+  pollIntervalSec: 3
   requoteThresholdTicks: 2
-  requoteCooldownMs: 1000
-  resyncIntervalMs: 60000
+  requoteCooldownSec: 1
+  resyncIntervalSec: 60
   levelSpacingTicks: 1
 
 collateral:
   autoDeposit: true
-  autoDepositMinAmount: "1000000"
+  autoDepositMinAmount: 1
 
 health:
   port: ${MAKER_HEALTH_PORT:-3001}

@@ -134,7 +134,16 @@ export async function depositToVault(opts: DepositToVaultOpts): Promise<void> {
 }
 
 async function tryPermitDeposit(opts: DepositToVaultOpts): Promise<boolean> {
-  const { publicClient, walletClient, account, chain, vaultAddress, collateralToken, amount, logger } = opts;
+  const {
+    publicClient,
+    walletClient,
+    account,
+    chain,
+    vaultAddress,
+    collateralToken,
+    amount,
+    logger,
+  } = opts;
 
   // Discover permit domain. If nonces() reverts, the token doesn't implement
   // EIP-2612 — bail out cleanly.
@@ -158,7 +167,13 @@ async function tryPermitDeposit(opts: DepositToVaultOpts): Promise<boolean> {
   let domain: { name: string; version: string; chainId: number; verifyingContract: `0x${string}` };
   if (domainResult.status === "success") {
     const [, dName, dVersion, dChainId, dVerifyingContract] = domainResult.result;
-    domain = { name: dName, version: dVersion, chainId: Number(dChainId), verifyingContract: dVerifyingContract };
+    domain = {
+      name: dName,
+      version: dVersion,
+      chainId: Number(dChainId),
+      verifyingContract: dVerifyingContract,
+    };
+    console.log("domain", domain);
   } else {
     if (nameResult.status === "failure") {
       logger.warn({ err: nameResult.error }, "token has no name(); using approve fallback");
@@ -188,6 +203,7 @@ async function tryPermitDeposit(opts: DepositToVaultOpts): Promise<boolean> {
   const v = Number.parseInt(signature.slice(130, 132), 16);
 
   try {
+    console.log("args", [owner, amount, deadline, v, r, s]);
     const hash = await walletClient.writeContract({
       address: vaultAddress,
       abi: vaultAbi,
@@ -206,7 +222,16 @@ async function tryPermitDeposit(opts: DepositToVaultOpts): Promise<boolean> {
 }
 
 async function approveAndDeposit(opts: DepositToVaultOpts): Promise<void> {
-  const { publicClient, walletClient, account, chain, vaultAddress, collateralToken, amount, logger } = opts;
+  const {
+    publicClient,
+    walletClient,
+    account,
+    chain,
+    vaultAddress,
+    collateralToken,
+    amount,
+    logger,
+  } = opts;
 
   logger.info({ amount: amount.toString() }, "approving vault to spend collateral");
   const approveHash = await walletClient.writeContract({

@@ -25,7 +25,7 @@ venue:
 pricing:
   strategy: reservation-price
   riskAversion: 0.001
-  marginCallTimeSeconds: 3600
+  marginCallTimeSec: 3600
   minSpreadBps: 15
   volatilityMultiplier: 2.5
   maxSkewTicks: 0
@@ -35,10 +35,10 @@ sizing:
   numLevelsPerSide: 4
   taperRatio: 0.6
 risk:
-  maxPositionSize: "50000000"
+  maxPositionSize: 50
   maxUtilizationPct: 80
-  minCollateralBalance: "10000000"
-  maxDailyLossUsd: "500000000"
+  minCollateralBalance: 10
+  maxDailyLossUsd: 500
 gas:
   gasCapMultiplier: 2.0
 timing: {}
@@ -72,7 +72,7 @@ describe("loadFuturesConfig", () => {
       `pricing:
   strategy: reservation-price
   riskAversion: 0.001
-  marginCallTimeSeconds: 3600
+  marginCallTimeSec: 3600
   minSpreadBps: 15
   volatilityMultiplier: 2.5
   maxSkewTicks: 0`,
@@ -109,8 +109,8 @@ describe("loadFuturesConfig", () => {
     assert.throws(() => loadFuturesConfig({ path }), /Config validation failed/);
   });
 
-  it("requires riskAversion and marginCallTimeSeconds", () => {
-    const yaml = VALID_YAML.replace("  riskAversion: 0.001\n  marginCallTimeSeconds: 3600\n", "");
+  it("requires riskAversion and marginCallTimeSec", () => {
+    const yaml = VALID_YAML.replace("  riskAversion: 0.001\n  marginCallTimeSec: 3600\n", "");
     const path = writeTmp(tmpDir, "test.yml", yaml);
     assert.throws(() => loadFuturesConfig({ path }), /Config validation failed/);
   });

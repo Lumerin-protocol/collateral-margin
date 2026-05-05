@@ -1,6 +1,5 @@
 import pino from "pino";
 import { loadDotenvFiles } from "../../core/env.ts";
-import { configBigint } from "../../core/config/base.ts";
 import { createNetworkClients } from "../../core/client.ts";
 import { WalletRegistry } from "../../core/wallet.ts";
 import { OracleTracker } from "../../core/oracleTracker.ts";
@@ -52,25 +51,26 @@ async function main(): Promise<void> {
   );
   const inventory = new InventoryManager(
     instrument,
-    { maxPositionSize: configBigint(config.risk.maxPositionSize, "risk.maxPositionSize") },
+    { maxPositionSize: config.risk.maxPositionSize },
     logger,
   );
   const collateral = new CollateralTracker(
     venue.account,
     {
       autoDeposit: config.collateral.autoDeposit,
-      autoDepositMinAmount: configBigint(config.collateral.autoDepositMinAmount, "collateral.autoDepositMinAmount"),
+      autoDepositMinAmount: config.collateral.autoDepositMinAmount,
+      maxCollateralAmount: config.collateral.maxCollateralAmount,
     },
     logger,
   );
   const risk = new RiskManager(
     {
-      maxPositionSize: configBigint(config.risk.maxPositionSize, "risk.maxPositionSize"),
+      maxPositionSize: config.risk.maxPositionSize,
       maxUtilizationPct: config.risk.maxUtilizationPct,
-      minCollateralBalance: configBigint(config.risk.minCollateralBalance, "risk.minCollateralBalance"),
-      maxDailyLossUsd: configBigint(config.risk.maxDailyLossUsd, "risk.maxDailyLossUsd"),
-      maxGasBudgetPerHourUsd: configBigint(config.risk.maxGasBudgetPerHourUsd, "risk.maxGasBudgetPerHourUsd"),
-      maxGasBudgetPerDayUsd: configBigint(config.risk.maxGasBudgetPerDayUsd, "risk.maxGasBudgetPerDayUsd"),
+      minCollateralBalance: config.risk.minCollateralBalance,
+      maxDailyLossUsd: config.risk.maxDailyLossUsd,
+      maxGasBudgetPerHourUsd: config.risk.maxGasBudgetPerHourUsd,
+      maxGasBudgetPerDayUsd: config.risk.maxGasBudgetPerDayUsd,
     },
     inventory,
     collateral,
@@ -84,21 +84,20 @@ async function main(): Promise<void> {
     logger,
   );
 
-  const baseQuantity = configBigint(config.sizing.baseQuantity, "sizing.baseQuantity");
   const quoter = new Quoter(
     instrument,
     {
       pricing: {
         strategy: "reservation-price",
         riskAversion: config.pricing.riskAversion,
-        marginCallTimeSeconds: config.pricing.marginCallTimeSeconds,
+        marginCallTimeSeconds: config.pricing.marginCallTimeSec,
         minSpreadBps: config.pricing.minSpreadBps,
         volatilityMultiplier: config.pricing.volatilityMultiplier,
         gasPenaltyBps: config.risk.gasPenaltyBps,
       },
       sizing: {
         strategy: "geometric-taper",
-        baseQuantity,
+        baseQuantity: config.sizing.baseQuantity,
         numLevelsPerSide: config.sizing.numLevelsPerSide,
         taperRatio: config.sizing.taperRatio,
       },
@@ -141,6 +140,7 @@ async function main(): Promise<void> {
 
   await runMakerLoop({
     pollIntervalMs: config.timing.pollIntervalMs,
+    cancelOrdersOnShutdown: config.cancelOrdersOnShutdown,
     instrument,
     oracle,
     gas,

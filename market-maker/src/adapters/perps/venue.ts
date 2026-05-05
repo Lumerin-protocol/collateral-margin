@@ -15,6 +15,7 @@ import { CollateralVaultAbi } from "../../abi/CollateralVault.ts";
 import { PortfolioMarginEngineAbi } from "../../abi/PortfolioMarginEngine.ts";
 import { Multicall3Abi } from "../../abi/Multicall3.ts";
 import { depositToVault } from "../../core/vaultDeposit.ts";
+import { RawOracleReader, chainlinkAggregatorAbi } from "../../core/rawOracle.ts";
 import { PerpsInstrumentAdapter } from "./instrument.ts";
 import { PerpsVenueEvents } from "./events.ts";
 
@@ -56,6 +57,7 @@ export class PerpsVenueAdapter implements VenueAdapter {
   private engineAddressCache: `0x${string}` | null = null;
   private collateralTokenCache: `0x${string}` | null = null;
   private imSpotShockCache: bigint | null = null;
+  private readonly rawOracle: RawOracleReader;
 
   constructor(opts: PerpsVenueOptions) {
     this.wallet = opts.wallet;
@@ -71,6 +73,35 @@ export class PerpsVenueAdapter implements VenueAdapter {
 
     this.events = new PerpsVenueEvents(this.publicClient, this.address);
     this.account = new PerpsCollateralAccount(this);
+
+    // Discover (oracle, divisor) on first read. Unlike futures the divisor
+    // isn't precomputed on chain — derive it from oracle.decimals() and the
+    // collateral token's decimals.
+    this.rawOracle = new RawOracleReader({
+      publicClient: this.publicClient,
+      label: "perps",
+      resolve: async () => {
+        const { token } = await this.resolveAddresses();
+        const oracle = await this.publicClient.readContract({
+          address: this.address,
+          abi: HashPowerPerpsDEXAbi,
+          functionName: "priceOracle",
+        });
+        const [oracleDecimals, tokenDecimals] = await this.publicClient.multicall({
+          allowFailure: false,
+          contracts: [
+            { address: oracle, abi: chainlinkAggregatorAbi, functionName: "decimals" },
+            { address: token, abi: erc20Abi, functionName: "decimals" },
+          ],
+        });
+        if (tokenDecimals > oracleDecimals) {
+          throw new Error(
+            `perps: tokenDecimals (${tokenDecimals}) > oracleDecimals (${oracleDecimals})`,
+          );
+        }
+        return { oracle, divisor: 10n ** BigInt(oracleDecimals - tokenDecimals) };
+      },
+    });
   }
 
   async getInstrument(): Promise<InstrumentAdapter> {
@@ -120,6 +151,14 @@ export class PerpsVenueAdapter implements VenueAdapter {
     return this.multicall3Address;
   }
 
+  /**
+   * Latest price oracle answer rebased to token decimals (no tick rounding).
+   * See `RawOracleReader` for rationale.
+   */
+  getRawMarketPrice(): Promise<bigint> {
+    return this.rawOracle.read();
+  }
+
   async fetchImSpotShock(): Promise<bigint> {
     if (this.imSpotShockCache !== null) return this.imSpotShockCache;
     const { engine } = await this.resolveAddresses();
@@ -144,7 +183,10 @@ export class PerpsVenueAdapter implements VenueAdapter {
  * old `addCollateralWithPermit` path no longer exists on the contract.
  */
 class PerpsCollateralAccount implements CollateralAccount {
-  constructor(private readonly venue: PerpsVenueAdapter) {}
+  private readonly venue: PerpsVenueAdapter;
+  constructor(venue: PerpsVenueAdapter) {
+    this.venue = venue;
+  }
 
   async snapshot(): Promise<CollateralSnapshot> {
     const owner = this.venue.wallet.account.address;

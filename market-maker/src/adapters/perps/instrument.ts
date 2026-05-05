@@ -35,11 +35,12 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
   }
 
   async getIndexPrice(): Promise<bigint> {
-    return await this.venue.publicClient.readContract({
-      address: this.venue.address,
-      abi: HashPowerPerpsDEXAbi,
-      functionName: "getMarketPrice",
-    });
+    // Read the raw oracle answer rebased to token decimals — `HashPowerPerpsDEX.getMarketPrice`
+    // would round to the nearest tick, which collapses our reservation-price
+    // shift onto a tick boundary and forces a 2-tick min spread. The unrounded
+    // mid lets `roundDownToTick(r) → bidMid` and `roundUpToTick(r) → askMid`
+    // produce a 1-tick spread naturally.
+    return await this.venue.getRawMarketPrice();
   }
 
   async getPosition(): Promise<Position> {
@@ -128,7 +129,10 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
 
 class PerpsBook implements BookSource {
   readonly matchingMode: MatchingMode = "limit";
-  constructor(private readonly inst: PerpsInstrumentAdapter) {}
+  private readonly inst: PerpsInstrumentAdapter;
+  constructor(inst: PerpsInstrumentAdapter) {
+    this.inst = inst;
+  }
 
   tick(): Promise<bigint> {
     return this.inst.getMinTick();
@@ -176,7 +180,10 @@ class PerpsBook implements BookSource {
  * source of truth.
  */
 class PerpsOwnOrders implements OwnOrderSource {
-  constructor(private readonly inst: PerpsInstrumentAdapter) {}
+  private readonly inst: PerpsInstrumentAdapter;
+  constructor(inst: PerpsInstrumentAdapter) {
+    this.inst = inst;
+  }
 
   async list(): Promise<OwnOrder[]> {
     const v = this.inst.venue;

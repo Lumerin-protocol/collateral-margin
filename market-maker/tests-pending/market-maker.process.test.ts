@@ -53,7 +53,7 @@ function spawnMM(port: number): MakerProcess {
     env: {
       ...process.env,
       NETWORK: "hardhat",
-      ETH_NODE_ADDRESS: "http://127.0.0.1:8545",
+      ETHEREUM_RPC_URL: "http://127.0.0.1:8545",
       PERPS_ADDRESS: deployment.contracts.perpsAddress,
       MAKER_PRIVATE_KEY: MM_ACCOUNT.privateKey,
       MAKER_HEALTH_PORT: String(port),

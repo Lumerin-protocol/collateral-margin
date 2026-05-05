@@ -10,10 +10,10 @@ config file.
 │ ECS service: market-maker-perps    │      │ ECS service: market-maker-futures  │
 │   image:    titan-market-maker:sha │      │   image:    titan-market-maker:sha │
 │   env:      MAKER_APP=perps        │      │   env:      MAKER_APP=futures      │
-│             MAKER_CONFIG=/configs/perps.yml │             MAKER_CONFIG=/configs/futures.yml │
-│   secrets:  PRIVATE_KEY (perps)    │      │   secrets:  PRIVATE_KEY (futures)  │
-│             ETH_NODE_ADDRESS       │      │             ETH_NODE_ADDRESS       │
+│             MAKER_ENV=prd          │      │             MAKER_ENV=prd          │
 │             PERPS_ADDRESS          │      │             FUTURES_ADDRESS        │
+│   secrets:  PRIVATE_KEY (perps)    │      │   secrets:  PRIVATE_KEY (futures)  │
+│             ALCHEMY_API_KEY        │      │             ALCHEMY_API_KEY        │
 └────────────────────────────────────┘      └────────────────────────────────────┘
 ```
 

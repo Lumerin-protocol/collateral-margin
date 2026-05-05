@@ -15,6 +15,7 @@ import { CollateralVaultAbi } from "../../abi/CollateralVault.ts";
 import { PortfolioMarginEngineAbi } from "../../abi/PortfolioMarginEngine.ts";
 import { Multicall3Abi } from "../../abi/Multicall3.ts";
 import { depositToVault } from "../../core/vaultDeposit.ts";
+import { RawOracleReader } from "../../core/rawOracle.ts";
 import { FuturesInstrumentAdapter } from "./instrument.ts";
 import { FuturesVenueEvents } from "./events.ts";
 
@@ -59,6 +60,7 @@ export class FuturesVenueAdapter implements VenueAdapter {
   private collateralTokenCache: `0x${string}` | null = null;
   private deliveryDurationDaysCache: bigint | null = null;
   private marginPercentCache: bigint | null = null;
+  private readonly rawOracle: RawOracleReader;
 
   constructor(opts: FuturesVenueOptions) {
     this.wallet = opts.wallet;
@@ -74,6 +76,24 @@ export class FuturesVenueAdapter implements VenueAdapter {
 
     this.events = new FuturesVenueEvents(this.publicClient, this.address);
     this.account = new FuturesCollateralAccount(this);
+
+    // Discover (oracle, divisor) from the futures contract on first read.
+    // The divisor is precomputed on chain (`hashpriceScalingDivisor`), so we
+    // just fetch both fields together.
+    this.rawOracle = new RawOracleReader({
+      publicClient: this.publicClient,
+      label: "futures",
+      resolve: async () => {
+        const [oracle, divisor] = await this.publicClient.multicall({
+          allowFailure: false,
+          contracts: [
+            { address: this.address, abi: FuturesAbi, functionName: "hashrateOracle" },
+            { address: this.address, abi: FuturesAbi, functionName: "hashpriceScalingDivisor" },
+          ],
+        });
+        return { oracle, divisor };
+      },
+    });
   }
 
   async getInstrument(): Promise<InstrumentAdapter> {
@@ -132,6 +152,14 @@ export class FuturesVenueAdapter implements VenueAdapter {
   }
 
   /**
+   * Latest hashprice oracle answer rebased to token decimals (no tick
+   * rounding). See `RawOracleReader` for rationale.
+   */
+  getRawMarketPrice(): Promise<bigint> {
+    return this.rawOracle.read();
+  }
+
+  /**
    * Cache delivery-duration-days and marginPercent on the venue. Both are
    * static-ish (admin-changeable) so we read them once and reuse for the
    * `estimateOrderMargin` formula.
@@ -167,7 +195,10 @@ export class FuturesVenueAdapter implements VenueAdapter {
  * unrealized PnL (signed), wallet ERC20 balance, native ETH balance.
  */
 class FuturesCollateralAccount implements CollateralAccount {
-  constructor(private readonly venue: FuturesVenueAdapter) {}
+  private readonly venue: FuturesVenueAdapter;
+  constructor(venue: FuturesVenueAdapter) {
+    this.venue = venue;
+  }
 
   async snapshot(): Promise<CollateralSnapshot> {
     const owner = this.venue.wallet.account.address;

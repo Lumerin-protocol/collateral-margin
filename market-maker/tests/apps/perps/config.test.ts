@@ -33,14 +33,14 @@ sizing:
   baseQuantity: "1000000"
   numLevelsPerSide: 5
 risk:
-  maxPositionSize: "50000000"
+  maxPositionSize: 50
   maxUtilizationPct: 80
-  minCollateralBalance: "10000000"
-  maxDailyLossUsd: "500000000"
+  minCollateralBalance: 10
+  maxDailyLossUsd: 500
 gas:
   gasCapMultiplier: 2.0
 timing:
-  pollIntervalMs: 3000
+  pollIntervalSec: 3
 collateral: {}
 health:
   port: 8080

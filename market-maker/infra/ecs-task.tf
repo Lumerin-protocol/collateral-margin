@@ -4,14 +4,16 @@
 # (perps/.bedrock/.terragrunt/ or futures-marketplace/.bedrock/.terragrunt/)
 # and parameterise per venue:
 #
-#   - var.maker_app             "perps" | "futures"
-#   - var.maker_env              "dev" | "stg" | "prd" — picks configs/<app>.<env>.yml
-#   - var.image_tag              git-sha pinned image tag
-#   - var.contract_address       PERPS_ADDRESS or FUTURES_ADDRESS
-#   - var.network                "arbitrum" | "base" | etc.
-#   - var.eth_node_address       JSON-RPC or websocket endpoint
-#   - var.eth_price_feed_address optional Chainlink ETH/USD feed
-#   - var.private_key_secret_arn AWS Secrets Manager ARN with the wallet PK
+#   - var.maker_app                "perps" | "futures"
+#   - var.maker_env                 "dev" | "stg" | "prd" — picks configs/<app>.<env>.yml
+#   - var.image_tag                 git-sha pinned image tag
+#   - var.contract_address          PERPS_ADDRESS or FUTURES_ADDRESS
+#   - var.eth_price_feed_address    optional Chainlink ETH/USD feed
+#   - var.alchemy_api_key_secret_arn  AWS Secrets Manager ARN with the Alchemy API key
+#   - var.private_key_secret_arn    AWS Secrets Manager ARN with the wallet PK
+#
+# The bundled YAMLs interpolate the RPC URL from ALCHEMY_API_KEY, so we
+# inject that via Secrets Manager rather than passing the full URL.
 #
 # The task def expects the image at:
 #   ghcr.io/lumerin-protocol/titan-market-maker:${var.image_tag}
@@ -58,7 +60,10 @@ resource "aws_iam_role_policy" "market_maker_secrets_access" {
     Statement = [{
       Effect   = "Allow"
       Action   = ["secretsmanager:GetSecretValue"]
-      Resource = [var.private_key_secret_arn]
+      Resource = [
+        var.private_key_secret_arn,
+        var.alchemy_api_key_secret_arn,
+      ]
     }]
   })
 }
@@ -84,14 +89,13 @@ resource "aws_ecs_task_definition" "market_maker" {
       { name = "MAKER_CONFIG", value = "/app/configs/${var.maker_app}.${var.maker_env}.yml" },
       { name = "NODE_ENV", value = "production" },
       { name = "MAKER_LOG_LEVEL", value = "info" },
-      { name = "NETWORK", value = var.network },
-      { name = "ETH_NODE_ADDRESS", value = var.eth_node_address },
       { name = "ETH_PRICE_FEED_ADDRESS", value = var.eth_price_feed_address },
       { name = var.maker_app == "perps" ? "PERPS_ADDRESS" : "FUTURES_ADDRESS", value = var.contract_address },
     ]
 
     secrets = [
       { name = "PRIVATE_KEY", valueFrom = var.private_key_secret_arn },
+      { name = "ALCHEMY_API_KEY", valueFrom = var.alchemy_api_key_secret_arn },
     ]
 
     portMappings = [{

@@ -5,7 +5,7 @@
 # logs to make incident triage easier in shared infra.
 #
 #   PRIVATE_KEY             - hex private key of the staging market-making wallet
-#   ETH_NODE_ADDRESS        - base-mainnet JSON-RPC endpoint
+#   ALCHEMY_API_KEY         - Alchemy API key (URL is composed below)
 #   PERPS_ADDRESS           - HashPowerPerpsDEX address on base-mainnet (staging deployment)
 #   ETH_PRICE_FEED_ADDRESS  - Chainlink ETH/USD aggregator on base-mainnet
 
@@ -13,6 +13,9 @@ nodeEnv: staging
 commitHash: ${COMMIT_HASH:-unknown}
 logLevel: ${MAKER_LOG_LEVEL:-debug}
 dryRun: ${MAKER_DRY_RUN:-false}
+# Cancel resting orders on SIGINT/SIGTERM. Set false for hot-restart deploys
+# where you'd rather absorb the brief stale-quote risk than pay cancel gas.
+cancelOrdersOnShutdown: ${MAKER_CANCEL_ORDERS_ON_SHUTDOWN:-true}
 
 wallets:
   primary:
@@ -20,7 +23,7 @@ wallets:
 
 network:
   name: base
-  rpcUrl: ${ETH_NODE_ADDRESS}
+  rpcUrl: https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}
   ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
 
 venue:
@@ -37,16 +40,16 @@ pricing:
 
 sizing:
   strategy: linear
-  baseQuantity: "1000000"            # 1 USDC per level
+  baseQuantity: "1000000"            # venue-native units (hashrate base)
   numLevelsPerSide: 5
 
 risk:
-  maxPositionSize: "50000000"        # 50 USDC
+  maxPositionSize: 50
   maxUtilizationPct: 80
-  minCollateralBalance: "10000000"   # 10 USDC
-  maxDailyLossUsd: "500000000"       # 500 USDC
-  maxGasBudgetPerHourUsd: "50000000"
-  maxGasBudgetPerDayUsd: "500000000"
+  minCollateralBalance: 10
+  maxDailyLossUsd: 500
+  maxGasBudgetPerHourUsd: 50
+  maxGasBudgetPerDayUsd: 500
   gasSpikeThresholdPct: 200
   gasPenaltyBps: 5
   urgentRequoteThresholdTicks: 10
@@ -55,15 +58,15 @@ gas:
   gasCapMultiplier: 2.0
 
 timing:
-  pollIntervalMs: 3000
+  pollIntervalSec: 3
   requoteThresholdTicks: 2
-  requoteCooldownMs: 1000
-  resyncIntervalMs: 60000
+  requoteCooldownSec: 1
+  resyncIntervalSec: 60
   levelSpacingTicks: 5
 
 collateral:
   autoDeposit: true
-  autoDepositMinAmount: "1000000"
+  autoDepositMinAmount: 1
 
 health:
   port: ${MAKER_HEALTH_PORT:-3001}
