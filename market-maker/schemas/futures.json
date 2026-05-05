@@ -681,7 +681,6 @@
       ],
       "properties": {
         "pollIntervalSec": {
-          "minimum": 0.1,
           "default": 3,
           "description": "Seconds between main-loop iterations (snapshot, quote, execute).",
           "anyOf": [
@@ -729,7 +728,6 @@
           "default": 2
         },
         "requoteCooldownSec": {
-          "minimum": 0,
           "default": 1,
           "description": "Seconds between requote bursts. Tripled when risk is throttled.",
           "anyOf": [
@@ -762,7 +760,6 @@
           ]
         },
         "resyncIntervalSec": {
-          "minimum": 1,
           "default": 60,
           "description": "Seconds between full BookTracker snapshot refetches (event deltas in between).",
           "anyOf": [
