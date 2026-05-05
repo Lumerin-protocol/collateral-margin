@@ -44,4 +44,4 @@ if [ -z "${MAKER_CONFIG:-}" ]; then
   export MAKER_CONFIG="/app/configs/${MAKER_APP}.${MAKER_ENV}.yml"
 fi
 
-exec node "$ENTRY" "$@"
+exec node --import=amaro/strip --conditions=typescript "$ENTRY" "$@"

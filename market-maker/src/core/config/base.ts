@@ -18,11 +18,13 @@ const TypeUsdAmount = (opts?: { default?: string | number; description?: string 
   );
 
 /** Schema fragment that accepts a non-negative seconds value (string or number). */
-const TypeSeconds = (opts?: { minimum?: number; default?: string | number; description?: string }) =>
-  Type.Union(
-    [Type.String({ pattern: "^\\d+(\\.\\d+)?$" }), Type.Number({ minimum: opts?.minimum })],
-    opts as Record<string, unknown> | undefined,
+const TypeSeconds = (opts?: { minimum?: number; default?: string | number; description?: string }) => {
+  const { minimum, ...unionOpts } = opts ?? {};
+  return Type.Union(
+    [Type.String({ pattern: "^\\d+(\\.\\d+)?$" }), Type.Number({ minimum })],
+    unionOpts as Record<string, unknown>,
   );
+};
 
 /**
  * Shared config schema fragments used by per-app config modules.

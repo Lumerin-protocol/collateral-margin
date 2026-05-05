@@ -1,5 +1,5 @@
 # ── Install deps ──────────────────────────────────────────────────────────────
-FROM node:22-alpine AS deps
+FROM node:24-alpine AS deps
 
 WORKDIR /app
 
@@ -9,7 +9,7 @@ COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
-FROM node:22-alpine
+FROM node:24-alpine
 
 ARG COMMIT_HASH=""
 ENV NODE_ENV=production
