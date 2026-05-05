@@ -1,0 +1,470 @@
+name: Deploy Collateral Margin Market Maker
+
+# CI/CD owns the "personality" of the perps and futures market-maker ECS
+# services. Terraform builds the scaffolding (service shell, ALB, target
+# group, log group, security groups, Route53, IAM); this workflow:
+#
+#   1. Builds one Docker image from market-maker/ and pushes to GHCR
+#   2. For each venue (perps, futures), renders a new task-def revision
+#      with image + env vars + secrets sourced from GitHub Variables and
+#      Secrets (no AWS Secrets Manager)
+#   3. Calls ecs:UpdateService to point both services at the new revisions
+#      and to scale them to the operator-chosen desired_count
+#
+# GitHub Variables (configure per-environment under Settings -> Environments):
+#   MAKER_LOG_LEVEL                   default "info"
+#   MAKER_DRY_RUN                     default "false"
+#   MAKER_CANCEL_ORDERS_ON_SHUTDOWN   default "true"
+#   MAKER_HEALTH_PORT                 default "3001"  (must match TF cnt_port)
+#   MAKER_DESIRED_COUNT               default "1"     (set 0 to halt without redeploy)
+#   PERPS_ADDRESS                     contract address (perps service only)
+#   FUTURES_ADDRESS                   contract address (futures service only)
+#   ETH_PRICE_FEED_ADDRESS            optional Chainlink feed
+#
+# GitHub Secrets (configure per-environment):
+#   AWS_ROLE_ARN_DEV / _STG / _LMN    OIDC role ARNs from the TF output github_actions_role_arn
+#   ALCHEMY_API_KEY                   shared Alchemy project key (composes the RPC URL)
+#   PERPS_MM_PRIVATE_KEY              perps wallet private key
+#   FUTURES_MM_PRIVATE_KEY            futures wallet private key
+#   SLACK_WEBHOOK_URL                 (org or repo level) for slack-notify
+
+on:
+  push:
+    branches:
+      - dev
+      - stg
+      - main
+      - 'cicd/**'
+    paths:
+      - 'market-maker/**'
+      - '.github/workflows/deploy-col-mar-mm.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment (dev=DEV, stg=STG, main=LMN/PROD)'
+        required: true
+        type: choice
+        options:
+          - dev
+          - stg
+          - main
+
+permissions:
+  id-token: write   # Required for OIDC
+  contents: write   # Required for creating git tags on main
+  packages: write   # For GHCR
+
+env:
+  COMPONENT: col-mar-mm
+  GHCR_REGISTRY: ghcr.io
+  GHCR_IMAGE: ghcr.io/lumerin-protocol/collateral-margin-market-maker
+
+jobs:
+  build:
+    name: 🔨 Build
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.gen_tag.outputs.version }}
+      tag: ${{ steps.gen_tag.outputs.tag_name }}
+      environment: ${{ steps.gen_tag.outputs.environment }}
+      maker_env: ${{ steps.env_config.outputs.maker_env }}
+      env_suffix: ${{ steps.env_config.outputs.env_suffix }}
+      aws_region: ${{ steps.env_config.outputs.aws_region }}
+      ecs_cluster: ${{ steps.env_config.outputs.ecs_cluster }}
+      perps_service: ${{ steps.env_config.outputs.perps_service }}
+      futures_service: ${{ steps.env_config.outputs.futures_service }}
+      perps_task_family: ${{ steps.env_config.outputs.perps_task_family }}
+      futures_task_family: ${{ steps.env_config.outputs.futures_task_family }}
+      is_cicd_branch: ${{ steps.gen_tag.outputs.is_cicd_branch }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Generate version tag
+        id: gen_tag
+        uses: ./.github/actions/gen-tag
+        with:
+          component: col-mar-mm
+          major_version: '1'
+          environment_override: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || '' }}
+
+      - name: Environment config
+        id: env_config
+        run: |
+          ENV="${{ steps.gen_tag.outputs.environment }}"
+          echo "aws_region=us-east-1" >> $GITHUB_OUTPUT
+          echo "perps_task_family=tsk-col-mar-perps-mm" >> $GITHUB_OUTPUT
+          echo "futures_task_family=tsk-col-mar-futures-mm" >> $GITHUB_OUTPUT
+
+          case "$ENV" in
+            dev)
+              SUFFIX="dev"
+              MAKER_ENV="dev"
+              ;;
+            stg)
+              SUFFIX="stg"
+              MAKER_ENV="stg"
+              ;;
+            main)
+              SUFFIX="lmn"
+              MAKER_ENV="prd"
+              ;;
+            *)
+              echo "::error::Unknown environment '$ENV'"
+              exit 1
+              ;;
+          esac
+
+          echo "env_suffix=${SUFFIX}" >> $GITHUB_OUTPUT
+          echo "maker_env=${MAKER_ENV}" >> $GITHUB_OUTPUT
+          echo "ecs_cluster=ecs-derivatives-marketplace-${SUFFIX}" >> $GITHUB_OUTPUT
+          echo "perps_service=svc-col-mar-perps-mm-${SUFFIX}" >> $GITHUB_OUTPUT
+          echo "futures_service=svc-col-mar-futures-mm-${SUFFIX}" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Docker tags
+        id: docker_tags
+        run: |
+          TAGS="${{ env.GHCR_IMAGE }}:${{ steps.gen_tag.outputs.version }}
+          ${{ env.GHCR_IMAGE }}:${{ steps.gen_tag.outputs.environment }}-latest"
+
+          if [ "${{ steps.gen_tag.outputs.environment }}" == "main" ]; then
+            TAGS="${TAGS}
+          ${{ env.GHCR_IMAGE }}:latest"
+          fi
+
+          echo "tags<<EOF" >> $GITHUB_OUTPUT
+          echo "$TAGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./market-maker
+          push: ${{ steps.gen_tag.outputs.is_cicd_branch != 'true' }}
+          load: ${{ steps.gen_tag.outputs.is_cicd_branch == 'true' }}
+          tags: ${{ steps.docker_tags.outputs.tags }}
+          build-args: |
+            COMMIT_HASH=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.repositoryUrl }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.gen_tag.outputs.version }}
+
+      - name: CI/CD test summary
+        if: steps.gen_tag.outputs.is_cicd_branch == 'true'
+        run: |
+          echo "## 🔧 CI/CD Test Build Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode:** Test only (no deployment)" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.gen_tag.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** Built locally, not pushed to GHCR" >> $GITHUB_STEP_SUMMARY
+
+  deploy:
+    name: 🚀 Deploy ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    needs: build
+    if: needs.build.outputs.is_cicd_branch != 'true'
+    environment: ${{ needs.build.outputs.environment }}
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [perps, futures]
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ needs.build.outputs.environment == 'dev' && secrets.AWS_ROLE_ARN_DEV || needs.build.outputs.environment == 'stg' && secrets.AWS_ROLE_ARN_STG || secrets.AWS_ROLE_ARN_LMN }}
+          aws-region: ${{ needs.build.outputs.aws_region }}
+          role-session-name: GitHubActions-ColMarMM-${{ matrix.app }}-${{ github.run_id }}
+
+      - name: Verify service exists
+        id: svc_check
+        env:
+          SERVICE: ${{ matrix.app == 'perps' && needs.build.outputs.perps_service || needs.build.outputs.futures_service }}
+          CLUSTER: ${{ needs.build.outputs.ecs_cluster }}
+          REGION: ${{ needs.build.outputs.aws_region }}
+        run: |
+          ACTIVE_COUNT=$(aws ecs describe-services \
+            --cluster "$CLUSTER" \
+            --services "$SERVICE" \
+            --region "$REGION" \
+            --query 'services[?status==`ACTIVE`] | length(@)' \
+            --output text 2>/dev/null || echo "0")
+
+          if [ "$ACTIVE_COUNT" = "0" ]; then
+            echo "⚠️ ECS service '$SERVICE' is not ACTIVE in cluster '$CLUSTER'."
+            echo "    Likely Terraform has create=false for this venue. Skipping deploy."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Service '$SERVICE' is active. Proceeding with deploy."
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Render new task definition + deploy
+        if: steps.svc_check.outputs.skip != 'true'
+        env:
+          # Routing
+          CLUSTER:     ${{ needs.build.outputs.ecs_cluster }}
+          SERVICE:     ${{ matrix.app == 'perps' && needs.build.outputs.perps_service || needs.build.outputs.futures_service }}
+          TASK_FAMILY: ${{ matrix.app == 'perps' && needs.build.outputs.perps_task_family || needs.build.outputs.futures_task_family }}
+          REGION:      ${{ needs.build.outputs.aws_region }}
+          IMAGE:       ${{ env.GHCR_IMAGE }}:${{ needs.build.outputs.version }}
+
+          # Per-environment GitHub Variables (non-secret personality)
+          MAKER_LOG_LEVEL:                 ${{ vars.MAKER_LOG_LEVEL }}
+          MAKER_DRY_RUN:                   ${{ vars.MAKER_DRY_RUN }}
+          MAKER_CANCEL_ORDERS_ON_SHUTDOWN: ${{ vars.MAKER_CANCEL_ORDERS_ON_SHUTDOWN }}
+          MAKER_HEALTH_PORT:               ${{ vars.MAKER_HEALTH_PORT }}
+          MAKER_DESIRED_COUNT:             ${{ vars.MAKER_DESIRED_COUNT }}
+          ETH_PRICE_FEED_ADDRESS:          ${{ vars.ETH_PRICE_FEED_ADDRESS }}
+
+          # Per-environment GitHub Secrets (encrypted personality). Secrets
+          # only flow into this step's process env via inline ternaries; they
+          # are never written to step outputs or to disk on the runner.
+          ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+          PRIVATE_KEY:     ${{ matrix.app == 'perps' && secrets.PERPS_MM_PRIVATE_KEY || secrets.FUTURES_MM_PRIVATE_KEY }}
+
+          # Per-venue config selected by matrix.app
+          VENUE_ADDR_NAME:  ${{ matrix.app == 'perps' && 'PERPS_ADDRESS' || 'FUTURES_ADDRESS' }}
+          VENUE_ADDR_VALUE: ${{ matrix.app == 'perps' && vars.PERPS_ADDRESS || vars.FUTURES_ADDRESS }}
+
+          # Computed
+          MAKER_APP:   ${{ matrix.app }}
+          MAKER_ENV:   ${{ needs.build.outputs.maker_env }}
+          COMMIT_HASH: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          DESIRED_COUNT="${MAKER_DESIRED_COUNT:-1}"
+
+          echo "🚀 Deploying ${{ matrix.app }} to ${{ needs.build.outputs.environment }}"
+          echo "   Cluster: ${CLUSTER}"
+          echo "   Service: ${SERVICE}"
+          echo "   Task Family: ${TASK_FAMILY}"
+          echo "   Image: ${IMAGE}"
+          echo "   MAKER_ENV: ${MAKER_ENV}"
+          echo "   Desired Count: ${DESIRED_COUNT}"
+
+          # Fetch current task def, strip non-registerable metadata, swap image
+          echo "📥 Fetching current task definition..."
+          aws ecs describe-task-definition \
+            --task-definition "${TASK_FAMILY}" \
+            --region "${REGION}" \
+            --query 'taskDefinition' > task-def.json
+
+          echo "🔧 Updating container image..."
+          jq --arg IMAGE "${IMAGE}" '
+            .containerDefinitions[0].image = $IMAGE |
+            del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                .compatibilities, .registeredAt, .registeredBy)
+          ' task-def.json > new-task-def.json
+
+          # Build the full env block from scratch. Personality lives ONLY here;
+          # the Terraform stub deliberately ships zero env vars.
+          echo "🔧 Injecting environment from GitHub Variables / Secrets..."
+          jq -n \
+            --arg MAKER_APP                       "${MAKER_APP}" \
+            --arg MAKER_ENV                       "${MAKER_ENV}" \
+            --arg MAKER_HEALTH_PORT               "${MAKER_HEALTH_PORT:-3001}" \
+            --arg MAKER_LOG_LEVEL                 "${MAKER_LOG_LEVEL:-info}" \
+            --arg MAKER_DRY_RUN                   "${MAKER_DRY_RUN:-false}" \
+            --arg MAKER_CANCEL_ORDERS_ON_SHUTDOWN "${MAKER_CANCEL_ORDERS_ON_SHUTDOWN:-true}" \
+            --arg COMMIT_HASH                     "${COMMIT_HASH}" \
+            --arg ETH_PRICE_FEED_ADDRESS          "${ETH_PRICE_FEED_ADDRESS:-}" \
+            --arg ALCHEMY_API_KEY                 "${ALCHEMY_API_KEY}" \
+            --arg PRIVATE_KEY                     "${PRIVATE_KEY}" \
+            --arg VENUE_ADDR_NAME                 "${VENUE_ADDR_NAME}" \
+            --arg VENUE_ADDR_VALUE                "${VENUE_ADDR_VALUE}" \
+            '[
+              {name:"MAKER_APP",                       value:$MAKER_APP},
+              {name:"MAKER_ENV",                       value:$MAKER_ENV},
+              {name:"MAKER_HEALTH_PORT",               value:$MAKER_HEALTH_PORT},
+              {name:"MAKER_LOG_LEVEL",                 value:$MAKER_LOG_LEVEL},
+              {name:"MAKER_DRY_RUN",                   value:$MAKER_DRY_RUN},
+              {name:"MAKER_CANCEL_ORDERS_ON_SHUTDOWN", value:$MAKER_CANCEL_ORDERS_ON_SHUTDOWN},
+              {name:"COMMIT_HASH",                     value:$COMMIT_HASH},
+              {name:"ETH_PRICE_FEED_ADDRESS",          value:$ETH_PRICE_FEED_ADDRESS},
+              {name:"ALCHEMY_API_KEY",                 value:$ALCHEMY_API_KEY},
+              {name:"PRIVATE_KEY",                     value:$PRIVATE_KEY},
+              {name:$VENUE_ADDR_NAME,                  value:$VENUE_ADDR_VALUE}
+            ]' > env-block.json
+
+          # Replace the entire env block; also drop any stale `secrets` block
+          # (we no longer use Secrets Manager).
+          jq --slurpfile env env-block.json '
+            .containerDefinitions[0].environment = $env[0] |
+            del(.containerDefinitions[0].secrets)
+          ' new-task-def.json > final-task-def.json
+          mv final-task-def.json new-task-def.json
+
+          # Register new revision
+          echo "📝 Registering new task definition revision..."
+          NEW_TASK_DEF=$(aws ecs register-task-definition \
+            --cli-input-json file://new-task-def.json \
+            --region "${REGION}" \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+          echo "✅ Registered: ${NEW_TASK_DEF}"
+
+          # Update ECS service to point at the new revision and the desired count
+          echo "🚀 Updating ECS service..."
+          aws ecs update-service \
+            --cluster "${CLUSTER}" \
+            --service "${SERVICE}" \
+            --task-definition "${NEW_TASK_DEF}" \
+            --desired-count "${DESIRED_COUNT}" \
+            --region "${REGION}" \
+            --force-new-deployment > /dev/null
+
+          echo "✅ Deployment triggered for ${{ matrix.app }}"
+
+  verify:
+    name: 🔍 Verify ${{ matrix.app }}
+    runs-on: ubuntu-latest
+    needs: [build, deploy]
+    if: needs.build.outputs.is_cicd_branch != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [perps, futures]
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ needs.build.outputs.environment == 'dev' && secrets.AWS_ROLE_ARN_DEV || needs.build.outputs.environment == 'stg' && secrets.AWS_ROLE_ARN_STG || secrets.AWS_ROLE_ARN_LMN }}
+          aws-region: ${{ needs.build.outputs.aws_region }}
+          role-session-name: GitHubActions-ColMarMM-${{ matrix.app }}-Verify-${{ github.run_id }}
+
+      - name: Wait for service to stabilize
+        env:
+          SERVICE: ${{ matrix.app == 'perps' && needs.build.outputs.perps_service || needs.build.outputs.futures_service }}
+          CLUSTER: ${{ needs.build.outputs.ecs_cluster }}
+          REGION:  ${{ needs.build.outputs.aws_region }}
+        run: |
+          ACTIVE=$(aws ecs describe-services \
+            --cluster "$CLUSTER" \
+            --services "$SERVICE" \
+            --region "$REGION" \
+            --query 'services[?status==`ACTIVE`] | length(@)' \
+            --output text 2>/dev/null || echo "0")
+          if [ "$ACTIVE" = "0" ]; then
+            echo "⚠️ Service $SERVICE not active — nothing to verify."
+            exit 0
+          fi
+
+          echo "⏳ Waiting for $SERVICE to stabilize..."
+          aws ecs wait services-stable \
+            --cluster "$CLUSTER" \
+            --services "$SERVICE" \
+            --region "$REGION"
+          echo "✅ Stable."
+
+  cleanup:
+    name: 🧹 Cleanup
+    runs-on: ubuntu-latest
+    needs: [build, verify]
+    if: always() && needs.build.outputs.is_cicd_branch != 'true'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        if: needs.verify.result == 'success'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push tag
+        if: needs.verify.result == 'success'
+        run: |
+          TAG_NAME="${{ needs.build.outputs.tag }}"
+          echo "🏷️  Creating tag: $TAG_NAME"
+
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "⚠️ Tag $TAG_NAME already exists, skipping"
+          else
+            git tag -a "$TAG_NAME" -m "Release ${{ needs.build.outputs.version }} - Deployed to ${{ needs.build.outputs.environment }}"
+            git push origin "$TAG_NAME"
+            echo "✅ Tag pushed"
+          fi
+
+      - name: Deployment summary
+        if: needs.verify.result == 'success'
+        run: |
+          echo "## 🎉 Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:** Collateral Margin Market Maker (perps + futures)" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ needs.build.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ needs.build.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.GHCR_IMAGE }}:${{ needs.build.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Cluster:** ${{ needs.build.outputs.ecs_cluster }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Services:** \`${{ needs.build.outputs.perps_service }}\`, \`${{ needs.build.outputs.futures_service }}\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Failure summary
+        if: needs.verify.result == 'failure'
+        run: |
+          echo "## ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:** Collateral Margin Market Maker" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ needs.build.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ needs.build.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ Check logs above for details." >> $GITHUB_STEP_SUMMARY
+
+  notify:
+    name: 📢 Notify
+    runs-on: ubuntu-latest
+    needs: [build, deploy, verify, cleanup]
+    if: always() && (needs.build.result == 'success')
+
+    steps:
+      - name: Checkout (for composite action)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Determine status
+        id: status
+        run: |
+          if [ "${{ needs.build.outputs.is_cicd_branch }}" == "true" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          elif [ "${{ needs.verify.result }}" == "success" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          elif [ "${{ needs.verify.result }}" == "failure" ] || [ "${{ needs.deploy.result }}" == "failure" ]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+          elif [ "${{ needs.verify.result }}" == "cancelled" ] || [ "${{ needs.deploy.result }}" == "cancelled" ]; then
+            echo "status=cancelled" >> $GITHUB_OUTPUT
+          else
+            echo "status=skipped" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Slack notification
+        uses: ./.github/actions/slack-notify
+        with:
+          status: ${{ steps.status.outputs.status }}
+          environment: ${{ needs.build.outputs.environment }}
+          service_name: 'Collateral Margin Market Maker'
+          version: ${{ needs.build.outputs.version }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          image_tag: ${{ needs.build.outputs.is_cicd_branch != 'true' && format('{0}:{1}', env.GHCR_IMAGE, needs.build.outputs.version) || '' }}
+          additional_info: '${{ needs.build.outputs.is_cicd_branch == ''true'' && ''*Mode:* CI/CD Test (build only, no deploy)'' || format(''*Cluster:* `{0}` • *Services:* `{1}`, `{2}`'', needs.build.outputs.ecs_cluster, needs.build.outputs.perps_service, needs.build.outputs.futures_service) }}'
