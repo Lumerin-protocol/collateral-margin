@@ -1,0 +1,308 @@
+import type pino from "pino";
+import type { InstrumentAdapter, OrderIntent, OwnOrder, Side } from "./adapter.ts";
+import type { Quoter } from "./quoter.ts";
+import type { BookTracker } from "./bookTracker.ts";
+import type { GasTracker } from "./gasTracker.ts";
+import type { RiskManager } from "./riskManager.ts";
+import type { OracleTracker } from "./oracleTracker.ts";
+import { bigAbs } from "./math.ts";
+
+export interface OrderExecutorConfig {
+  /** Skip a requote if elapsed since last < cooldown (ms). */
+  requoteCooldownMs: number;
+  /** Skip if price drifted < N ticks from last quote mid. */
+  requoteThresholdTicks: number;
+  /** Override threshold (in ticks) when gas is spiking — quote anyway if drift >= this. */
+  urgentRequoteThresholdTicks: number;
+  dryRun: boolean;
+}
+
+/**
+ * Diff desired quotes vs the resting book; cancel + place via venue multicall.
+ *
+ * Stale-order detection is matching-mode-aware:
+ *   - "exact" (futures): a resting order is stale iff its price is not in the
+ *     desired set (each level only matches at exactly its price).
+ *   - "limit" (perps):   a resting buy is stale iff its price < worst desired
+ *     bid; a resting sell is stale iff its price > worst desired ask. Orders
+ *     better-than-the-grid are kept (better priority + better price).
+ */
+export class OrderExecutor {
+  readonly stats = { ordersPlaced: 0, ordersCancelled: 0, reconcileCount: 0 };
+
+  private lastRequoteAt = 0;
+  private lastQuoteMidPrice = 0n;
+
+  private readonly instrument: InstrumentAdapter;
+  private readonly cfg: OrderExecutorConfig;
+  private readonly quoter: Quoter;
+  private readonly book: BookTracker;
+  private readonly gas: GasTracker;
+  private readonly risk: RiskManager;
+  private readonly oracle: OracleTracker;
+  private readonly logger: pino.Logger;
+
+  constructor(
+    instrument: InstrumentAdapter,
+    cfg: OrderExecutorConfig,
+    quoter: Quoter,
+    book: BookTracker,
+    gas: GasTracker,
+    risk: RiskManager,
+    oracle: OracleTracker,
+    logger: pino.Logger,
+  ) {
+    this.instrument = instrument;
+    this.cfg = cfg;
+    this.quoter = quoter;
+    this.book = book;
+    this.gas = gas;
+    this.risk = risk;
+    this.oracle = oracle;
+    this.logger = logger.child({ component: "executor", instrument: instrument.id });
+  }
+
+  async reconcile(desired: OrderIntent[]): Promise<void> {
+    if (!this.shouldRequote(desired)) {
+      this.logger.debug("requote skipped (within threshold or cooldown)");
+      return;
+    }
+
+    if (this.gas.isGasSpiking) {
+      const drift = this.priceDriftTicks();
+      if (drift < this.cfg.urgentRequoteThresholdTicks) {
+        this.logger.info(
+          {
+            drift,
+            threshold: this.cfg.urgentRequoteThresholdTicks,
+            gasSpike: this.gas.gasSpikePct.toString(),
+          },
+          "requote skipped: gas spike, drift below urgent threshold",
+        );
+        return;
+      }
+      this.logger.warn({ drift }, "proceeding with requote despite gas spike");
+    }
+
+    const ordersToCancel = this.findStaleOrders(desired);
+    const ordersToPlace = this.findNewOrders(desired);
+
+    if (ordersToCancel.length === 0 && ordersToPlace.length === 0) {
+      this.logger.debug("no order changes needed");
+      return;
+    }
+
+    // Pre-trade engine gate: ask whether the new orders' total IM still fits
+    // the wallet's portfolio IM budget. If not, only cancel; don't add risk.
+    const placeAllowed = await this.risk.canPlaceOrders(ordersToPlace, this.instrument);
+    const places = placeAllowed ? ordersToPlace : [];
+    if (!placeAllowed) {
+      this.logger.warn(
+        { wouldPlace: ordersToPlace.length },
+        "engine.canPlaceOrder denied placements; cancelling stale only",
+      );
+    }
+
+    if (ordersToCancel.length === 0 && places.length === 0) {
+      return;
+    }
+
+    const calls: `0x${string}`[] = [];
+    for (const order of ordersToCancel) {
+      calls.push(this.instrument.encodeCancel({ orderId: order.orderId }));
+    }
+    for (const intent of places) {
+      calls.push(this.instrument.encodeCreate(intent));
+    }
+
+    if (this.cfg.dryRun) {
+      this.logger.info(
+        { cancels: ordersToCancel.length, places: places.length },
+        "DRY RUN: would send multicall batch",
+      );
+      return;
+    }
+
+    const maxFeePerGas = this.gas.cappedGasPrice();
+    try {
+      const hash = await this.instrument.venue.multicall(calls, { maxFeePerGas });
+      const receipt = await this.instrument.venue.publicClient.waitForTransactionReceipt({ hash });
+      const gasCost = this.computeTxGasCost(receipt);
+      this.risk.recordGasCost(gasCost);
+
+      this.stats.ordersCancelled += ordersToCancel.length;
+      this.stats.ordersPlaced += places.length;
+
+      this.logger.info(
+        {
+          cancels: ordersToCancel.length,
+          places: places.length,
+          gas: receipt.gasUsed.toString(),
+        },
+        "multicall batch executed",
+      );
+    } catch (err) {
+      this.logger.error(
+        { cancels: ordersToCancel.length, places: places.length, err },
+        "multicall batch failed",
+      );
+      throw err;
+    }
+
+    this.lastRequoteAt = Date.now();
+    this.lastQuoteMidPrice = this.oracle.currentPrice;
+    this.stats.reconcileCount++;
+  }
+
+  async cancelAll(): Promise<void> {
+    const orders = [...this.book.ownOrders.values()];
+    if (orders.length === 0) return;
+
+    this.logger.warn({ count: orders.length }, "cancelling all orders");
+    const calls = orders.map((o) => this.instrument.encodeCancel({ orderId: o.orderId }));
+
+    if (this.cfg.dryRun) {
+      this.logger.info({ count: orders.length }, "DRY RUN: would cancel all orders");
+      return;
+    }
+
+    const maxFeePerGas = this.gas.cappedGasPrice();
+    try {
+      const hash = await this.instrument.venue.multicall(calls, { maxFeePerGas });
+      const receipt = await this.instrument.venue.publicClient.waitForTransactionReceipt({ hash });
+      const gasCost = this.computeTxGasCost(receipt);
+      this.risk.recordGasCost(gasCost);
+      this.stats.ordersCancelled += orders.length;
+      this.logger.info(
+        { count: orders.length, gas: receipt.gasUsed.toString() },
+        "all orders cancelled",
+      );
+    } catch (err) {
+      this.logger.error({ count: orders.length, err }, "cancel-all multicall failed");
+      throw err;
+    }
+  }
+
+  private shouldRequote(desired: OrderIntent[]): boolean {
+    if (Date.now() - this.lastRequoteAt < this.effectiveCooldownMs()) return false;
+
+    const expectedCount = desired.length;
+    if (this.book.ownOrders.size < expectedCount) return true;
+    if (this.hasQuantityDeficit(desired)) return true;
+
+    return this.priceDriftTicks() >= this.effectiveRequoteThreshold();
+  }
+
+  private priceDriftTicks(): number {
+    if (this.lastQuoteMidPrice === 0n) return Number.POSITIVE_INFINITY;
+    const tick = this.quoter.getTick();
+    if (tick === 0n) return 0;
+    const diff = bigAbs(this.oracle.currentPrice - this.lastQuoteMidPrice);
+    return Number(diff / tick);
+  }
+
+  private effectiveCooldownMs(): number {
+    return this.risk.throttled ? this.cfg.requoteCooldownMs * 3 : this.cfg.requoteCooldownMs;
+  }
+
+  private effectiveRequoteThreshold(): number {
+    return this.risk.throttled ? this.cfg.requoteThresholdTicks * 2 : this.cfg.requoteThresholdTicks;
+  }
+
+  /**
+   * Stale = should be cancelled. See class header for matching-mode rules.
+   */
+  private findStaleOrders(desired: OrderIntent[]): OwnOrder[] {
+    const mode = this.instrument.book.matchingMode;
+    if (mode === "exact") return this.findStaleOrdersExact(desired);
+    return this.findStaleOrdersLimit(desired);
+  }
+
+  private findStaleOrdersExact(desired: OrderIntent[]): OwnOrder[] {
+    const desiredBidPrices = new Set<bigint>();
+    const desiredAskPrices = new Set<bigint>();
+    for (const i of desired) {
+      (i.side === "buy" ? desiredBidPrices : desiredAskPrices).add(i.price);
+    }
+    const stale: OwnOrder[] = [];
+    for (const order of this.book.ownOrders.values()) {
+      const set = order.side === "buy" ? desiredBidPrices : desiredAskPrices;
+      if (!set.has(order.price)) stale.push(order);
+    }
+    return stale;
+  }
+
+  private findStaleOrdersLimit(desired: OrderIntent[]): OwnOrder[] {
+    // For limit-mode, keep any resting order that is at-least-as-aggressive as
+    // the worst desired price for that side. "Aggressive" means a higher price
+    // for buys and a lower price for sells.
+    let worstDesiredBid: bigint | undefined;
+    let worstDesiredAsk: bigint | undefined;
+    for (const i of desired) {
+      if (i.side === "buy") {
+        if (worstDesiredBid === undefined || i.price < worstDesiredBid) worstDesiredBid = i.price;
+      } else {
+        if (worstDesiredAsk === undefined || i.price > worstDesiredAsk) worstDesiredAsk = i.price;
+      }
+    }
+    const stale: OwnOrder[] = [];
+    for (const order of this.book.ownOrders.values()) {
+      if (order.side === "buy") {
+        if (worstDesiredBid === undefined || order.price < worstDesiredBid) {
+          stale.push(order);
+        }
+      } else {
+        if (worstDesiredAsk === undefined || order.price > worstDesiredAsk) {
+          stale.push(order);
+        }
+      }
+    }
+    return stale;
+  }
+
+  /**
+   * New orders = desired levels that are missing from the resting book at
+   * exactly the desired price (regardless of matching mode). Limit mode's
+   * "we have an even better resting order" case is covered by the deficit
+   * check returning 0 for that level, so we don't double-place.
+   */
+  private findNewOrders(desired: OrderIntent[]): OrderIntent[] {
+    const existing = this.aggregateOwnSizeByPriceSide();
+    const out: OrderIntent[] = [];
+    for (const i of desired) {
+      const have = existing.get(keyOf(i.side, i.price)) ?? 0n;
+      const deficit = i.size - have;
+      if (deficit > 0n) {
+        out.push({ side: i.side, price: i.price, size: deficit });
+      }
+    }
+    return out;
+  }
+
+  private hasQuantityDeficit(desired: OrderIntent[]): boolean {
+    const existing = this.aggregateOwnSizeByPriceSide();
+    for (const i of desired) {
+      const have = existing.get(keyOf(i.side, i.price));
+      if (have !== undefined && i.size - have > 0n) return true;
+    }
+    return false;
+  }
+
+  private aggregateOwnSizeByPriceSide(): Map<string, bigint> {
+    const m = new Map<string, bigint>();
+    for (const o of this.book.ownOrders.values()) {
+      const k = keyOf(o.side, o.price);
+      m.set(k, (m.get(k) ?? 0n) + o.size);
+    }
+    return m;
+  }
+
+  private computeTxGasCost(receipt: { gasUsed: bigint; effectiveGasPrice: bigint }): bigint {
+    if (this.gas.ethPriceUsd === 0n) return 0n;
+    return (receipt.gasUsed * receipt.effectiveGasPrice * this.gas.ethPriceUsd) / 10n ** 18n;
+  }
+}
+
+function keyOf(side: Side, price: bigint): string {
+  return `${side}@${price.toString()}`;
+}

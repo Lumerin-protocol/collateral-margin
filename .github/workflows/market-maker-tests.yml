@@ -1,0 +1,67 @@
+name: Market maker tests
+
+on:
+  pull_request:
+    paths:
+      - "market-maker/**"
+      - ".github/workflows/market-maker-tests.yml"
+  push:
+    branches:
+      - main
+      - stg
+      - dev
+    paths:
+      - "market-maker/**"
+      - ".github/workflows/market-maker-tests.yml"
+
+jobs:
+  pre:
+    name: Skip duplicate runs
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.skip-check.outputs.should_skip }}
+    steps:
+      - id: skip-check
+        uses: fkirc/skip-duplicate-actions@v5
+        with:
+          concurrent_skipping: never
+          skip_after_successful_duplicate: "true"
+          paths_ignore: '["**/*.md"]'
+
+  test:
+    name: Market maker tests
+    needs: pre
+    if: needs.pre.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: ./market-maker
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: market-maker/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: market-maker/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # Skip the pretest (which calls sync-abi.sh, requires the perps and
+      # futures-marketplace contract repos to be checked out side-by-side).
+      # Tests cover core/ and apps/ logic; ABI shape is validated at runtime.
+      - name: Run tests
+        run: node --test --test-force-exit --test-concurrency=1 'tests/**/*.test.ts'

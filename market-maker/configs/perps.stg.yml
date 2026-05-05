@@ -1,0 +1,72 @@
+# yaml-language-server: $schema=../schemas/perps.json
+# Titan Market Maker - Perps - STAGING (base-mainnet).
+#
+# Real money on base-mainnet, but pre-prod sizes / risk caps. Debug-level
+# logs to make incident triage easier in shared infra.
+#
+#   PRIVATE_KEY             - hex private key of the staging market-making wallet
+#   ALCHEMY_API_KEY         - Alchemy API key (URL is composed below)
+#   PERPS_ADDRESS           - HashPowerPerpsDEX address on base-mainnet (staging deployment)
+#   ETH_PRICE_FEED_ADDRESS  - Chainlink ETH/USD aggregator on base-mainnet
+
+nodeEnv: staging
+commitHash: ${COMMIT_HASH:-unknown}
+logLevel: ${MAKER_LOG_LEVEL:-debug}
+dryRun: ${MAKER_DRY_RUN:-false}
+# Cancel resting orders on SIGINT/SIGTERM. Set false for hot-restart deploys
+# where you'd rather absorb the brief stale-quote risk than pay cancel gas.
+cancelOrdersOnShutdown: ${MAKER_CANCEL_ORDERS_ON_SHUTDOWN:-true}
+
+wallets:
+  primary:
+    privateKey: ${PRIVATE_KEY}
+
+network:
+  name: base
+  rpcUrl: https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}
+  ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
+
+venue:
+  kind: perps
+  address: ${PERPS_ADDRESS}
+  wallet: primary
+
+pricing:
+  strategy: effective-spread
+  minSpreadBps: 15
+  volatilityMultiplier: 2.0
+  inventorySkewGamma: 0.5
+  maxSkewTicks: 20
+
+sizing:
+  strategy: linear
+  baseQuantity: "1000000"            # venue-native units (hashrate base)
+  numLevelsPerSide: 5
+
+risk:
+  maxPositionSize: 50
+  maxUtilizationPct: 80
+  minCollateralBalance: 10
+  maxDailyLossUsd: 500
+  maxGasBudgetPerHourUsd: 50
+  maxGasBudgetPerDayUsd: 500
+  gasSpikeThresholdPct: 200
+  gasPenaltyBps: 5
+  urgentRequoteThresholdTicks: 10
+
+gas:
+  gasCapMultiplier: 2.0
+
+timing:
+  pollIntervalSec: 3
+  requoteThresholdTicks: 2
+  requoteCooldownSec: 1
+  resyncIntervalSec: 60
+  levelSpacingTicks: 5
+
+collateral:
+  autoDeposit: true
+  autoDepositMinAmount: 1
+
+health:
+  port: ${MAKER_HEALTH_PORT:-3001}
