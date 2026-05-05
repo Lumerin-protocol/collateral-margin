@@ -14,7 +14,7 @@ import type {
   Position,
   Unsubscribe,
 } from "../../core/adapter.ts";
-import { HashPowerPerpsDEXAbi } from "../../abi/HashPowerPerpsDEX.ts";
+import { HashPowerPerpsDEXAbi } from "perps-contracts/abi/HashPowerPerpsDEX.ts";
 import { calculateNotional } from "../../core/math.ts";
 import type { PerpsVenueAdapter } from "./venue.ts";
 

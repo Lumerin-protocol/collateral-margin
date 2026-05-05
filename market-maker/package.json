@@ -17,16 +17,17 @@
     "stg:futures": "node src/apps/futures/main.ts --config configs/futures.stg.yml",
     "prd:perps": "node src/apps/perps/main.ts --config configs/perps.prd.yml",
     "prd:futures": "node src/apps/futures/main.ts --config configs/futures.prd.yml",
-    "sync-abi": "./scripts/sync-abi.sh",
     "gen:schemas": "node scripts/gen-schemas.ts",
-    "pretest": "./scripts/sync-abi.sh",
     "pretypecheck": "node scripts/gen-schemas.ts"
   },
   "dependencies": {
     "ajv": "^8.17.1",
     "ajv-formats": "^3.0.1",
+    "collateral-margin-contracts": "link:../contracts",
     "fraction.js": "^5.2.2",
+    "futures-contracts": "github:Lumerin-protocol/futures-marketplace#dev&path:/contracts",
     "js-yaml": "^4.1.0",
+    "perps-contracts": "github:Lumerin-protocol/derivatives-marketplace#dev&path:/contracts",
     "pino": "^10.3.1",
     "viem": "^2.45.3"
   },

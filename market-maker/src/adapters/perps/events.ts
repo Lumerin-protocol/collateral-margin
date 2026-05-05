@@ -1,6 +1,6 @@
 import type { Log, PublicClient, WatchContractEventReturnType } from "viem";
 import type { Unsubscribe, VenueEvent, VenueEvents } from "../../core/adapter.ts";
-import { HashPowerPerpsDEXAbi } from "../../abi/HashPowerPerpsDEX.ts";
+import { HashPowerPerpsDEXAbi } from "perps-contracts/abi/HashPowerPerpsDEX.ts";
 
 const PERPS_INSTRUMENT_ID = "perps";
 

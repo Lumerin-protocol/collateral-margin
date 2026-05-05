@@ -10,10 +10,10 @@ import type {
   WalletContext,
 } from "../../core/adapter.ts";
 import type { NetworkClients } from "../../core/client.ts";
-import { FuturesAbi } from "../../abi/Futures.ts";
-import { CollateralVaultAbi } from "../../abi/CollateralVault.ts";
-import { PortfolioMarginEngineAbi } from "../../abi/PortfolioMarginEngine.ts";
-import { Multicall3Abi } from "../../abi/Multicall3.ts";
+import { FuturesAbi } from "futures-contracts/abi/Futures.ts";
+import { CollateralVaultAbi } from "collateral-margin-contracts/abi/CollateralVault.ts";
+import { PortfolioMarginEngineAbi } from "collateral-margin-contracts/abi/PortfolioMarginEngine.ts";
+import { Multicall3Abi } from "perps-contracts/abi/Multicall3.ts";
 import { depositToVault } from "../../core/vaultDeposit.ts";
 import { RawOracleReader } from "../../core/rawOracle.ts";
 import { FuturesInstrumentAdapter } from "./instrument.ts";

@@ -1,6 +1,6 @@
 import type { Log, PublicClient, WatchContractEventReturnType } from "viem";
 import type { Unsubscribe, VenueEvent, VenueEvents } from "../../core/adapter.ts";
-import { FuturesAbi } from "../../abi/Futures.ts";
+import { FuturesAbi } from "futures-contracts/abi/Futures.ts";
 
 export const FUTURES_INSTRUMENT_ID = "futures";
 

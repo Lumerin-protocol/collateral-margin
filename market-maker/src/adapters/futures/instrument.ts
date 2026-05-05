@@ -11,8 +11,7 @@ import type {
   OrderIntent,
   Position,
 } from "../../core/adapter.ts";
-import { FuturesAbi } from "../../abi/Futures.ts";
-import { FuturesMmExtensionsAbi } from "../../abi/FuturesMmExtensions.ts";
+import { FuturesAbi } from "futures-contracts/abi/Futures.ts";
 import type { FuturesVenueAdapter } from "./venue.ts";
 import { FuturesOwnOrders } from "./ownOrders.ts";
 
@@ -105,7 +104,7 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
 
   encodeCancel(intent: CancelIntent): `0x${string}` {
     return encodeFunctionData({
-      abi: FuturesMmExtensionsAbi,
+      abi: FuturesAbi,
       functionName: "closeOrder",
       args: [intent.orderId],
     });
@@ -190,8 +189,8 @@ class FuturesBook implements BookSource {
     const [bidPrices, askPrices] = await v.publicClient.multicall({
       allowFailure: false,
       contracts: [
-        { address: v.address, abi: FuturesMmExtensionsAbi, functionName: "getBidPrices", args: [dd, depth] },
-        { address: v.address, abi: FuturesMmExtensionsAbi, functionName: "getAskPrices", args: [dd, depth] },
+        { address: v.address, abi: FuturesAbi, functionName: "getBidPrices", args: [dd, depth] },
+        { address: v.address, abi: FuturesAbi, functionName: "getAskPrices", args: [dd, depth] },
       ],
     });
 
@@ -200,13 +199,13 @@ class FuturesBook implements BookSource {
     const calls = [
       ...bidPrices.map((p) => ({
         address: v.address,
-        abi: FuturesMmExtensionsAbi,
+        abi: FuturesAbi,
         functionName: "getQuantityAtPrice" as const,
         args: [dd, p, true] as const,
       })),
       ...askPrices.map((p) => ({
         address: v.address,
-        abi: FuturesMmExtensionsAbi,
+        abi: FuturesAbi,
         functionName: "getQuantityAtPrice" as const,
         args: [dd, p, false] as const,
       })),

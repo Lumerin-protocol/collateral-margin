@@ -10,10 +10,10 @@ import type {
   WalletContext,
 } from "../../core/adapter.ts";
 import type { NetworkClients } from "../../core/client.ts";
-import { HashPowerPerpsDEXAbi } from "../../abi/HashPowerPerpsDEX.ts";
-import { CollateralVaultAbi } from "../../abi/CollateralVault.ts";
-import { PortfolioMarginEngineAbi } from "../../abi/PortfolioMarginEngine.ts";
-import { Multicall3Abi } from "../../abi/Multicall3.ts";
+import { HashPowerPerpsDEXAbi } from "perps-contracts/abi/HashPowerPerpsDEX.ts";
+import { CollateralVaultAbi } from "collateral-margin-contracts/abi/CollateralVault.ts";
+import { PortfolioMarginEngineAbi } from "collateral-margin-contracts/abi/PortfolioMarginEngine.ts";
+import { Multicall3Abi } from "perps-contracts/abi/Multicall3.ts";
 import { depositToVault } from "../../core/vaultDeposit.ts";
 import { RawOracleReader, chainlinkAggregatorAbi } from "../../core/rawOracle.ts";
 import { PerpsInstrumentAdapter } from "./instrument.ts";
