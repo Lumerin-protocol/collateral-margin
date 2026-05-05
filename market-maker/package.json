@@ -9,10 +9,18 @@
   "scripts": {
     "test": "node --test --test-force-exit --test-concurrency=1 'tests/**/*.test.ts'",
     "typecheck": "tsc --noEmit",
-    "start": "MAKER_CONFIG=configs/perps.yml node --env-file=../.env src/main.ts",
-    "dev": "MAKER_CONFIG=configs/perps.yml node --env-file=../.env src/main.ts | pino-pretty",
-    "dev:dry": "MAKER_CONFIG=configs/perps.yml MAKER_DRY_RUN=true node --env-file=../.env src/main.ts | pino-pretty",
-    "pretest": "cd ../contracts && pnpm hardhat compile && cp ./abi/abi.ts ../market-maker/src/adapters/perps/abi.ts"
+    "local:perps": "node src/apps/perps/main.ts --config configs/perps.local.yml | pino-pretty",
+    "local:futures": "node src/apps/futures/main.ts --config configs/futures.local.yml | pino-pretty",
+    "dev:perps": "node src/apps/perps/main.ts --config configs/perps.dev.yml | pino-pretty",
+    "dev:futures": "node src/apps/futures/main.ts --config configs/futures.dev.yml | pino-pretty",
+    "stg:perps": "node src/apps/perps/main.ts --config configs/perps.stg.yml",
+    "stg:futures": "node src/apps/futures/main.ts --config configs/futures.stg.yml",
+    "prd:perps": "node src/apps/perps/main.ts --config configs/perps.prd.yml",
+    "prd:futures": "node src/apps/futures/main.ts --config configs/futures.prd.yml",
+    "sync-abi": "./scripts/sync-abi.sh",
+    "gen:schemas": "node scripts/gen-schemas.ts",
+    "pretest": "./scripts/sync-abi.sh",
+    "pretypecheck": "node scripts/gen-schemas.ts"
   },
   "dependencies": {
     "ajv": "^8.17.1",

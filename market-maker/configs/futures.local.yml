@@ -1,0 +1,66 @@
+# yaml-language-server: $schema=../schemas/futures.json
+# Titan Market Maker - Futures - LOCAL (hardhat).
+#
+#   PRIVATE_KEY             - hex private key of the market-making wallet
+#   FUTURES_ADDRESS         - Futures address on the local chain
+
+nodeEnv: development
+commitHash: ${COMMIT_HASH:-dev}
+logLevel: ${MAKER_LOG_LEVEL:-debug}
+dryRun: ${MAKER_DRY_RUN:-true}
+
+wallets:
+  primary:
+    privateKey: ${PRIVATE_KEY}
+
+network:
+  name: ${NETWORK:-hardhat}
+  rpcUrl: ${ETH_NODE_ADDRESS:-http://127.0.0.1:8545}
+  ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
+
+venue:
+  kind: futures
+  address: ${FUTURES_ADDRESS}
+  wallet: primary
+
+pricing:
+  strategy: reservation-price
+  riskAversion: 0.001
+  marginCallTimeSeconds: 3600
+  minSpreadBps: 20
+  volatilityMultiplier: 2.5
+  maxSkewTicks: 0
+
+sizing:
+  strategy: geometric-taper
+  baseQuantity: "10000000" # 10 USDC per side total — tiny
+  numLevelsPerSide: 3
+  taperRatio: 0.6
+
+risk:
+  maxPositionSize: "10000000"
+  maxUtilizationPct: 80
+  minCollateralBalance: "1000000"
+  maxDailyLossUsd: "100000000"
+  maxGasBudgetPerHourUsd: "50000000"
+  maxGasBudgetPerDayUsd: "500000000"
+  gasSpikeThresholdPct: 200
+  gasPenaltyBps: 5
+  urgentRequoteThresholdTicks: 10
+
+gas:
+  gasCapMultiplier: 2.0
+
+timing:
+  pollIntervalMs: 3000
+  requoteThresholdTicks: 2
+  requoteCooldownMs: 1000
+  resyncIntervalMs: 60000
+  levelSpacingTicks: 1
+
+collateral:
+  autoDeposit: false
+  autoDepositMinAmount: "0"
+
+health:
+  port: ${MAKER_HEALTH_PORT:-3001}

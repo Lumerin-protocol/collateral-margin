@@ -1,0 +1,70 @@
+# yaml-language-server: $schema=../schemas/perps.json
+# Titan Market Maker - Perps - LOCAL (hardhat).
+#
+# Local development against a hardhat node. Dry-run on by default,
+# debug logs, tiny sizes. Override via env vars (loaded from
+# market-maker/.env or collateral-margin/.env on startup, in that
+# priority order).
+#
+#   PRIVATE_KEY             - hex private key of the market-making wallet
+#   PERPS_ADDRESS           - HashPowerPerpsDEX address on the local chain
+
+nodeEnv: development
+commitHash: ${COMMIT_HASH:-dev}
+logLevel: ${MAKER_LOG_LEVEL:-debug}
+dryRun: ${MAKER_DRY_RUN:-true}
+
+wallets:
+  primary:
+    privateKey: ${PRIVATE_KEY}
+
+network:
+  name: ${NETWORK:-hardhat}
+  rpcUrl: ${ETH_NODE_ADDRESS:-http://127.0.0.1:8545}
+  ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
+
+venue:
+  kind: perps
+  address: ${PERPS_ADDRESS}
+  wallet: primary
+
+pricing:
+  strategy: effective-spread
+  minSpreadBps: 20      # wider in dev so test fills are obvious
+  volatilityMultiplier: 2.0
+  inventorySkewGamma: 0.5
+  maxSkewTicks: 20
+
+sizing:
+  strategy: linear
+  baseQuantity: "100000"   # 0.1 USDC per level — tiny
+  numLevelsPerSide: 3
+
+risk:
+  maxPositionSize: "10000000"          # 10 USDC
+  maxUtilizationPct: 80
+  minCollateralBalance: "1000000"      # 1 USDC
+  maxDailyLossUsd: "100000000"         # 100 USDC
+  maxGasBudgetPerHourUsd: "50000000"
+  maxGasBudgetPerDayUsd: "500000000"
+  gasSpikeThresholdPct: 200
+  gasPenaltyBps: 5
+  urgentRequoteThresholdTicks: 10
+
+gas:
+  gasCapMultiplier: 2.0
+
+timing:
+  pollIntervalMs: 3000
+  requoteThresholdTicks: 2
+  requoteCooldownMs: 1000
+  resyncIntervalMs: 60000
+  levelSpacingTicks: 5
+
+collateral:
+  # Off in dev so you can inspect un-deposited wallet balance.
+  autoDeposit: false
+  autoDepositMinAmount: "0"
+
+health:
+  port: ${MAKER_HEALTH_PORT:-3001}

@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=../schemas/perps.json
+# Titan Market Maker - Perps - DEV (base-sepolia).
+#
+# Real quoting on base-sepolia. Small sizes, debug-level logs, autoDeposit
+# on so the wallet stays funded.
+#
+#   PRIVATE_KEY             - hex private key of the dev market-making wallet
+#   ETH_NODE_ADDRESS        - base-sepolia JSON-RPC endpoint
+#   PERPS_ADDRESS           - HashPowerPerpsDEX address on base-sepolia
+#   ETH_PRICE_FEED_ADDRESS  - optional Chainlink ETH/USD aggregator on base-sepolia
+
+nodeEnv: development
+commitHash: ${COMMIT_HASH:-unknown}
+logLevel: ${MAKER_LOG_LEVEL:-debug}
+dryRun: ${MAKER_DRY_RUN:-false}
+
+wallets:
+  primary:
+    privateKey: ${PRIVATE_KEY}
+
+network:
+  name: base-sepolia
+  rpcUrl: ${ETH_NODE_ADDRESS}
+  ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
+
+venue:
+  kind: perps
+  address: ${PERPS_ADDRESS}
+  wallet: primary
+
+pricing:
+  strategy: effective-spread
+  minSpreadBps: 15
+  volatilityMultiplier: 2.0
+  inventorySkewGamma: 0.5
+  maxSkewTicks: 20
+
+sizing:
+  strategy: linear
+  baseQuantity: "1000000"            # 1 USDC per level
+  numLevelsPerSide: 5
+
+risk:
+  maxPositionSize: "50000000"        # 50 USDC
+  maxUtilizationPct: 80
+  minCollateralBalance: "10000000"   # 10 USDC
+  maxDailyLossUsd: "500000000"       # 500 USDC
+  maxGasBudgetPerHourUsd: "50000000"
+  maxGasBudgetPerDayUsd: "500000000"
+  gasSpikeThresholdPct: 200
+  gasPenaltyBps: 5
+  urgentRequoteThresholdTicks: 10
+
+gas:
+  gasCapMultiplier: 2.0
+
+timing:
+  pollIntervalMs: 3000
+  requoteThresholdTicks: 2
+  requoteCooldownMs: 1000
+  resyncIntervalMs: 60000
+  levelSpacingTicks: 5
+
+collateral:
+  autoDeposit: true
+  autoDepositMinAmount: "1000000"
+
+health:
+  port: ${MAKER_HEALTH_PORT:-3001}

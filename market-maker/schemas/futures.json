@@ -1,0 +1,508 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Titan Market Maker - Futures config",
+  "additionalProperties": false,
+  "type": "object",
+  "required": [
+    "nodeEnv",
+    "commitHash",
+    "logLevel",
+    "dryRun",
+    "wallets",
+    "network",
+    "venue",
+    "pricing",
+    "sizing",
+    "risk",
+    "gas",
+    "collateral",
+    "timing",
+    "health"
+  ],
+  "properties": {
+    "nodeEnv": {
+      "default": "development",
+      "type": "string"
+    },
+    "commitHash": {
+      "default": "unknown",
+      "type": "string"
+    },
+    "logLevel": {
+      "default": "info",
+      "type": "string"
+    },
+    "dryRun": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+          "description": "Environment variable interpolation (resolved at startup)"
+        }
+      ],
+      "default": false
+    },
+    "wallets": {
+      "type": "object",
+      "patternProperties": {
+        "^(.*)$": {
+          "additionalProperties": false,
+          "type": "object",
+          "required": [
+            "privateKey"
+          ],
+          "properties": {
+            "privateKey": {
+              "anyOf": [
+                {
+                  "pattern": "^0x[a-fA-F0-9]+$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "network": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name",
+        "rpcUrl"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "rpcUrl": {
+          "type": "string"
+        },
+        "ethPriceFeed": {
+          "anyOf": [
+            {
+              "const": "",
+              "type": "string"
+            },
+            {
+              "anyOf": [
+                {
+                  "pattern": "^0x[a-fA-F0-9]{40}$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "venue": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "kind",
+        "address",
+        "wallet"
+      ],
+      "properties": {
+        "kind": {
+          "const": "futures",
+          "type": "string"
+        },
+        "address": {
+          "anyOf": [
+            {
+              "pattern": "^0x[a-fA-F0-9]{40}$",
+              "type": "string"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ]
+        },
+        "wallet": {
+          "type": "string"
+        }
+      }
+    },
+    "pricing": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "strategy",
+        "riskAversion",
+        "marginCallTimeSeconds",
+        "minSpreadBps",
+        "volatilityMultiplier",
+        "maxSkewTicks"
+      ],
+      "properties": {
+        "strategy": {
+          "const": "reservation-price",
+          "type": "string"
+        },
+        "riskAversion": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ]
+        },
+        "marginCallTimeSeconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ]
+        },
+        "minSpreadBps": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ]
+        },
+        "volatilityMultiplier": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ]
+        },
+        "maxSkewTicks": {
+          "const": 0,
+          "default": 0,
+          "type": "number"
+        }
+      }
+    },
+    "sizing": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "strategy",
+        "baseQuantity",
+        "numLevelsPerSide",
+        "taperRatio"
+      ],
+      "properties": {
+        "strategy": {
+          "const": "geometric-taper",
+          "type": "string"
+        },
+        "baseQuantity": {
+          "type": "string"
+        },
+        "numLevelsPerSide": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ]
+        },
+        "taperRatio": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "exclusiveMaximum": 1,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ]
+        }
+      }
+    },
+    "risk": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "maxPositionSize",
+        "maxUtilizationPct",
+        "minCollateralBalance",
+        "maxDailyLossUsd",
+        "maxGasBudgetPerHourUsd",
+        "maxGasBudgetPerDayUsd",
+        "gasSpikeThresholdPct",
+        "gasPenaltyBps",
+        "urgentRequoteThresholdTicks"
+      ],
+      "properties": {
+        "maxPositionSize": {
+          "type": "string"
+        },
+        "maxUtilizationPct": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "maximum": 100,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "default": 80
+        },
+        "minCollateralBalance": {
+          "type": "string"
+        },
+        "maxDailyLossUsd": {
+          "type": "string"
+        },
+        "maxGasBudgetPerHourUsd": {
+          "default": "50000000",
+          "type": "string"
+        },
+        "maxGasBudgetPerDayUsd": {
+          "default": "500000000",
+          "type": "string"
+        },
+        "gasSpikeThresholdPct": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "default": 200
+        },
+        "gasPenaltyBps": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "default": 5
+        },
+        "urgentRequoteThresholdTicks": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "default": 10
+        }
+      }
+    },
+    "gas": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "gasCapMultiplier"
+      ],
+      "properties": {
+        "gasCapMultiplier": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "default": 2
+        }
+      }
+    },
+    "collateral": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "autoDeposit",
+        "autoDepositMinAmount"
+      ],
+      "properties": {
+        "autoDeposit": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "default": false
+        },
+        "autoDepositMinAmount": {
+          "default": "0",
+          "type": "string"
+        }
+      }
+    },
+    "timing": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "pollIntervalMs",
+        "requoteThresholdTicks",
+        "requoteCooldownMs",
+        "resyncIntervalMs",
+        "levelSpacingTicks"
+      ],
+      "properties": {
+        "pollIntervalMs": {
+          "anyOf": [
+            {
+              "minimum": 100,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "default": 3000
+        },
+        "requoteThresholdTicks": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "default": 2
+        },
+        "requoteCooldownMs": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "default": 1000
+        },
+        "resyncIntervalMs": {
+          "anyOf": [
+            {
+              "minimum": 1000,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "default": 60000
+        },
+        "levelSpacingTicks": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "default": 1
+        }
+      }
+    },
+    "health": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "port"
+      ],
+      "properties": {
+        "port": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "default": 3001
+        }
+      }
+    }
+  }
+}

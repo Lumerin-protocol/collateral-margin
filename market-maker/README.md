@@ -82,7 +82,34 @@ On `SIGINT` / `SIGTERM`, the bot cancels all resting orders before exiting.
 
 ## Configuration
 
-All configuration is via environment variables. Create a `.env` file in the repo root (loaded via `--env-file`).
+The MM ships per-app, per-env YAML configs under `configs/`:
+
+| File | Network | Notes |
+|---|---|---|
+| `perps.local.yml` / `futures.local.yml` | hardhat | Local development; dry-run on by default |
+| `perps.dev.yml`   / `futures.dev.yml`   | base-sepolia | Testnet; small sizes |
+| `perps.stg.yml`   / `futures.stg.yml`   | base | Pre-prod on mainnet; conservative caps |
+| `perps.prd.yml`   / `futures.prd.yml`   | base | Production; full sizes |
+
+Pick one with `--config <path>` (CLI arg), `MAKER_CONFIG=<path>` (env),
+or `MAKER_ENV=<local|dev|stg|prd>` inside the docker entrypoint.
+
+Precedence: `--config` CLI arg > `MAKER_CONFIG` env > docker `MAKER_ENV` lookup.
+
+The YAMLs interpolate `${VAR}` tokens from environment variables. On
+startup both apps load `.env` from `market-maker/` and from
+`collateral-margin/` (in that priority order). Live `process.env` always
+wins over file contents.
+
+```bash
+pnpm local:perps      # node … --config configs/perps.local.yml | pino-pretty
+pnpm dev:futures      # node … --config configs/futures.dev.yml  | pino-pretty
+pnpm stg:perps        # node … --config configs/perps.stg.yml
+pnpm prd:futures      # node … --config configs/futures.prd.yml
+
+# Custom path (e.g. one-off experiment):
+node src/apps/perps/main.ts --config /tmp/my-perps.yml
+```
 
 ### Required
 
@@ -90,8 +117,9 @@ All configuration is via environment variables. Create a `.env` file in the repo
 |---|---|
 | `NETWORK` | Chain identifier: `arbitrum`, `arbitrum-sepolia`, or `hardhat` |
 | `ETH_NODE_ADDRESS` | RPC endpoint (HTTP or WebSocket) |
-| `PERPS_ADDRESS` | Deployed HashPowerPerpsDEX proxy contract address |
-| `MAKER_PRIVATE_KEY` | Hex-encoded private key for the MM wallet |
+| `PERPS_ADDRESS` | Deployed HashPowerPerpsDEX proxy contract address (perps app) |
+| `FUTURES_ADDRESS` | Deployed Futures proxy contract address (futures app) |
+| `PRIVATE_KEY` | Hex-encoded private key for the MM wallet |
 
 ### Quoting
 
@@ -170,14 +198,21 @@ cp abi/abi.ts ../market-maker/src/abi.ts
 ### Run
 
 ```bash
-# Production (reads .env from repo root)
-pnpm start
+# Local hardhat (pretty-printed logs, dry-run on by default)
+pnpm local:perps
+pnpm local:futures
 
-# Development with pretty-printed logs
-pnpm dev
+# base-sepolia (dev testnet)
+pnpm dev:perps
+pnpm dev:futures
 
-# Dry run (no transactions, logs what would happen)
-pnpm dev:dry
+# base-mainnet (staging — pre-prod sizes)
+pnpm stg:perps
+pnpm stg:futures
+
+# base-mainnet (production)
+pnpm prd:perps
+pnpm prd:futures
 ```
 
 ### Example `.env`
@@ -186,13 +221,8 @@ pnpm dev:dry
 NETWORK=arbitrum-sepolia
 ETH_NODE_ADDRESS=https://sepolia-rollup.arbitrum.io/rpc
 PERPS_ADDRESS=0x...
-MAKER_PRIVATE_KEY=0x...
-
-MAKER_LEVELS_PER_SIDE=3
-MAKER_BASE_QUANTITY=1000000
-MAKER_MIN_SPREAD_BPS=30
-MAKER_POLL_INTERVAL_MS=5000
-MAKER_MAX_POSITION_SIZE=50000000
+FUTURES_ADDRESS=0x...
+PRIVATE_KEY=0x...
 MAKER_DRY_RUN=false
 MAKER_HEALTH_PORT=3001
 ```

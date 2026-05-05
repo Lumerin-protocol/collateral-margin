@@ -1,0 +1,70 @@
+# yaml-language-server: $schema=../schemas/perps.json
+# Titan Market Maker - Perps - PRODUCTION (base-mainnet).
+#
+# Real money. Tighter risk caps and a higher utilization headroom; logs at
+# info to keep CloudWatch ingestion costs bounded. Tune sizing per
+# liquidity provision target.
+#
+#   PRIVATE_KEY             - hex private key of the production wallet (Secrets Manager)
+#   ETH_NODE_ADDRESS        - base-mainnet JSON-RPC endpoint
+#   PERPS_ADDRESS           - HashPowerPerpsDEX address on base-mainnet (production deployment)
+#   ETH_PRICE_FEED_ADDRESS  - Chainlink ETH/USD aggregator on base-mainnet (USD-denominated risk gates)
+
+nodeEnv: production
+commitHash: ${COMMIT_HASH:-unknown}
+logLevel: ${MAKER_LOG_LEVEL:-info}
+dryRun: ${MAKER_DRY_RUN:-false}
+
+wallets:
+  primary:
+    privateKey: ${PRIVATE_KEY}
+
+network:
+  name: base
+  rpcUrl: ${ETH_NODE_ADDRESS}
+  ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
+
+venue:
+  kind: perps
+  address: ${PERPS_ADDRESS}
+  wallet: primary
+
+pricing:
+  strategy: effective-spread
+  minSpreadBps: 10
+  volatilityMultiplier: 2.0
+  inventorySkewGamma: 0.5
+  maxSkewTicks: 20
+
+sizing:
+  strategy: linear
+  baseQuantity: "10000000"            # 10 USDC per level
+  numLevelsPerSide: 5
+
+risk:
+  maxPositionSize: "1000000000"       # 1000 USDC
+  maxUtilizationPct: 75               # tighter than dev/stg
+  minCollateralBalance: "100000000"   # 100 USDC operational floor
+  maxDailyLossUsd: "1000000000"       # 1000 USDC daily loss circuit-breaker
+  maxGasBudgetPerHourUsd: "50000000"
+  maxGasBudgetPerDayUsd: "500000000"
+  gasSpikeThresholdPct: 200
+  gasPenaltyBps: 5
+  urgentRequoteThresholdTicks: 10
+
+gas:
+  gasCapMultiplier: 2.0
+
+timing:
+  pollIntervalMs: 3000
+  requoteThresholdTicks: 2
+  requoteCooldownMs: 1000
+  resyncIntervalMs: 60000
+  levelSpacingTicks: 5
+
+collateral:
+  autoDeposit: true
+  autoDepositMinAmount: "1000000"
+
+health:
+  port: ${MAKER_HEALTH_PORT:-3001}
