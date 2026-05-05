@@ -5,8 +5,7 @@ import type {
   OwnOrderSource,
   Unsubscribe,
 } from "../../core/adapter.ts";
-import { FuturesAbi } from "../../abi/Futures.ts";
-import { FuturesMmExtensionsAbi } from "../../abi/FuturesMmExtensions.ts";
+import { FuturesAbi } from "futures-contracts/abi/Futures.ts";
 import type { FuturesVenueAdapter } from "./venue.ts";
 import { FUTURES_INSTRUMENT_ID } from "./events.ts";
 
@@ -62,7 +61,7 @@ export class FuturesOwnOrders implements OwnOrderSource {
 
     const orderIds = await this.venue.publicClient.readContract({
       address: this.venue.address,
-      abi: FuturesMmExtensionsAbi,
+      abi: FuturesAbi,
       functionName: "getOrderIds",
       args: [owner],
     });

@@ -1,21 +1,35 @@
-# Perps Market Maker
+# Market Maker
 
-Automated market maker for the HashPowerPerpsDEX on-chain CLOB. Provides two-sided liquidity by placing layered limit orders around the oracle price, dynamically adjusting quotes based on inventory, volatility, and gas conditions.
+Automated market maker for the Titan derivatives stack. Provides two-sided
+liquidity on the **HashPowerPerpsDEX** (perps) and **Futures** (dated)
+order books by placing layered limit quotes around the oracle price and
+dynamically adjusting them based on inventory, volatility, and gas
+conditions.
+
+The same codebase ships two independent processes — one per venue — each
+with its own wallet, configuration, and health port. Both share a
+`core/` library for pricing, sizing, risk, execution, and health
+reporting; venue-specific logic lives behind a thin `InstrumentAdapter`
+interface in `src/adapters/{perps,futures}/`.
 
 ## Architecture
 
-The bot runs a single poll loop (`tick`) that reads on-chain state, computes desired quotes, and reconciles them against resting orders.
+A single poll loop (`tick`) reads on-chain state, computes desired
+quotes, and reconciles them against resting orders.
 
 ```mermaid
 graph LR
   subgraph On-chain
-    CLOB[HashPowerPerpsDEX CLOB]
+    V[Venue<br/>Perps DEX or Futures]
+    Vault[CollateralVault]
+    Engine[PortfolioMarginEngine]
   end
 
   subgraph State readers
     OT[OracleTracker]
     GT[GasTracker]
     BT[BookTracker]
+    CT[CollateralTracker]
     IM[InventoryManager]
   end
 
@@ -23,12 +37,14 @@ graph LR
   GT -- gas price, spike % --> Q
   IM -- skew, utilization --> Q
   GT -- gas budget --> RM[RiskManager]
-  IM -- collateral, position --> RM
+  CT -- collateral, IM/MM --> RM
   RM -- allowed sides, halt --> Q
   Q -- desired bids & asks --> OE[OrderExecutor]
-  OE -- cancel / place --> CLOB
+  OE -- cancel / place --> V
   BT -- own orders --> OE
-  CLOB -. events .-> BT
+  V -. events .-> BT
+  CT -. balanceOf, IM/MM .-> Vault
+  CT -. canPlaceOrder .-> Engine
   OE -- gas cost --> RM
   OE -- stats --> HC[HealthCheck]
 
@@ -39,67 +55,101 @@ graph LR
 
 | Component | File | Role |
 |---|---|---|
-| **OracleTracker** | `oracleTracker.ts` | Reads `getMarketPrice()` each tick; tracks rolling volatility |
-| **GasTracker** | `gasTracker.ts` | Reads gas price, detects spikes, estimates tx costs in USD via ETH price feed |
-| **BookTracker** | `bookTracker.ts` | Maintains local mirror of order book via `getOrderBookPrices()` + event watching; tracks own orders |
-| **InventoryManager** | `inventoryManager.ts` | Reads `getUserPosition()`, `balanceOf()`, `getMaintenanceMargin()` to track net exposure and utilization |
-| **RiskManager** | `riskManager.ts` | Drawdown circuit breaker, daily loss limit, gas budget throttling, position limit enforcement |
-| **Quoter** | `quoter.ts` | Computes bid/ask levels: Avellaneda-Stoikov inspired spreads with gas floor, volatility scaling, inventory skew |
-| **OrderExecutor** | `orderExecutor.ts` | Diffs desired quotes vs resting orders; cancels stale, places new; gas-capped transactions |
-| **HealthCheck** | `healthcheck.ts` | HTTP `/health` endpoint exposing live operational metrics |
+| **OracleTracker** | `core/oracleTracker.ts` | Reads the venue's raw oracle price each tick; tracks rolling volatility |
+| **GasTracker** | `core/gasTracker.ts` | Reads gas price, detects spikes, estimates tx costs in USD via ETH price feed |
+| **BookTracker** | `core/bookTracker.ts` | Maintains a local mirror of the venue's book + own orders via venue-supplied snapshots and event subscriptions |
+| **CollateralTracker** | `core/collateralTracker.ts` | Reads vault balance, portfolio IM/MM from `PortfolioMarginEngine`, manages auto-deposits |
+| **InventoryManager** | `core/inventoryManager.ts` | Tracks net position from venue-reported state |
+| **RiskManager** | `core/riskManager.ts` | Drawdown circuit breaker, daily loss limit, gas budget throttling, position limit enforcement, engine `canPlaceOrder` checks |
+| **Quoter** | `core/quoter.ts` | Computes bid/ask levels: Avellaneda-Stoikov inspired spreads with gas floor, volatility scaling, inventory skew |
+| **OrderExecutor** | `core/orderExecutor.ts` | Diffs desired quotes vs resting orders; cancels stale, places new; gas-capped transactions |
+| **HealthCheck** | `core/healthcheck.ts` | HTTP `/health` endpoint exposing live operational metrics |
+| **Adapters** | `adapters/{perps,futures}/` | Venue-specific encoding/decoding, oracle access, snapshot fetching |
 
 ### Tick cycle
 
-Each iteration:
-
-1. **Update** oracle price, gas price, order book, inventory
-2. **Risk check** — halt if collateral below minimum or daily loss exceeded; throttle if gas budget exceeded
-3. **Compute quotes** — N levels per side, spread = max(minSpreadBps, gasFloor) + volatility + inventory skew + gas penalty
-4. **Reconcile** — selective requoting: only cancel/place orders that changed; skips requote if price drift is below threshold or cooldown hasn't elapsed; skips non-urgent requotes during gas spikes
+1. **Update** oracle price, gas price, order book, inventory, collateral
+2. **Risk check** — halt if collateral below minimum or daily loss
+   exceeded; throttle if gas budget exceeded
+3. **Compute quotes** — N levels per side, spread = max(minSpreadBps,
+   gasFloor) + volatility + inventory skew + gas penalty
+4. **Reconcile** — selective requoting: only cancel/place orders that
+   changed; skips requote if price drift is below threshold or cooldown
+   hasn't elapsed; skips non-urgent requotes during gas spikes
 
 ### Quoting strategy
 
 - **Base spread**: configurable minimum in basis points (`minSpreadBps`)
-- **Gas floor**: minimum spread to break even on round-trip gas costs (cancel + place)
-- **Volatility component**: `volatilityMultiplier * rollingVolatility * 10000` bps
-- **Inventory skew**: shifts both bid and ask toward reducing exposure; controlled by `inventorySkewGamma` and `maxSkewTicks`
-- **Gas spike penalty**: widens spread proportionally when gas exceeds median by `gasSpikeThresholdPct`
-- **Level sizing**: deeper levels get progressively larger quantities (`baseQuantity * level`)
+- **Gas floor**: minimum spread to break even on round-trip gas costs
+  (cancel + place)
+- **Volatility component**: `volatilityMultiplier · rollingVolatility · 10000` bps
+- **Inventory skew**: shifts both bid and ask toward reducing exposure;
+  controlled by `inventorySkewGamma` and `maxSkewTicks`
+- **Gas spike penalty**: widens spread proportionally when gas exceeds
+  median by `gasSpikeThresholdPct`
+- **Level sizing**: geometric taper — outer levels are progressively
+  larger by `levelSizeRatio`
 
 ### Risk controls
 
-- **Position limits**: max net position size; blocks the side that would increase exposure
-- **Utilization cap**: when `requiredMargin / collateral` exceeds `maxUtilizationPct`, only quotes the reducing side
-- **Drawdown halt**: stops quoting and cancels all orders if collateral drops below `minCollateralBalance`
-- **Daily loss halt**: includes gas costs in PnL calculation; halts if daily loss exceeds `maxDailyLossUsd`
-- **Gas budget throttle**: rolling hourly/daily gas budgets; when exceeded, requote cooldown and threshold increase (3x and 2x)
-- **Gas spike deferral**: during gas spikes, requotes are deferred unless price drift exceeds `urgentRequoteThresholdTicks`
-- **Gas cap**: `maxFeePerGas` is capped at `gasCapMultiplier * medianGasPrice`
+- **Position limits**: max net position size; blocks the side that
+  would increase exposure
+- **Utilization cap**: when `requiredMargin / collateral` exceeds
+  `maxUtilizationPct`, only quotes the reducing side
+- **Drawdown halt**: stops quoting and cancels all orders if
+  collateral drops below `minCollateralBalance`
+- **Daily loss halt**: includes gas costs in PnL calculation; halts if
+  daily loss exceeds `maxDailyLossUsd`
+- **Gas budget throttle**: rolling hourly/daily gas budgets; when
+  exceeded, requote cooldown and threshold tighten
+- **Gas spike deferral**: during gas spikes, requotes are deferred
+  unless price drift exceeds `urgentRequoteThresholdTicks`
+- **Gas cap**: `maxFeePerGas` is capped at `gasCapMultiplier · medianGasPrice`
+- **Engine pre-check**: each placement is gated by
+  `PortfolioMarginEngine.canPlaceOrder(additionalIM)` so we never
+  submit orders the vault can't margin
+
+### Matching modes
+
+- **Perps** (`limit`): contract matches at any price strictly better
+  than the resting limit. Outdated own orders that are still better
+  than the new desired price are kept in place.
+- **Futures** (`exact`): contract matches at the exact resting price.
+  Any deviation in either direction means the order has to be
+  cancelled and re-placed.
+
+The shared `OrderExecutor` branches on the adapter's `matchingMode`
+when deciding whether an existing order is still good.
 
 ### Graceful shutdown
 
-On `SIGINT` / `SIGTERM`, the bot cancels all resting orders before exiting.
+On `SIGINT` / `SIGTERM` the process stops the tick loop and (by
+default) cancels all resting orders before exiting. Set
+`cancelOrdersOnShutdown: false` in the config to leave resting orders
+on the book for hot restarts.
 
 ## Configuration
 
-The MM ships per-app, per-env YAML configs under `configs/`:
+Each app ships per-environment YAML configs under `configs/`:
 
-| File | Network | Notes |
-|---|---|---|
-| `perps.local.yml` / `futures.local.yml` | hardhat | Local development; dry-run on by default |
-| `perps.dev.yml`   / `futures.dev.yml`   | base-sepolia | Testnet; small sizes |
-| `perps.stg.yml`   / `futures.stg.yml`   | base | Pre-prod on mainnet; conservative caps |
-| `perps.prd.yml`   / `futures.prd.yml`   | base | Production; full sizes |
+| File | Network |
+|---|---|
+| `perps.local.yml`   / `futures.local.yml`   | hardhat |
+| `perps.dev.yml`     / `futures.dev.yml`     | base-sepolia |
+| `perps.stg.yml`     / `futures.stg.yml`     | base-mainnet |
+| `perps.prd.yml`     / `futures.prd.yml`     | base-mainnet |
 
-Pick one with `--config <path>` (CLI arg), `MAKER_CONFIG=<path>` (env),
-or `MAKER_ENV=<local|dev|stg|prd>` inside the docker entrypoint.
+Pick one with `--config <path>` (CLI flag), `MAKER_CONFIG=<path>` (env
+variable), or `MAKER_ENV=<local|dev|stg|prd>` inside the docker
+entrypoint. Precedence is `--config` > `MAKER_CONFIG` > docker
+`MAKER_ENV` lookup.
 
-Precedence: `--config` CLI arg > `MAKER_CONFIG` env > docker `MAKER_ENV` lookup.
-
-The YAMLs interpolate `${VAR}` tokens from environment variables. On
-startup both apps load `.env` from `market-maker/` and from
-`collateral-margin/` (in that priority order). Live `process.env` always
-wins over file contents.
+The YAMLs are validated against generated JSON Schemas (autocomplete
+and type-checking work in any editor with the YAML extension). They
+interpolate `${VAR}` tokens from environment variables. On startup
+both apps load `.env` from `market-maker/` and from the parent
+`collateral-margin/` (in that priority order); live `process.env`
+always wins over file contents.
 
 ```bash
 pnpm local:perps      # node … --config configs/perps.local.yml | pino-pretty
@@ -107,92 +157,47 @@ pnpm dev:futures      # node … --config configs/futures.dev.yml  | pino-pretty
 pnpm stg:perps        # node … --config configs/perps.stg.yml
 pnpm prd:futures      # node … --config configs/futures.prd.yml
 
-# Custom path (e.g. one-off experiment):
+# One-off / custom path:
 node src/apps/perps/main.ts --config /tmp/my-perps.yml
 ```
 
-### Required
+All operational tuning (sizes, spreads, risk caps, gas budgets,
+timings, log level) lives in the YAML files. Refer to those for the
+authoritative list of fields.
 
-| Variable | Used by | Description |
+### Required environment variables
+
+These must be set in `.env` (or the live environment); everything
+else lives in YAML.
+
+| Variable | Required by | Description |
 |---|---|---|
-| `PRIVATE_KEY` | all envs | Hex-encoded private key for the MM wallet |
-| `ALCHEMY_API_KEY` | dev/stg/prd | Alchemy API key. The bundled configs compose the RPC URL (`https://base-sepolia.g.alchemy.com/v2/${ALCHEMY_API_KEY}` for dev, `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}` for stg/prd). |
-| `PERPS_ADDRESS` | perps app | Deployed HashPowerPerpsDEX proxy contract address |
-| `FUTURES_ADDRESS` | futures app | Deployed Futures proxy contract address |
-| `ETH_PRICE_FEED_ADDRESS` | optional | Chainlink ETH/USD aggregator. Required to surface gas cost in USD; leave unset for local hardhat. |
+| `PRIVATE_KEY` | all | Hex-encoded private key for the MM wallet |
+| `ALCHEMY_API_KEY` | dev / stg / prd | Used by the bundled YAMLs to compose the RPC URL |
+| `PERPS_ADDRESS` | perps app | Deployed `HashPowerPerpsDEX` proxy address |
+| `FUTURES_ADDRESS` | futures app | Deployed `Futures` proxy address |
 
-### Quoting
-
-| Variable | Default | Description |
-|---|---|---|
-| `MAKER_LEVELS_PER_SIDE` | `5` | Number of bid/ask levels to quote |
-| `MAKER_BASE_QUANTITY` | `1000000` | Base order size (in quantity decimals) |
-| `MAKER_MIN_SPREAD_BPS` | `10` | Minimum spread in basis points |
-| `MAKER_VOLATILITY_MULTIPLIER` | `2.0` | Volatility scaling factor |
-| `MAKER_INVENTORY_SKEW_GAMMA` | `0.5` | Inventory skew strength (0 = disabled, 1 = max) |
-| `MAKER_MAX_SKEW_TICKS` | `20` | Maximum skew offset in tick units |
-
-### Gas management
-
-| Variable | Default | Description |
-|---|---|---|
-| `ETH_PRICE_FEED_ADDRESS` | *(none)* | Chainlink ETH/USD price feed address (enables USD gas cost tracking) |
-| `MAKER_GAS_SPIKE_THRESHOLD_PCT` | `200` | Gas price % above median to trigger spike mode |
-| `MAKER_GAS_CAP_MULTIPLIER` | `2.0` | Max gas price as multiple of median |
-| `MAKER_GAS_PENALTY_BPS` | `5` | Additional spread penalty per 100% gas spike |
-| `MAKER_MAX_GAS_BUDGET_HOUR_USD` | `50000000` | Max gas spend per rolling hour (collateral decimals) |
-| `MAKER_MAX_GAS_BUDGET_DAY_USD` | `500000000` | Max gas spend per rolling day (collateral decimals) |
-| `MAKER_URGENT_REQUOTE_TICKS` | `10` | Price drift in ticks that overrides gas spike deferral |
-
-### Risk
-
-| Variable | Default | Description |
-|---|---|---|
-| `MAKER_MAX_POSITION_SIZE` | `100000000` | Max absolute net position (quantity decimals) |
-| `MAKER_MAX_UTILIZATION_PCT` | `80` | Max margin utilization before side restrictions |
-| `MAKER_MIN_COLLATERAL` | `100000000` | Minimum collateral balance before halt (collateral decimals) |
-| `MAKER_MAX_DAILY_LOSS_USD` | `1000000000` | Max daily loss including gas (collateral decimals) |
-
-### Timing
-
-| Variable | Default | Description |
-|---|---|---|
-| `MAKER_POLL_INTERVAL_MS` | `3000` | Main loop interval |
-| `MAKER_REQUOTE_THRESHOLD_TICKS` | `2` | Price drift in ticks before requoting |
-| `MAKER_REQUOTE_COOLDOWN_MS` | `1000` | Minimum time between requotes |
-| `MAKER_RESYNC_INTERVAL_MS` | `60000` | Full order book resync interval |
-
-### Operational
-
-| Variable | Default | Description |
-|---|---|---|
-| `MAKER_DRY_RUN` | `false` | Log orders without submitting transactions |
-| `MAKER_HEALTH_PORT` | `3001` | HTTP health endpoint port |
-| `MAKER_LOG_LEVEL` | `info` | Pino log level: `trace`, `debug`, `info`, `warn`, `error`, `silent` |
+Custom YAMLs may reference additional `${VAR}` tokens (e.g. a
+non-Alchemy RPC URL, a chain id override). The bundled YAMLs in
+`configs/` only reference the four above plus the RPC URL.
 
 ## Getting started
 
 ### Prerequisites
 
-- Node.js >= 22.6.0
-- pnpm >= 10
-- Compiled contracts (ABIs)
+- Node.js ≥ 22.6.0
+- pnpm ≥ 10
+
+ABIs are pulled directly from the upstream contract repos as Git
+dependencies (`futures-contracts`, `perps-contracts`,
+`collateral-margin-contracts`). No manual sync is required — `pnpm
+install` is enough.
 
 ### Install
 
 ```bash
 cd market-maker
 pnpm install
-```
-
-### Build ABIs
-
-The market maker uses ABIs generated from the contracts package. The `pretest` script handles this automatically for tests, but for manual setup:
-
-```bash
-cd contracts
-pnpm hardhat compile
-cp abi/abi.ts ../market-maker/src/abi.ts
 ```
 
 ### Run
@@ -215,94 +220,22 @@ pnpm prd:perps
 pnpm prd:futures
 ```
 
-### Example `.env`
-
-```env
-PRIVATE_KEY=0x...
-ALCHEMY_API_KEY=...
-PERPS_ADDRESS=0x...
-FUTURES_ADDRESS=0x...
-MAKER_DRY_RUN=false
-MAKER_HEALTH_PORT=3001
-```
-
 ## Health endpoint
 
-`GET http://localhost:{MAKER_HEALTH_PORT}/health` returns JSON:
-
-```json
-{
-  "status": "running",
-  "haltReason": "none",
-  "throttled": false,
-  "throttleReason": "none",
-  "oraclePrice": "2997635",
-  "volatility": 0.0012,
-  "netPosition": "-1000000",
-  "collateral": "100000000000",
-  "inventorySkew": -0.01,
-  "utilizationPct": 5,
-  "ownOrders": 6,
-  "bestBid": "2990000",
-  "bestAsk": "3010000",
-  "gasGwei": "0.10",
-  "gasSpiking": false,
-  "gasSpikePct": "0",
-  "cumulativeGasCostUsd": "0",
-  "tickCount": 142,
-  "lastTickAt": 1709500000000,
-  "ordersPlaced": 12,
-  "ordersCancelled": 6,
-  "reconcileCount": 3,
-  "uptimeSeconds": 426,
-  "dryRun": false
-}
-```
-
-| Field | Description |
-|---|---|
-| `status` | `running` or `halted` |
-| `haltReason` | `none`, `drawdown`, or `daily_loss` |
-| `throttled` | Whether gas budget throttling is active |
-| `oraclePrice` | Current oracle price (contract decimals) |
-| `volatility` | Rolling price volatility (0-1 scale) |
-| `netPosition` | Signed net position size |
-| `collateral` | Collateral balance (collateral token decimals) |
-| `inventorySkew` | Position skew ratio (-1 to 1) |
-| `utilizationPct` | Margin utilization percentage |
-| `ownOrders` | Number of resting orders on-chain |
-| `bestBid` / `bestAsk` | Current top-of-book prices |
-| `ordersPlaced` / `ordersCancelled` | Cumulative order counts since startup |
-| `reconcileCount` | Number of requote cycles executed |
+`GET http://localhost:{healthPort}/health` returns a JSON snapshot of
+live operational state — status, halt/throttle reasons, oracle and
+gas readings, position and collateral, order counts, and uptime.
+Suitable for liveness/readiness probes and for scraping into a
+dashboard. The exact field set is exercised by
+`tests/core/healthcheck.test.ts`.
 
 ## Testing
 
 ```bash
-# Run all tests (unit + e2e)
 pnpm test
-
-# With coverage report
-pnpm test:coverage
-
-# Watch mode
-pnpm test:watch
-
-# Run only process-level e2e tests
-node --test --test-force-exit --test-concurrency=1 'tests/market-maker.process.test.ts'
 ```
 
-Tests use a local Hardhat node started automatically. The test suite includes:
-
-- **Unit tests**: each component tested in isolation with mocked dependencies
-- **Component e2e tests** (`market-maker.e2e.test.ts`): full component stack wired together against a local Hardhat node
-- **Process e2e tests** (`market-maker.process.test.ts`): spawns the market maker as a separate OS process, verifies behavior by querying on-chain state and the health API
-
-## Supported networks
-
-| Network | Chain ID | Notes |
-|---|---|---|
-| `arbitrum` | 42161 | Production |
-| `arbitrum-sepolia` | 421614 | Testnet |
-| `hardhat` | 31337 | Local development |
-
-Transport is selected automatically: WebSocket URLs (`ws://` / `wss://`) use WebSocket transport, otherwise HTTP.
+The suite uses Node's built-in test runner (`node --test`) with
+TypeScript strip mode — no transpile step. Tests run unit-only
+against in-memory mocks of the adapters; venue end-to-end checks live
+in the upstream contract repos.
