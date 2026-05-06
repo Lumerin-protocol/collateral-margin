@@ -250,6 +250,7 @@ jobs:
           MAKER_HEALTH_PORT: ${{ vars.MAKER_HEALTH_PORT }}
           MAKER_DESIRED_COUNT: ${{ vars.MAKER_DESIRED_COUNT }}
           ETH_PRICE_FEED_ADDRESS: ${{ vars.ETH_PRICE_FEED_ADDRESS }}
+          HASHPRICE_ORACLE_SUBGRAPH_URL: ${{ vars.HASHPRICE_ORACLE_SUBGRAPH_URL }}
 
           # Per-environment GitHub Secrets (encrypted personality). Secrets
           # only flow into this step's process env via inline ternaries; they
