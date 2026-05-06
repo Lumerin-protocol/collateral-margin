@@ -42,6 +42,7 @@ gas:
 timing:
   pollIntervalSec: 3
 collateral: {}
+oracle: {}
 health:
   port: 8080
 `;

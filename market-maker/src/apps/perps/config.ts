@@ -1,6 +1,7 @@
 import { type Static, Type } from "@sinclair/typebox";
 import {
   type ParsedCollateralConfig,
+  type ParsedOracleConfig,
   type ParsedRiskConfig,
   type ParsedTimingConfig,
   TypeEthAddress,
@@ -10,7 +11,9 @@ import {
   healthSchema,
   loadConfigFromFile,
   networkSchema,
+  oracleSchema,
   parseCollateralConfig,
+  parseOracleConfig,
   parseRiskConfig,
   parseTimingConfig,
   riskSchema,
@@ -125,6 +128,7 @@ export const perpsRootSchema = Type.Object(
     risk: riskSchema,
     gas: gasSchema,
     collateral: collateralSchema,
+    oracle: oracleSchema,
     timing: timingSchema,
     health: healthSchema,
   },
@@ -134,10 +138,14 @@ export const perpsRootSchema = Type.Object(
 type RawPerpsConfig = Static<typeof perpsRootSchema>;
 
 /** Parsed perps config: bigints/ms substituted in for human-friendly inputs. */
-export type PerpsMakerConfig = Omit<RawPerpsConfig, "risk" | "timing" | "collateral" | "sizing"> & {
+export type PerpsMakerConfig = Omit<
+  RawPerpsConfig,
+  "risk" | "timing" | "collateral" | "sizing" | "oracle"
+> & {
   risk: ParsedRiskConfig;
   timing: ParsedTimingConfig;
   collateral: ParsedCollateralConfig;
+  oracle: ParsedOracleConfig;
   sizing: Omit<RawPerpsConfig["sizing"], "baseQuantity"> & { baseQuantity: bigint };
 };
 
@@ -151,6 +159,7 @@ export function loadPerpsConfig(opts: { path?: string; env?: NodeJS.ProcessEnv }
       risk: parseRiskConfig(raw.risk),
       timing: parseTimingConfig(raw.timing),
       collateral: parseCollateralConfig(raw.collateral),
+      oracle: parseOracleConfig(raw.oracle),
       sizing: {
         ...raw.sizing,
         baseQuantity: configBigint(String(raw.sizing.baseQuantity), "sizing.baseQuantity"),

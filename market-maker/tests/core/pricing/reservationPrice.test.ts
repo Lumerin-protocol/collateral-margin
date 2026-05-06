@@ -9,9 +9,10 @@ import type { InventoryManager } from "../../../src/core/inventoryManager.ts";
 import type { InstrumentContext } from "../../../src/core/adapter.ts";
 
 const TICK = 1_000n; // $0.001 in 6-decimal USDC
+const HORIZON_SEC = 3; // matches the typical pollIntervalSec used by configs
 
 function makeOracle(price: bigint, vol = new Fraction(0n)): OracleTracker {
-  return { currentPrice: price, volatility: vol } as unknown as OracleTracker;
+  return { currentPrice: price, volatilityPerSecond: vol } as unknown as OracleTracker;
 }
 
 function makeGas(spikePct = new Fraction(0n), roundTripUsd = 0n): GasTracker {
@@ -39,6 +40,7 @@ describe("computeReservationMidQuote", () => {
       context: {},
       cfg: baseCfg,
       tick: TICK,
+      volHorizonSec: HORIZON_SEC,
     });
     assert.ok(bidMid < askMid, `bid ${bidMid} should be < ask ${askMid}`);
     assert.ok(bidMid > 0n);
@@ -55,6 +57,7 @@ describe("computeReservationMidQuote", () => {
       context: {},
       cfg,
       tick: TICK,
+      volHorizonSec: HORIZON_SEC,
     });
     const longInv = computeReservationMidQuote({
       oracle: makeOracle(oracle, new Fraction(1n, 100n)),
@@ -63,6 +66,7 @@ describe("computeReservationMidQuote", () => {
       context: {},
       cfg,
       tick: TICK,
+      volHorizonSec: HORIZON_SEC,
     });
     assert.ok(longInv.bidMid <= noInv.bidMid, "long inventory should push bid mid down or equal");
   });
@@ -78,6 +82,7 @@ describe("computeReservationMidQuote", () => {
       context: {},
       cfg,
       tick: TICK,
+      volHorizonSec: HORIZON_SEC,
     });
     const shortInv = computeReservationMidQuote({
       oracle: makeOracle(oracle, new Fraction(1n, 100n)),
@@ -86,6 +91,7 @@ describe("computeReservationMidQuote", () => {
       context: {},
       cfg,
       tick: TICK,
+      volHorizonSec: HORIZON_SEC,
     });
     assert.ok(shortInv.askMid >= noInv.askMid, "short inventory should push ask mid up or equal");
   });
@@ -102,6 +108,7 @@ describe("computeReservationMidQuote", () => {
       context,
       cfg: baseCfg,
       tick: TICK,
+      volHorizonSec: HORIZON_SEC,
       nowMs,
     });
     assert.ok(bidMid < askMid);
@@ -121,6 +128,7 @@ describe("computeReservationMidQuote", () => {
       context: { deliveryDate: pastDelivery },
       cfg,
       tick: TICK,
+      volHorizonSec: HORIZON_SEC,
       nowMs,
     });
     const noDelivery = computeReservationMidQuote({
@@ -130,6 +138,7 @@ describe("computeReservationMidQuote", () => {
       context: {},
       cfg: { ...cfg, riskAversion: 0 },
       tick: TICK,
+      volHorizonSec: HORIZON_SEC,
       nowMs,
     });
     // With T=0, adjustment = 0 regardless of inventory; reservation price = oracle
@@ -146,6 +155,7 @@ describe("computeReservationMidQuote", () => {
       context: {},
       cfg: baseCfg,
       tick: TICK,
+      volHorizonSec: HORIZON_SEC,
     });
     assert.strictEqual(bidMid % TICK, 0n, `bid ${bidMid} not aligned to tick ${TICK}`);
     assert.strictEqual(askMid % TICK, 0n, `ask ${askMid} not aligned to tick ${TICK}`);
@@ -159,6 +169,7 @@ describe("computeReservationMidQuote", () => {
       context: {},
       cfg: baseCfg,
       tick: TICK,
+      volHorizonSec: HORIZON_SEC,
     };
 
     const lowVol = computeReservationMidQuote({ ...opts, oracle: makeOracle(1_000_000_000n, new Fraction(1n, 1000n)) });

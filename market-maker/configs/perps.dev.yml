@@ -4,10 +4,11 @@
 # Real quoting on base-sepolia. Small sizes, debug-level logs, autoDeposit
 # on so the wallet stays funded.
 #
-#   PRIVATE_KEY             - hex private key of the dev market-making wallet
-#   ALCHEMY_API_KEY         - Alchemy API key (URL is composed below)
-#   PERPS_ADDRESS           - HashPowerPerpsDEX address on base-sepolia
-#   ETH_PRICE_FEED_ADDRESS  - optional Chainlink ETH/USD aggregator on base-sepolia
+#   PRIVATE_KEY                       - hex private key of the dev market-making wallet
+#   ALCHEMY_API_KEY                   - Alchemy API key (URL is composed below)
+#   PERPS_ADDRESS                     - HashPowerPerpsDEX address on base-sepolia
+#   ETH_PRICE_FEED_ADDRESS            - optional Chainlink ETH/USD aggregator on base-sepolia
+#   HASHPRICE_ORACLE_SUBGRAPH_URL     - optional hashprice-oracle subgraph URL for σ backfill
 
 nodeEnv: development
 commitHash: ${COMMIT_HASH:-unknown}
@@ -15,7 +16,7 @@ logLevel: ${MAKER_LOG_LEVEL:-debug}
 dryRun: ${MAKER_DRY_RUN:-false}
 # Dev iterates fast; leave resting orders on base-sepolia on Ctrl-C so we
 # don't burn gas on cancel-then-reopen across every restart.
-cancelOrdersOnShutdown: false
+cancelOrdersOnShutdown: true
 
 wallets:
   primary:
@@ -76,6 +77,16 @@ collateral:
   autoDeposit: true
   autoDepositMinAmount: 500
   maxCollateralAmount: 1000
+
+oracle:
+  # Window de-duplicates by price, so 60 samples ≈ 60 oracle updates regardless
+  # of poll cadence. Multiplier 4× compensates for Chainlink's slow heartbeat
+  # so backfill returns a full window.
+  windowSize: 60
+  precisionBits: 48
+  historyLookbackMultiplier: 4
+  history:
+    subgraphUrl: ${HASHPRICE_ORACLE_SUBGRAPH_URL:-}
 
 health:
   port: ${MAKER_HEALTH_PORT:-3002}

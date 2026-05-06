@@ -43,6 +43,7 @@ gas:
   gasCapMultiplier: 2.0
 timing: {}
 collateral: {}
+oracle: {}
 health:
   port: 8080
 `;

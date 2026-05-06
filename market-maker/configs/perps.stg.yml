@@ -4,10 +4,11 @@
 # Real money on base-mainnet, but pre-prod sizes / risk caps. Debug-level
 # logs to make incident triage easier in shared infra.
 #
-#   PRIVATE_KEY             - hex private key of the staging market-making wallet
-#   ALCHEMY_API_KEY         - Alchemy API key (URL is composed below)
-#   PERPS_ADDRESS           - HashPowerPerpsDEX address on base-mainnet (staging deployment)
-#   ETH_PRICE_FEED_ADDRESS  - Chainlink ETH/USD aggregator on base-mainnet
+#   PRIVATE_KEY                       - hex private key of the staging market-making wallet
+#   ALCHEMY_API_KEY                   - Alchemy API key (URL is composed below)
+#   PERPS_ADDRESS                     - HashPowerPerpsDEX address on base-mainnet (staging deployment)
+#   ETH_PRICE_FEED_ADDRESS            - Chainlink ETH/USD aggregator on base-mainnet
+#   HASHPRICE_ORACLE_SUBGRAPH_URL     - hashprice-oracle subgraph URL for σ backfill at startup
 
 nodeEnv: staging
 commitHash: ${COMMIT_HASH:-unknown}
@@ -67,6 +68,16 @@ timing:
 collateral:
   autoDeposit: true
   autoDepositMinAmount: 1
+
+oracle:
+  # 60 de-duplicated samples → ±9% standard error on σ. With Chainlink heartbeat
+  # of a few minutes and historyLookbackMultiplier=4, backfill covers ~4 hours
+  # of oracle activity, easily enough to fill the window on cold start.
+  windowSize: 60
+  precisionBits: 48
+  historyLookbackMultiplier: 4
+  history:
+    subgraphUrl: ${HASHPRICE_ORACLE_SUBGRAPH_URL}
 
 health:
   port: ${MAKER_HEALTH_PORT:-3001}

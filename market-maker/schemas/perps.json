@@ -18,6 +18,7 @@
     "risk",
     "gas",
     "collateral",
+    "oracle",
     "timing",
     "health"
   ],
@@ -642,6 +643,78 @@
               ]
             }
           ]
+        }
+      }
+    },
+    "oracle": {
+      "additionalProperties": false,
+      "description": "OracleTracker / volatility-window configuration.",
+      "type": "object",
+      "required": [
+        "windowSize",
+        "precisionBits",
+        "historyLookbackMultiplier"
+      ],
+      "properties": {
+        "windowSize": {
+          "anyOf": [
+            {
+              "minimum": 3,
+              "type": "integer"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Number of de-duplicated price samples retained for realized-vol estimation. 60 is enough for a ±9% standard error on σ; tune up for smoother σ at the cost of slower regime tracking.",
+          "default": 60
+        },
+        "precisionBits": {
+          "anyOf": [
+            {
+              "minimum": 16,
+              "maximum": 256,
+              "type": "integer"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Bits of fractional precision for the bigint ln/sqrt approximations underpinning σ. 48 is plenty for vol math; raise only if a strategy demonstrably needs more.",
+          "default": 48
+        },
+        "historyLookbackMultiplier": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Backfill fetches `windowSize × multiplier × pollInterval` of history from the subgraph, then trims duplicates. Multiplier > 1 absorbs Chainlink's slow update cadence so the window arrives full.",
+          "default": 4
+        },
+        "history": {
+          "additionalProperties": false,
+          "description": "Historical price source for σ window backfill.",
+          "type": "object",
+          "required": [
+            "subgraphUrl"
+          ],
+          "properties": {
+            "subgraphUrl": {
+              "description": "GraphQL endpoint for the hashprice-oracle subgraph (queries the HashpriceUsd time-series). Empty string is treated as 'no source' so YAML can use ${VAR:-} patterns; omit the entire `history` block for the same effect.",
+              "type": "string"
+            }
+          }
         }
       }
     },

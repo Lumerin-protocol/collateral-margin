@@ -17,6 +17,7 @@ describe("perps app config smoke", () => {
         PRIVATE_KEY: "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
         ALCHEMY_API_KEY: "stub-alchemy-key",
         PERPS_ADDRESS: "0x1234567890123456789012345678901234567890",
+        HASHPRICE_ORACLE_SUBGRAPH_URL: "https://stub.example/subgraph",
       };
       const cfg = loadPerpsConfig({ path, env });
       assert.equal(cfg.venue.kind, "perps");

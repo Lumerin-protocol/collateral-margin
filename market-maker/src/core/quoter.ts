@@ -36,6 +36,13 @@ export interface QuoterConfig {
    * fill conditional on shallower levels filling first).
    */
   levelSpacingTicks: number;
+  /**
+   * Holding-time horizon (seconds) used to convert per-second realized
+   * volatility (`OracleTracker.volatilityPerSecond`) into per-horizon log
+   * returns for bps math: `vol_bps ∝ σ_s · √volHorizonSec`. Set to the
+   * typical time between requotes — `pollIntervalSec` is a sensible default.
+   */
+  volHorizonSec: number;
 }
 
 /**
@@ -109,6 +116,7 @@ export class Quoter {
           context: this.context,
           cfg: this.cfg.pricing,
           tick: this.tick,
+          volHorizonSec: this.cfg.volHorizonSec,
         })
       : computeMidQuote({
           oracle: this.oracle,
@@ -118,6 +126,7 @@ export class Quoter {
           baseQuantity: this.cfg.sizing.baseQuantity,
           maxSkewTicks: this.cfg.maxSkewTicks,
           tick: this.tick,
+          volHorizonSec: this.cfg.volHorizonSec,
         });
 
     const { bidMid, askMid, spreadBps } = midQuote;

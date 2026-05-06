@@ -9,6 +9,7 @@ import type { BookTracker } from "./bookTracker.ts";
 import type { GasTracker } from "./gasTracker.ts";
 import type { RiskManager } from "./riskManager.ts";
 import type { ErrorInfo } from "./errors.ts";
+import type { OwnOrder } from "./adapter.ts";
 
 export interface ExecutorStats {
   ordersPlaced: number;
@@ -112,10 +113,10 @@ export class HealthCheck {
         config: this.opts.configSummary,
         market: {
           oraclePrice: oracle.currentPrice.toString(),
-          volatility: fractionToNumber(oracle.volatility),
+          volatilityPerSecond: fractionToNumber(oracle.volatilityPerSecond),
           bestBid: book.bestBid.toString(),
           bestAsk: book.bestAsk.toString(),
-          ownOrders: book.ownOrders.size,
+          ownOrders: serializeOwnOrders(book.ownOrders),
         },
         inventory: {
           netPosition: inventory.netQuantity.toString(),
@@ -206,10 +207,43 @@ export class HealthCheck {
 }
 
 function fractionToNumber(value: Fraction): number {
-  // diagnostic only — never used in trading math
-  return (Number(value.s) * Number(value.n)) / Number(value.d);
+  // diagnostic only — never used in trading math.
+  // Realized-vol Fractions can have 1000+ bit numerators/denominators (sqrt at
+  // 48-bit precision over a 60-sample window), so a naive Number cast overflows
+  // both sides to Infinity and JSON-serialises as `null`. Simplify first to
+  // collapse the magnitude before the cast.
+  const v = value.simplify(1e-12);
+  return (Number(v.s) * Number(v.n)) / Number(v.d);
 }
 
 function bigIntReplacer(_key: string, value: unknown): unknown {
   return typeof value === "bigint" ? value.toString() : value;
+}
+
+interface OwnOrdersView {
+  count: number;
+  bids: Array<{ orderId: `0x${string}`; price: bigint; size: bigint }>;
+  asks: Array<{ orderId: `0x${string}`; price: bigint; size: bigint }>;
+}
+
+/**
+ * Snapshot of resting MM orders, split by side and sorted top-of-book first
+ * (best bid = highest price, best ask = lowest price). Bigints are stringified
+ * by `bigIntReplacer` when the payload is serialised.
+ */
+function serializeOwnOrders(orders: ReadonlyMap<`0x${string}`, OwnOrder>): OwnOrdersView {
+  const bids: OwnOrder[] = [];
+  const asks: OwnOrder[] = [];
+  for (const order of orders.values()) {
+    (order.side === "buy" ? bids : asks).push(order);
+  }
+  // bigint compare; Number(a-b) would lose precision on large prices.
+  bids.sort((a, b) => (a.price < b.price ? 1 : a.price > b.price ? -1 : 0));
+  asks.sort((a, b) => (a.price < b.price ? -1 : a.price > b.price ? 1 : 0));
+  const project = (o: OwnOrder) => ({ orderId: o.orderId, price: o.price, size: o.size });
+  return {
+    count: orders.size,
+    bids: bids.map(project),
+    asks: asks.map(project),
+  };
 }
