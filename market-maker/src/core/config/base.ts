@@ -4,6 +4,8 @@ import yaml from "js-yaml";
 import { type StringOptions, type TUnsafe, type TSchema, Type } from "@sinclair/typebox";
 import Ajv from "ajv";
 import addFormats from "ajv-formats";
+import type { Hex } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { ConfigError } from "../errors.ts";
 import { parseUsd, secondsToMs } from "./units.ts";
 
@@ -400,5 +402,55 @@ export function configBigint(value: string, field: string): bigint {
     return BigInt(value);
   } catch {
     throw new ConfigError(`Invalid bigint value for ${field}: "${value}"`);
+  }
+}
+
+/**
+ * Returns a deep clone of the full parsed config with secrets redacted, safe
+ * to expose on the /health endpoint. Specifically:
+ *
+ *  - Each `wallets[name].privateKey` is replaced with "[REDACTED]" and a
+ *    derived `address` is added so operators can still verify which signer
+ *    is configured.
+ *  - `network.rpcUrl` is masked to origin only — paths/query strings on
+ *    managed RPC providers (Alchemy, Infura, …) usually carry API keys.
+ *
+ * Bigints in the parsed config (e.g. risk caps, sizing.baseQuantity) are
+ * preserved as-is; the caller is expected to JSON.stringify with a replacer
+ * that handles bigints.
+ */
+export function sanitiseConfig<
+  T extends {
+    wallets: Record<string, { privateKey: Hex }>;
+    network: { rpcUrl: string };
+  },
+>(config: T): Record<string, unknown> {
+  const clone = structuredClone(config) as Record<string, unknown>;
+
+  const wallets = clone.wallets as Record<string, { privateKey: string; address?: string }>;
+  for (const [name, wallet] of Object.entries(wallets)) {
+    let address: string;
+    try {
+      address = privateKeyToAccount(wallet.privateKey as Hex).address;
+    } catch {
+      address = "[invalid]";
+    }
+    wallets[name] = { privateKey: "[REDACTED]", address };
+  }
+
+  const network = clone.network as { rpcUrl: string };
+  network.rpcUrl = maskRpcUrl(network.rpcUrl);
+
+  return clone;
+}
+
+function maskRpcUrl(raw: string): string {
+  try {
+    const url = new URL(raw);
+    const hasPath = url.pathname && url.pathname !== "/";
+    const hasQuery = url.search.length > 0;
+    return hasPath || hasQuery ? `${url.protocol}//${url.host}/[redacted]` : `${url.protocol}//${url.host}`;
+  } catch {
+    return "[invalid url]";
   }
 }

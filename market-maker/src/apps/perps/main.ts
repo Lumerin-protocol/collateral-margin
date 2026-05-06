@@ -14,6 +14,7 @@ import { HealthCheck } from "../../core/healthcheck.ts";
 import { runMakerLoop } from "../../core/runner.ts";
 import { serializeError } from "../../core/errSerializer.ts";
 import { createPerpsVenue } from "../../adapters/perps/index.ts";
+import { sanitiseConfig } from "../../core/config/base.ts";
 import { loadPerpsConfig } from "./config.ts";
 
 async function main(): Promise<void> {
@@ -121,7 +122,7 @@ async function main(): Promise<void> {
   const health = new HealthCheck({
     port: config.health.port,
     appName: "perps-mm",
-    configSummary: summariseConfig(config),
+    configSummary: sanitiseConfig(config),
     oracle,
     inventory,
     collateral,
@@ -146,22 +147,6 @@ async function main(): Promise<void> {
     health,
     logger,
   });
-}
-
-function summariseConfig(c: ReturnType<typeof loadPerpsConfig>): Record<string, unknown> {
-  return {
-    nodeEnv: c.nodeEnv,
-    commitHash: c.commitHash,
-    logLevel: c.logLevel,
-    dryRun: c.dryRun,
-    network: c.network.name,
-    venue: { kind: c.venue.kind, address: c.venue.address },
-    pricing: c.pricing,
-    sizing: c.sizing,
-    risk: c.risk,
-    gas: c.gas,
-    timing: c.timing,
-  };
 }
 
 main();
