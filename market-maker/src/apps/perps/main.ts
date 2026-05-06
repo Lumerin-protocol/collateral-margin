@@ -3,6 +3,7 @@ import { loadDotenvFiles } from "../../core/env.ts";
 import { createNetworkClients } from "../../core/client.ts";
 import { WalletRegistry } from "../../core/wallet.ts";
 import { OracleTracker } from "../../core/oracleTracker.ts";
+import { HashpriceOracleSubgraphSource } from "../../core/historicalPriceSource.ts";
 import { GasTracker } from "../../core/gasTracker.ts";
 import { InventoryManager } from "../../core/inventoryManager.ts";
 import { CollateralTracker } from "../../core/collateralTracker.ts";
@@ -35,7 +36,16 @@ async function main(): Promise<void> {
   });
   const instrument = await venue.getInstrument();
 
-  const oracle = new OracleTracker(instrument, logger);
+  const history = config.oracle.history
+    ? new HashpriceOracleSubgraphSource({ url: config.oracle.history.subgraphUrl, logger })
+    : undefined;
+  const oracle = new OracleTracker(instrument, logger, {
+    windowSize: config.oracle.windowSize,
+    precisionBits: config.oracle.precisionBits,
+    historyLookbackMultiplier: config.oracle.historyLookbackMultiplier,
+    history,
+    pollIntervalMs: config.timing.pollIntervalMs,
+  });
   const gas = new GasTracker(
     network.publicClient,
     {
@@ -97,6 +107,7 @@ async function main(): Promise<void> {
       },
       maxSkewTicks: config.pricing.maxSkewTicks,
       levelSpacingTicks: config.timing.levelSpacingTicks,
+      volHorizonSec: config.timing.pollIntervalMs / 1000,
     },
     oracle,
     gas,

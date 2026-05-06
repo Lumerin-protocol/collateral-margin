@@ -1,6 +1,7 @@
 import { type Static, Type } from "@sinclair/typebox";
 import {
   type ParsedCollateralConfig,
+  type ParsedOracleConfig,
   type ParsedRiskConfig,
   type ParsedTimingConfig,
   TypeEthAddress,
@@ -10,7 +11,9 @@ import {
   healthSchema,
   loadConfigFromFile,
   networkSchema,
+  oracleSchema,
   parseCollateralConfig,
+  parseOracleConfig,
   parseRiskConfig,
   parseTimingConfig,
   riskSchema,
@@ -139,6 +142,7 @@ export const futuresRootSchema = Type.Object(
     risk: riskSchema,
     gas: gasSchema,
     collateral: collateralSchema,
+    oracle: oracleSchema,
     timing: timingSchema,
     health: healthSchema,
   },
@@ -148,10 +152,14 @@ export const futuresRootSchema = Type.Object(
 type RawFuturesConfig = Static<typeof futuresRootSchema>;
 
 /** Parsed futures config: bigints/ms substituted in for human-friendly inputs. */
-export type FuturesMakerConfig = Omit<RawFuturesConfig, "risk" | "timing" | "collateral" | "sizing"> & {
+export type FuturesMakerConfig = Omit<
+  RawFuturesConfig,
+  "risk" | "timing" | "collateral" | "sizing" | "oracle"
+> & {
   risk: ParsedRiskConfig;
   timing: ParsedTimingConfig;
   collateral: ParsedCollateralConfig;
+  oracle: ParsedOracleConfig;
   sizing: Omit<RawFuturesConfig["sizing"], "baseQuantity"> & { baseQuantity: bigint };
 };
 
@@ -165,6 +173,7 @@ export function loadFuturesConfig(opts: { path?: string; env?: NodeJS.ProcessEnv
       risk: parseRiskConfig(raw.risk),
       timing: parseTimingConfig(raw.timing),
       collateral: parseCollateralConfig(raw.collateral),
+      oracle: parseOracleConfig(raw.oracle),
       sizing: {
         ...raw.sizing,
         baseQuantity: configBigint(String(raw.sizing.baseQuantity), "sizing.baseQuantity"),

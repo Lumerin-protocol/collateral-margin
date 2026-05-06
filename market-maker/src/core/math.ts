@@ -51,15 +51,29 @@ export const bigMax = (a: bigint, b: bigint) => (a > b ? a : b);
 
 /**
  * Rolling window of bigint samples. Computes:
- *   - realized volatility = stddev of log returns (Fraction-precise)
+ *   - per-step realized volatility = stddev of log returns (Fraction-precise)
+ *   - per-second realized volatility = stddev of time-normalised log returns
+ *     (requires timestamps on every push)
  *   - median (bigint)
  *
- * # Volatility math
+ * # Per-step volatility math
  *
  *   r_i = ln(p_i / p_{i-1})       (log return per step)
  *   μ   = (Σ r_i) / N
  *   σ²  = (Σ (r_i − μ)²) / (N − 1)
  *   σ   = sqrt(σ²)                ← returned as Fraction
+ *
+ * # Per-second volatility math
+ *
+ * Each step covers a possibly-variable Δt_i seconds. For a Brownian process
+ * with per-second stddev σ_s, Var(r_i) = σ_s² · Δt_i, so the time-normalised
+ * return x_i = r_i / √Δt_i has constant variance σ_s². Then σ_s is the sample
+ * stddev of {x_i}:
+ *
+ *   Δt_i = t_i − t_{i-1}
+ *   x_i  = r_i / √Δt_i
+ *   σ_s² = Σ (x_i − μ)² / (N − 1)
+ *   σ_s  = sqrt(σ_s²)             (units: dimensionless × s^-1/2)
  *
  * Notes:
  *   - We compute log returns as `ln(curr/prev)`, NOT `ln(curr) − ln(prev)` as
@@ -70,9 +84,14 @@ export const bigMax = (a: bigint, b: bigint) => (a > b ? a : b);
  *   - `precisionBits` controls the bigint-only `ln`/`sqrt` approximations
  *     (see rational.ts). 48 bits is plenty for vol estimation; tune via
  *     constructor only when a strategy demonstrably needs more.
+ *   - Timestamps are stored alongside samples; passing `undefined` records a
+ *     sentinel and excludes that pair from `volatilityPerSecond` (gas tracker
+ *     pushes without timestamps and only consumes `median`, so this stays
+ *     backwards-compatible).
  */
 export class RollingWindow {
   private readonly samples: bigint[] = [];
+  private readonly timestampsSec: number[] = [];
   private readonly maxSize: number;
   private readonly precisionBits: number;
 
@@ -81,10 +100,16 @@ export class RollingWindow {
     this.precisionBits = precisionBits;
   }
 
-  push(value: bigint): void {
+  /**
+   * Append a sample. `timestampSec` is required for `volatilityPerSecond`
+   * but optional for the per-step `volatility` and `median` consumers.
+   */
+  push(value: bigint, timestampSec?: number): void {
     this.samples.push(value);
+    this.timestampsSec.push(timestampSec ?? Number.NaN);
     if (this.samples.length > this.maxSize) {
       this.samples.shift();
+      this.timestampsSec.shift();
     }
   }
 
@@ -96,7 +121,7 @@ export class RollingWindow {
     return this.samples.length > 0 ? this.samples[this.samples.length - 1] : undefined;
   }
 
-  /** Realized volatility as stddev of log returns. 0 if fewer than 3 samples. */
+  /** Realized per-step volatility (stddev of log returns). 0 if fewer than 3 samples. */
   volatility(): Fraction {
     if (this.samples.length < 3) return new Fraction(0n);
 
@@ -111,18 +136,36 @@ export class RollingWindow {
     }
 
     if (returns.length < 2) return new Fraction(0n);
+    return sampleStddev(returns, this.precisionBits);
+  }
 
-    let sum = new Fraction(0n);
-    for (const r of returns) sum = sum.add(r);
-    const mean = sum.div(new Fraction(BigInt(returns.length)));
+  /**
+   * Realized per-second volatility (stddev of √Δt-normalised log returns).
+   * 0 if fewer than 3 samples or if any required timestamp is missing /
+   * non-monotonic. Units: dimensionless × s^-1/2.
+   */
+  volatilityPerSecond(): Fraction {
+    if (this.samples.length < 3) return new Fraction(0n);
 
-    let varSum = new Fraction(0n);
-    for (const r of returns) {
-      const d = r.sub(mean);
-      varSum = varSum.add(d.mul(d));
+    const xs: Fraction[] = [];
+    for (let i = 1; i < this.samples.length; i++) {
+      const prev = this.samples[i - 1];
+      const curr = this.samples[i];
+      if (prev <= 0n || curr <= 0n) continue;
+
+      const dtSec = this.timestampsSec[i] - this.timestampsSec[i - 1];
+      if (!Number.isFinite(dtSec) || dtSec <= 0) continue;
+
+      const r = ln(new Fraction(curr, prev), this.precisionBits);
+      // Encode Δt as a Fraction with millisecond resolution; sub-ms precision
+      // is irrelevant given the ≤2^-precisionBits truncation in `sqrt`.
+      const dt = new Fraction(BigInt(Math.round(dtSec * 1000)), 1000n);
+      const x = r.div(sqrt(dt, this.precisionBits));
+      xs.push(x);
     }
-    const variance = varSum.div(new Fraction(BigInt(returns.length - 1)));
-    return sqrt(variance, this.precisionBits);
+
+    if (xs.length < 2) return new Fraction(0n);
+    return sampleStddev(xs, this.precisionBits);
   }
 
   /** Median of samples (bigint). */
@@ -133,6 +176,20 @@ export class RollingWindow {
     if (sorted.length % 2 === 1) return sorted[mid];
     return (sorted[mid - 1] + sorted[mid]) / 2n;
   }
+}
+
+function sampleStddev(values: Fraction[], precisionBits: number): Fraction {
+  let sum = new Fraction(0n);
+  for (const v of values) sum = sum.add(v);
+  const mean = sum.div(new Fraction(BigInt(values.length)));
+
+  let varSum = new Fraction(0n);
+  for (const v of values) {
+    const d = v.sub(mean);
+    varSum = varSum.add(d.mul(d));
+  }
+  const variance = varSum.div(new Fraction(BigInt(values.length - 1)));
+  return sqrt(variance, precisionBits);
 }
 
 /**

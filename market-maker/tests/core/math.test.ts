@@ -102,6 +102,76 @@ describe("RollingWindow (bigint samples, Fraction volatility)", () => {
   });
 });
 
+describe("RollingWindow per-second volatility", () => {
+  // σ_per_sec Fractions can have 1000+ bit numerators/denominators (sqrt at
+  // 48-bit precision), which blows up `Number(bigint) / Number(bigint)` to
+  // Infinity/Infinity = NaN. `simplify` collapses the magnitude first.
+  const fracVal = (f: ReturnType<RollingWindow["volatilityPerSecond"]>): number =>
+    f.simplify(1e-12).valueOf();
+
+  it("constant prices → zero per-second vol", () => {
+    const w = new RollingWindow(10);
+    for (let t = 0; t < 5; t++) w.push(100n, t);
+    assert.equal(fracVal(w.volatilityPerSecond()), 0);
+  });
+
+  it("uniform Δt: σ_per_sec ≈ σ_per_step / √Δt", () => {
+    const w = new RollingWindow(10);
+    const prices = [100n, 102n, 98n, 101n, 99n, 103n];
+    const dt = 4; // seconds between samples
+    for (let i = 0; i < prices.length; i++) w.push(prices[i], i * dt);
+    const perStep = w.volatility().simplify(1e-12).valueOf();
+    const perSec = fracVal(w.volatilityPerSecond());
+    // For uniform Δt the relationship is exact: σ_step = σ_sec · √Δt.
+    assert.ok(
+      Math.abs(perStep - perSec * Math.sqrt(dt)) < 1e-9,
+      `expected σ_step=${perStep} ≈ σ_sec=${perSec} × √${dt}`,
+    );
+  });
+
+  it("non-uniform Δt: per-second σ rescales with √Δt", () => {
+    // Two windows with identical price moves but different sampling intervals.
+    // Per-step σ is the same; per-second σ differs by exactly √(slowDt/fastDt).
+    const fast = new RollingWindow(20);
+    const slow = new RollingWindow(20);
+    const moves = [1.005, 0.995, 1.01, 0.99, 1.008, 0.992, 1.003, 0.997];
+    let pf = 1_000_000n;
+    let ps = 1_000_000n;
+    for (let i = 0; i < moves.length; i++) {
+      pf = BigInt(Math.round(Number(pf) * moves[i]));
+      ps = BigInt(Math.round(Number(ps) * moves[i]));
+      fast.push(pf, i * 1); // Δt = 1s
+      slow.push(ps, i * 4); // Δt = 4s
+    }
+    const fastSec = fracVal(fast.volatilityPerSecond());
+    const slowSec = fracVal(slow.volatilityPerSecond());
+    const ratio = fastSec / slowSec;
+    assert.ok(
+      Math.abs(ratio - 2) < 1e-9,
+      `expected fast/slow ≈ 2 (√4), got ${ratio} (fastSec=${fastSec}, slowSec=${slowSec})`,
+    );
+  });
+
+  it("returns 0 when timestamps are missing", () => {
+    const w = new RollingWindow(10);
+    w.push(100n);
+    w.push(110n);
+    w.push(105n);
+    w.push(108n);
+    assert.equal(fracVal(w.volatilityPerSecond()), 0);
+  });
+
+  it("ignores non-monotonic timestamps", () => {
+    const w = new RollingWindow(10);
+    // All deltas non-positive → no usable returns → σ = 0.
+    w.push(100n, 100);
+    w.push(110n, 100);
+    w.push(105n, 99);
+    w.push(108n, 98);
+    assert.equal(fracVal(w.volatilityPerSecond()), 0);
+  });
+});
+
 describe("RollingBudget", () => {
   it("sums entries within window", () => {
     const b = new RollingBudget(60_000);

@@ -69,7 +69,7 @@ export async function runMakerLoop(opts: RunnerOpts): Promise<void> {
   health.onStart = async () => {
     logger.info("start requested via API, re-initializing");
     await book.start();
-    await oracle.update();
+    await oracle.initialize();
     await gas.update();
     await inventory.update();
     await collateral.update();
@@ -82,7 +82,7 @@ export async function runMakerLoop(opts: RunnerOpts): Promise<void> {
       await quoter.initialize();
       await gas.calibrate(() => instrument.estimateCreateGas(mmAddress));
       await book.start();
-      await oracle.update();
+      await oracle.initialize();
       await gas.update();
       await inventory.update();
       await collateral.update();

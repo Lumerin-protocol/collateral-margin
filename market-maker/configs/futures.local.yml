@@ -65,5 +65,12 @@ collateral:
   autoDeposit: false
   autoDepositMinAmount: 0
 
+oracle:
+  # No `history:` block → cold start, σ warms up live as the local oracle
+  # ticks (likely never on hardhat unless you script price updates).
+  windowSize: 60
+  precisionBits: 48
+  historyLookbackMultiplier: 4
+
 health:
   port: 3001

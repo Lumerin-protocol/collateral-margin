@@ -207,6 +207,51 @@ export const healthSchema = Type.Object(
 );
 
 /**
+ * Oracle / volatility-window configuration. Shared between perps and futures
+ * because both consume the same underlying Hashprice USD aggregator and want
+ * the same per-second volatility math.
+ *
+ * `history.subgraphUrl` enables startup backfill from the hashprice-oracle
+ * subgraph (`HashpriceUsd` time series). Without it, the rolling window
+ * starts empty and σ warms up live as the on-chain feed updates.
+ */
+export const oracleSchema = Type.Object(
+  {
+    windowSize: Type.Integer({
+      minimum: 3,
+      default: 60,
+      description:
+        "Number of de-duplicated price samples retained for realized-vol estimation. 60 is enough for a ±9% standard error on σ; tune up for smoother σ at the cost of slower regime tracking.",
+    }),
+    precisionBits: Type.Integer({
+      minimum: 16,
+      maximum: 256,
+      default: 48,
+      description:
+        "Bits of fractional precision for the bigint ln/sqrt approximations underpinning σ. 48 is plenty for vol math; raise only if a strategy demonstrably needs more.",
+    }),
+    historyLookbackMultiplier: Type.Number({
+      minimum: 1,
+      default: 4,
+      description:
+        "Backfill fetches `windowSize × multiplier × pollInterval` of history from the subgraph, then trims duplicates. Multiplier > 1 absorbs Chainlink's slow update cadence so the window arrives full.",
+    }),
+    history: Type.Optional(
+      Type.Object(
+        {
+          subgraphUrl: Type.String({
+            description:
+              "GraphQL endpoint for the hashprice-oracle subgraph (queries the HashpriceUsd time-series). Empty string is treated as 'no source' so YAML can use $\u007BVAR:-\u007D patterns; omit the entire `history` block for the same effect.",
+          }),
+        },
+        { ...Closed, description: "Historical price source for σ window backfill." },
+      ),
+    ),
+  },
+  { ...Closed, description: "OracleTracker / volatility-window configuration." },
+);
+
+/**
  * ${VAR} expansion. Recursively walks strings in the parsed YAML and replaces
  * ${NAME} with process.env.NAME. The `${NAME:-default}` form supplies a
  * fallback when the variable is unset.
@@ -268,6 +313,14 @@ export interface ParsedCollateralConfig {
   maxCollateralAmount?: bigint;
 }
 
+export interface ParsedOracleConfig {
+  windowSize: number;
+  precisionBits: number;
+  historyLookbackMultiplier: number;
+  /** Undefined when `history` is omitted; backfill is then skipped. */
+  history?: { subgraphUrl: string };
+}
+
 interface RawRisk {
   maxPositionSize: string | number;
   maxUtilizationPct: number;
@@ -290,6 +343,12 @@ interface RawCollateral {
   autoDeposit: boolean;
   autoDepositMinAmount: string | number;
   maxCollateralAmount?: string | number;
+}
+interface RawOracle {
+  windowSize: number;
+  precisionBits: number;
+  historyLookbackMultiplier: number;
+  history?: { subgraphUrl: string };
 }
 
 export function parseRiskConfig(raw: RawRisk): ParsedRiskConfig {
@@ -336,6 +395,19 @@ export function parseCollateralConfig(raw: RawCollateral): ParsedCollateralConfi
       raw.maxCollateralAmount !== undefined
         ? parseUsd(raw.maxCollateralAmount, USD_DECIMALS, "collateral.maxCollateralAmount")
         : undefined,
+  };
+}
+
+export function parseOracleConfig(raw: RawOracle): ParsedOracleConfig {
+  // An empty `subgraphUrl` (typical when env var is unset and the YAML uses
+  // `${VAR:-}`) is treated identically to omitting the `history` block —
+  // backfill is silently skipped and σ warms up live.
+  const url = raw.history?.subgraphUrl?.trim();
+  return {
+    windowSize: raw.windowSize,
+    precisionBits: raw.precisionBits,
+    historyLookbackMultiplier: raw.historyLookbackMultiplier,
+    history: url ? { subgraphUrl: url } : undefined,
   };
 }
 

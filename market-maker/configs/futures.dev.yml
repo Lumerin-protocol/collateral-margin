@@ -1,10 +1,11 @@
 # yaml-language-server: $schema=../schemas/futures.json
 # Titan Market Maker - Futures - DEV (base-sepolia).
 #
-#   PRIVATE_KEY             - hex private key of the dev market-making wallet
-#   ALCHEMY_API_KEY         - Alchemy API key (URL is composed below)
-#   FUTURES_ADDRESS         - Futures address on base-sepolia
-#   ETH_PRICE_FEED_ADDRESS  - optional Chainlink ETH/USD aggregator on base-sepolia
+#   PRIVATE_KEY                       - hex private key of the dev market-making wallet
+#   ALCHEMY_API_KEY                   - Alchemy API key (URL is composed below)
+#   FUTURES_ADDRESS                   - Futures address on base-sepolia
+#   ETH_PRICE_FEED_ADDRESS            - optional Chainlink ETH/USD aggregator on base-sepolia
+#   HASHPRICE_ORACLE_SUBGRAPH_URL     - optional hashprice-oracle subgraph URL for σ backfill
 
 nodeEnv: development
 commitHash: ${COMMIT_HASH:-unknown}
@@ -73,6 +74,16 @@ collateral:
   autoDeposit: true
   autoDepositMinAmount: 500
   maxCollateralAmount: 1000
+
+oracle:
+  # Window de-duplicates by price, so 60 samples ≈ 60 oracle updates regardless
+  # of poll cadence. Multiplier 4× compensates for Chainlink's slow heartbeat
+  # so backfill returns a full window.
+  windowSize: 60
+  precisionBits: 48
+  historyLookbackMultiplier: 4
+  history:
+    subgraphUrl: ${HASHPRICE_ORACLE_SUBGRAPH_URL:-}
 
 health:
   port: ${MAKER_HEALTH_PORT:-3001}
