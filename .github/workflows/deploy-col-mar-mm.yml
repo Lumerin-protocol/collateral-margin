@@ -75,6 +75,8 @@ jobs:
       futures_service: ${{ steps.env_config.outputs.futures_service }}
       perps_task_family: ${{ steps.env_config.outputs.perps_task_family }}
       futures_task_family: ${{ steps.env_config.outputs.futures_task_family }}
+      perps_health_url: ${{ steps.env_config.outputs.perps_health_url }}
+      futures_health_url: ${{ steps.env_config.outputs.futures_health_url }}
       is_cicd_branch: ${{ steps.gen_tag.outputs.is_cicd_branch }}
 
     steps:
@@ -100,18 +102,24 @@ jobs:
           echo "perps_task_family=tsk-col-mar-perps-mm" >> $GITHUB_OUTPUT
           echo "futures_task_family=tsk-col-mar-futures-mm" >> $GITHUB_OUTPUT
 
+          # URL_HOST_PREFIX matches the per-env Route53 alias produced by the
+          # collateral-margin TF stack (perps_mm_endpoint / futures_mm_endpoint
+          # in 00_outputs.tf): dev/stg get a subdomain, prod uses the apex.
           case "$ENV" in
             dev)
               SUFFIX="dev"
               MAKER_ENV="dev"
+              URL_HOST_PREFIX="dev."
               ;;
             stg)
               SUFFIX="stg"
               MAKER_ENV="stg"
+              URL_HOST_PREFIX="stg."
               ;;
             main)
               SUFFIX="lmn"
               MAKER_ENV="prd"
+              URL_HOST_PREFIX=""
               ;;
             *)
               echo "::error::Unknown environment '$ENV'"
@@ -124,6 +132,8 @@ jobs:
           echo "ecs_cluster=ecs-derivatives-marketplace-${SUFFIX}" >> $GITHUB_OUTPUT
           echo "perps_service=svc-col-mar-perps-mm-${SUFFIX}" >> $GITHUB_OUTPUT
           echo "futures_service=svc-col-mar-futures-mm-${SUFFIX}" >> $GITHUB_OUTPUT
+          echo "perps_health_url=https://perpsmm.${URL_HOST_PREFIX}hashpower.exchange/health" >> $GITHUB_OUTPUT
+          echo "futures_health_url=https://futuresmm.${URL_HOST_PREFIX}hashpower.exchange/health" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -467,4 +477,4 @@ jobs:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           image_tag: ${{ needs.build.outputs.is_cicd_branch != 'true' && format('{0}:{1}', env.GHCR_IMAGE, needs.build.outputs.version) || '' }}
-          additional_info: '${{ needs.build.outputs.is_cicd_branch == ''true'' && ''*Mode:* CI/CD Test (build only, no deploy)'' || format(''*Cluster:* `{0}` • *Services:* `{1}`, `{2}`'', needs.build.outputs.ecs_cluster, needs.build.outputs.perps_service, needs.build.outputs.futures_service) }}'
+          additional_info: '${{ needs.build.outputs.is_cicd_branch == ''true'' && ''*Mode:* CI/CD Test (build only, no deploy)'' || format(''*Cluster:* `{0}` • *Services:* `{1}`, `{2}` • *Health:* <{3}|Perps> <{4}|Futures>'', needs.build.outputs.ecs_cluster, needs.build.outputs.perps_service, needs.build.outputs.futures_service, needs.build.outputs.perps_health_url, needs.build.outputs.futures_health_url) }}'
