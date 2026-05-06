@@ -34,14 +34,14 @@ on:
       - dev
       - stg
       - main
-      - 'cicd/**'
+      - "cicd/**"
     paths:
-      - 'market-maker/**'
-      - '.github/workflows/deploy-col-mar-mm.yml'
+      - "market-maker/**"
+      - ".github/workflows/deploy-col-mar-mm.yml"
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Target environment (dev=DEV, stg=STG, main=LMN/PROD)'
+        description: "Target environment (dev=DEV, stg=STG, main=LMN/PROD)"
         required: true
         type: choice
         options:
@@ -50,9 +50,9 @@ on:
           - main
 
 permissions:
-  id-token: write   # Required for OIDC
-  contents: write   # Required for creating git tags on main
-  packages: write   # For GHCR
+  id-token: write # Required for OIDC
+  contents: write # Required for creating git tags on main
+  packages: write # For GHCR
 
 env:
   COMPONENT: col-mar-mm
@@ -91,8 +91,9 @@ jobs:
         uses: ./.github/actions/gen-tag
         with:
           component: col-mar-mm
-          major_version: '1'
-          environment_override: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || '' }}
+          major_version: "1"
+          environment_override: ${{ github.event_name == 'workflow_dispatch' &&
+            github.event.inputs.environment || '' }}
 
       - name: Environment config
         id: env_config
@@ -194,20 +195,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        app: [perps, futures]
+        app: [ perps, futures ]
 
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ needs.build.outputs.environment == 'dev' && secrets.AWS_ROLE_ARN_DEV || needs.build.outputs.environment == 'stg' && secrets.AWS_ROLE_ARN_STG || secrets.AWS_ROLE_ARN_LMN }}
+          role-to-assume: ${{ needs.build.outputs.environment == 'dev' &&
+            secrets.AWS_ROLE_ARN_DEV || needs.build.outputs.environment == 'stg'
+            && secrets.AWS_ROLE_ARN_STG || secrets.AWS_ROLE_ARN_LMN }}
           aws-region: ${{ needs.build.outputs.aws_region }}
           role-session-name: GitHubActions-ColMarMM-${{ matrix.app }}-${{ github.run_id }}
 
       - name: Verify service exists
         id: svc_check
         env:
-          SERVICE: ${{ matrix.app == 'perps' && needs.build.outputs.perps_service || needs.build.outputs.futures_service }}
+          SERVICE: ${{ matrix.app == 'perps' && needs.build.outputs.perps_service ||
+            needs.build.outputs.futures_service }}
           CLUSTER: ${{ needs.build.outputs.ecs_cluster }}
           REGION: ${{ needs.build.outputs.aws_region }}
         run: |
@@ -231,33 +235,37 @@ jobs:
         if: steps.svc_check.outputs.skip != 'true'
         env:
           # Routing
-          CLUSTER:     ${{ needs.build.outputs.ecs_cluster }}
-          SERVICE:     ${{ matrix.app == 'perps' && needs.build.outputs.perps_service || needs.build.outputs.futures_service }}
-          TASK_FAMILY: ${{ matrix.app == 'perps' && needs.build.outputs.perps_task_family || needs.build.outputs.futures_task_family }}
-          REGION:      ${{ needs.build.outputs.aws_region }}
-          IMAGE:       ${{ env.GHCR_IMAGE }}:${{ needs.build.outputs.version }}
+          CLUSTER: ${{ needs.build.outputs.ecs_cluster }}
+          SERVICE: ${{ matrix.app == 'perps' && needs.build.outputs.perps_service ||
+            needs.build.outputs.futures_service }}
+          TASK_FAMILY: ${{ matrix.app == 'perps' && needs.build.outputs.perps_task_family
+            || needs.build.outputs.futures_task_family }}
+          REGION: ${{ needs.build.outputs.aws_region }}
+          IMAGE: ${{ env.GHCR_IMAGE }}:${{ needs.build.outputs.version }}
 
           # Per-environment GitHub Variables (non-secret personality)
-          MAKER_LOG_LEVEL:                 ${{ vars.MAKER_LOG_LEVEL }}
-          MAKER_DRY_RUN:                   ${{ vars.MAKER_DRY_RUN }}
+          MAKER_LOG_LEVEL: ${{ vars.MAKER_LOG_LEVEL }}
+          MAKER_DRY_RUN: ${{ vars.MAKER_DRY_RUN }}
           MAKER_CANCEL_ORDERS_ON_SHUTDOWN: ${{ vars.MAKER_CANCEL_ORDERS_ON_SHUTDOWN }}
-          MAKER_HEALTH_PORT:               ${{ vars.MAKER_HEALTH_PORT }}
-          MAKER_DESIRED_COUNT:             ${{ vars.MAKER_DESIRED_COUNT }}
-          ETH_PRICE_FEED_ADDRESS:          ${{ vars.ETH_PRICE_FEED_ADDRESS }}
+          MAKER_HEALTH_PORT: ${{ vars.MAKER_HEALTH_PORT }}
+          MAKER_DESIRED_COUNT: ${{ vars.MAKER_DESIRED_COUNT }}
+          ETH_PRICE_FEED_ADDRESS: ${{ vars.ETH_PRICE_FEED_ADDRESS }}
 
           # Per-environment GitHub Secrets (encrypted personality). Secrets
           # only flow into this step's process env via inline ternaries; they
           # are never written to step outputs or to disk on the runner.
           ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
-          PRIVATE_KEY:     ${{ matrix.app == 'perps' && secrets.PERPS_MM_PRIVATE_KEY || secrets.FUTURES_MM_PRIVATE_KEY }}
+          PRIVATE_KEY: ${{ matrix.app == 'perps' && secrets.PERPS_MM_PRIVATE_KEY ||
+            secrets.FUTURES_MM_PRIVATE_KEY }}
 
           # Per-venue config selected by matrix.app
-          VENUE_ADDR_NAME:  ${{ matrix.app == 'perps' && 'PERPS_ADDRESS' || 'FUTURES_ADDRESS' }}
-          VENUE_ADDR_VALUE: ${{ matrix.app == 'perps' && vars.PERPS_ADDRESS || vars.FUTURES_ADDRESS }}
+          VENUE_ADDR_NAME: ${{ matrix.app == 'perps' && 'PERPS_ADDRESS' || 'FUTURES_ADDRESS' }}
+          VENUE_ADDR_VALUE: ${{ matrix.app == 'perps' && vars.PERPS_ADDRESS ||
+            vars.FUTURES_ADDRESS }}
 
           # Computed
-          MAKER_APP:   ${{ matrix.app }}
-          MAKER_ENV:   ${{ needs.build.outputs.maker_env }}
+          MAKER_APP: ${{ matrix.app }}
+          MAKER_ENV: ${{ needs.build.outputs.maker_env }}
           COMMIT_HASH: ${{ github.sha }}
         run: |
           set -euo pipefail
@@ -301,6 +309,7 @@ jobs:
             --arg PRIVATE_KEY                     "${PRIVATE_KEY}" \
             --arg VENUE_ADDR_NAME                 "${VENUE_ADDR_NAME}" \
             --arg VENUE_ADDR_VALUE                "${VENUE_ADDR_VALUE}" \
+            --arg HASHPRICE_ORACLE_SUBGRAPH_URL   "${HASHPRICE_ORACLE_SUBGRAPH_URL}" \
             '[
               {name:"MAKER_APP",                       value:$MAKER_APP},
               {name:"MAKER_ENV",                       value:$MAKER_ENV},
@@ -312,7 +321,8 @@ jobs:
               {name:"ETH_PRICE_FEED_ADDRESS",          value:$ETH_PRICE_FEED_ADDRESS},
               {name:"ALCHEMY_API_KEY",                 value:$ALCHEMY_API_KEY},
               {name:"PRIVATE_KEY",                     value:$PRIVATE_KEY},
-              {name:$VENUE_ADDR_NAME,                  value:$VENUE_ADDR_VALUE}
+              {name:$VENUE_ADDR_NAME,                  value:$VENUE_ADDR_VALUE},
+              {name:"HASHPRICE_ORACLE_SUBGRAPH_URL",   value:$HASHPRICE_ORACLE_SUBGRAPH_URL}
             ]' > env-block.json
 
           # Replace the entire env block; also drop any stale `secrets` block
@@ -346,26 +356,29 @@ jobs:
   verify:
     name: 🔍 Verify ${{ matrix.app }}
     runs-on: ubuntu-latest
-    needs: [build, deploy]
+    needs: [ build, deploy ]
     if: needs.build.outputs.is_cicd_branch != 'true'
     strategy:
       fail-fast: false
       matrix:
-        app: [perps, futures]
+        app: [ perps, futures ]
 
     steps:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ needs.build.outputs.environment == 'dev' && secrets.AWS_ROLE_ARN_DEV || needs.build.outputs.environment == 'stg' && secrets.AWS_ROLE_ARN_STG || secrets.AWS_ROLE_ARN_LMN }}
+          role-to-assume: ${{ needs.build.outputs.environment == 'dev' &&
+            secrets.AWS_ROLE_ARN_DEV || needs.build.outputs.environment == 'stg'
+            && secrets.AWS_ROLE_ARN_STG || secrets.AWS_ROLE_ARN_LMN }}
           aws-region: ${{ needs.build.outputs.aws_region }}
           role-session-name: GitHubActions-ColMarMM-${{ matrix.app }}-Verify-${{ github.run_id }}
 
       - name: Wait for service to stabilize
         env:
-          SERVICE: ${{ matrix.app == 'perps' && needs.build.outputs.perps_service || needs.build.outputs.futures_service }}
+          SERVICE: ${{ matrix.app == 'perps' && needs.build.outputs.perps_service ||
+            needs.build.outputs.futures_service }}
           CLUSTER: ${{ needs.build.outputs.ecs_cluster }}
-          REGION:  ${{ needs.build.outputs.aws_region }}
+          REGION: ${{ needs.build.outputs.aws_region }}
         run: |
           ACTIVE=$(aws ecs describe-services \
             --cluster "$CLUSTER" \
@@ -388,7 +401,7 @@ jobs:
   cleanup:
     name: 🧹 Cleanup
     runs-on: ubuntu-latest
-    needs: [build, verify]
+    needs: [ build, verify ]
     if: always() && needs.build.outputs.is_cicd_branch != 'true'
 
     steps:
@@ -443,7 +456,7 @@ jobs:
   notify:
     name: 📢 Notify
     runs-on: ubuntu-latest
-    needs: [build, deploy, verify, cleanup]
+    needs: [ build, deploy, verify, cleanup ]
     if: always() && (needs.build.result == 'success')
 
     steps:
@@ -472,9 +485,18 @@ jobs:
         with:
           status: ${{ steps.status.outputs.status }}
           environment: ${{ needs.build.outputs.environment }}
-          service_name: 'Collateral Margin Market Maker'
+          service_name: "Collateral Margin Market Maker"
           version: ${{ needs.build.outputs.version }}
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          image_tag: ${{ needs.build.outputs.is_cicd_branch != 'true' && format('{0}:{1}', env.GHCR_IMAGE, needs.build.outputs.version) || '' }}
-          additional_info: "${{ needs.build.outputs.is_cicd_branch == 'true' && '*Mode:* CI/CD Test (build only, no deploy)' || format('*Health:* <{0}|Perps> <{1}|Futures>\n*Cluster:* `{2}` • *Services:* `{3}`, `{4}`', needs.build.outputs.perps_health_url, needs.build.outputs.futures_health_url, needs.build.outputs.ecs_cluster, needs.build.outputs.perps_service, needs.build.outputs.futures_service) }}"
+          image_tag: ${{ needs.build.outputs.is_cicd_branch != 'true' && format('{0}:{1}',
+            env.GHCR_IMAGE, needs.build.outputs.version) || '' }}
+          additional_info: "${{ needs.build.outputs.is_cicd_branch == 'true' && '*Mode:*
+            CI/CD Test (build only, no deploy)' || format('*Health:* <{0}|Perps>
+            <{1}|Futures>
+
+            *Cluster:* `{2}` • *Services:* `{3}`, `{4}`',
+            needs.build.outputs.perps_health_url,
+            needs.build.outputs.futures_health_url,
+            needs.build.outputs.ecs_cluster, needs.build.outputs.perps_service,
+            needs.build.outputs.futures_service) }}"
