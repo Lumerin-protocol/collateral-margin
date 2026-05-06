@@ -477,4 +477,4 @@ jobs:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           image_tag: ${{ needs.build.outputs.is_cicd_branch != 'true' && format('{0}:{1}', env.GHCR_IMAGE, needs.build.outputs.version) || '' }}
-          additional_info: '${{ needs.build.outputs.is_cicd_branch == ''true'' && ''*Mode:* CI/CD Test (build only, no deploy)'' || format(''*Cluster:* `{0}` • *Services:* `{1}`, `{2}` • *Health:* <{3}|Perps> <{4}|Futures>'', needs.build.outputs.ecs_cluster, needs.build.outputs.perps_service, needs.build.outputs.futures_service, needs.build.outputs.perps_health_url, needs.build.outputs.futures_health_url) }}'
+          additional_info: "${{ needs.build.outputs.is_cicd_branch == 'true' && '*Mode:* CI/CD Test (build only, no deploy)' || format('*Health:* <{0}|Perps> <{1}|Futures>\n*Cluster:* `{2}` • *Services:* `{3}`, `{4}`', needs.build.outputs.perps_health_url, needs.build.outputs.futures_health_url, needs.build.outputs.ecs_cluster, needs.build.outputs.perps_service, needs.build.outputs.futures_service) }}"
