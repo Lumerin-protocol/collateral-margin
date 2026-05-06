@@ -19,7 +19,12 @@ export interface ExecutorStats {
 export interface HealthCheckOptions {
   port: number;
   appName: string;
-  /** Sanitised, JSON-safe config slice for /health output. */
+  /**
+   * Full parsed config with secrets redacted (private keys, RPC API keys),
+   * surfaced verbatim under `config` in /health output. Build via
+   * `sanitiseConfig` from `core/config/base.ts`. Bigints are serialised to
+   * strings by the /health JSON.stringify replacer.
+   */
   configSummary: Record<string, unknown>;
   oracle: OracleTracker;
   inventory: InventoryManager;
@@ -97,63 +102,72 @@ export class HealthCheck {
 
   private handleHealth(res: ServerResponse): void {
     const { oracle, inventory, collateral, book, gas, risk } = this.opts;
-    const body = JSON.stringify({
-      app: this.opts.appName,
-      status: this.status,
-      walletAddress: this.walletAddress,
-      lastError: this.lastError,
-      uptimeSeconds: Math.floor((Date.now() - this.startedAt) / 1000),
-      config: this.opts.configSummary,
-      market: {
-        oraclePrice: oracle.currentPrice.toString(),
-        volatility: fractionToNumber(oracle.volatility),
-        bestBid: book.bestBid.toString(),
-        bestAsk: book.bestAsk.toString(),
-        ownOrders: book.ownOrders.size,
+    const body = JSON.stringify(
+      {
+        app: this.opts.appName,
+        status: this.status,
+        walletAddress: this.walletAddress,
+        lastError: this.lastError,
+        uptimeSeconds: Math.floor((Date.now() - this.startedAt) / 1000),
+        config: this.opts.configSummary,
+        market: {
+          oraclePrice: oracle.currentPrice.toString(),
+          volatility: fractionToNumber(oracle.volatility),
+          bestBid: book.bestBid.toString(),
+          bestAsk: book.bestAsk.toString(),
+          ownOrders: book.ownOrders.size,
+        },
+        inventory: {
+          netPosition: inventory.netQuantity.toString(),
+          inventorySkew: fractionToNumber(inventory.inventorySkew),
+        },
+        collateral: {
+          vaultBalance: collateral.vaultBalance.toString(),
+          portfolioIM: collateral.portfolioIM.toString(),
+          portfolioMM: collateral.portfolioMM.toString(),
+          venueOrderMargin: collateral.venueOrderMargin.toString(),
+          venueUnrealizedPnl: collateral.venueUnrealizedPnl.toString(),
+          walletTokenBalance: collateral.walletTokenBalance.toString(),
+          nativeBalance: collateral.nativeBalance.toString(),
+          utilizationPct: collateral.utilizationPct,
+        },
+        gas: {
+          gasGwei: (Number(gas.currentGasPrice) / 1e9).toFixed(2),
+          gasSpiking: gas.isGasSpiking,
+          gasSpikePct: fractionToNumber(gas.gasSpikePct).toFixed(0),
+        },
+        risk: {
+          throttled: risk.throttled,
+          throttleReason: risk.throttleReason,
+          cumulativeGasCostUsd: risk.cumulativeGasCostUsd.toString(),
+        },
+        stats: {
+          tickCount: this.tickCount,
+          lastTickAt: this.lastTickAt,
+          ordersPlaced: this.executorStats?.ordersPlaced ?? 0,
+          ordersCancelled: this.executorStats?.ordersCancelled ?? 0,
+          reconcileCount: this.executorStats?.reconcileCount ?? 0,
+        },
       },
-      inventory: {
-        netPosition: inventory.netQuantity.toString(),
-        inventorySkew: fractionToNumber(inventory.inventorySkew),
-      },
-      collateral: {
-        vaultBalance: collateral.vaultBalance.toString(),
-        portfolioIM: collateral.portfolioIM.toString(),
-        portfolioMM: collateral.portfolioMM.toString(),
-        venueOrderMargin: collateral.venueOrderMargin.toString(),
-        venueUnrealizedPnl: collateral.venueUnrealizedPnl.toString(),
-        walletTokenBalance: collateral.walletTokenBalance.toString(),
-        nativeBalance: collateral.nativeBalance.toString(),
-        utilizationPct: collateral.utilizationPct,
-      },
-      gas: {
-        gasGwei: (Number(gas.currentGasPrice) / 1e9).toFixed(2),
-        gasSpiking: gas.isGasSpiking,
-        gasSpikePct: fractionToNumber(gas.gasSpikePct).toFixed(0),
-      },
-      risk: {
-        throttled: risk.throttled,
-        throttleReason: risk.throttleReason,
-        cumulativeGasCostUsd: risk.cumulativeGasCostUsd.toString(),
-      },
-      stats: {
-        tickCount: this.tickCount,
-        lastTickAt: this.lastTickAt,
-        ordersPlaced: this.executorStats?.ordersPlaced ?? 0,
-        ordersCancelled: this.executorStats?.ordersCancelled ?? 0,
-        reconcileCount: this.executorStats?.reconcileCount ?? 0,
-      },
-    });
+      bigIntReplacer,
+    );
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(body);
   }
 
   private handleStop(res: ServerResponse): void {
-    if (this.paused) return this.respondOk(res);
+    if (this.paused) {
+      this.respondOk(res);
+      return;
+    }
     this.paused = true;
     this.status = "stopped";
     this.lastError = null;
 
-    if (!this.onStop) return this.respondOk(res);
+    if (!this.onStop) {
+      this.respondOk(res);
+      return;
+    }
     this.onStop()
       .then(() => this.respondOk(res))
       .catch((err) => {
@@ -163,13 +177,24 @@ export class HealthCheck {
       });
   }
 
+  private respondOk(res: ServerResponse): void {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ok: true, status: this.status }));
+  }
+
   private handleStart(res: ServerResponse): void {
-    if (!this.paused) return this.respondOk(res);
+    if (!this.paused) {
+      this.respondOk(res);
+      return;
+    }
     this.paused = false;
     this.status = "running";
     this.lastError = null;
 
-    if (!this.onStart) return this.respondOk(res);
+    if (!this.onStart) {
+      this.respondOk(res);
+      return;
+    }
     this.onStart()
       .then(() => this.respondOk(res))
       .catch((err) => {
@@ -178,14 +203,13 @@ export class HealthCheck {
         res.end(JSON.stringify({ ok: false, error: "start callback failed" }));
       });
   }
-
-  private respondOk(res: ServerResponse): void {
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true, status: this.status }));
-  }
 }
 
 function fractionToNumber(value: Fraction): number {
   // diagnostic only — never used in trading math
   return (Number(value.s) * Number(value.n)) / Number(value.d);
+}
+
+function bigIntReplacer(_key: string, value: unknown): unknown {
+  return typeof value === "bigint" ? value.toString() : value;
 }
