@@ -1,10 +1,5 @@
 import type pino from "pino";
-import type {
-  OwnOrder,
-  OwnOrderEvent,
-  OwnOrderSource,
-  Unsubscribe,
-} from "../../core/adapter.ts";
+import type { OwnOrder, OwnOrderEvent, OwnOrderSource, Unsubscribe } from "../../core/adapter.ts";
 import { FuturesAbi } from "futures-contracts/abi/Futures.ts";
 import type { FuturesVenueAdapter } from "./venue.ts";
 import { FUTURES_INSTRUMENT_ID } from "./events.ts";
@@ -78,11 +73,15 @@ export class FuturesOwnOrders implements OwnOrderSource {
       functionName: "getOrderById" as const,
       args: [id] as const,
     }));
-    const orders = await this.venue.publicClient.multicall({ allowFailure: false, contracts: calls });
+    const orders = await this.venue.publicClient.multicall({
+      allowFailure: false,
+      contracts: calls,
+    });
 
     for (let i = 0; i < orderIds.length; i++) {
       const o = orders[i];
-      if (!o.participant || o.participant === "0x0000000000000000000000000000000000000000") continue;
+      if (!o.participant || o.participant === "0x0000000000000000000000000000000000000000")
+        continue;
       this.cache.set(orderIds[i], {
         orderId: orderIds[i],
         price: o.pricePerDay,
