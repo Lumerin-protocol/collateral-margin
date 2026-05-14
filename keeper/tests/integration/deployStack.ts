@@ -39,6 +39,7 @@ export const HARDHAT_PRIVATE_KEYS = [
   "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a", // #2 bob
   "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6", // #3 liquidator
   "0x47e179ec197488593b187f80a00eb0da91f1b9d0b13f8733639f19c30a34926a", // #4 validator
+  "0x8b3a350cf5c34c9194ca85829a2df0ec3153be0318b5e2d3348e872092edffba", // #5 dave (second test trader)
 ] as const satisfies readonly Hex[];
 
 export interface Wallet {
@@ -56,6 +57,8 @@ export interface DeployedStack {
     bob: Wallet;
     liquidator: Wallet;
     validator: Wallet;
+    /** Spare trader for multi-account scenarios. */
+    dave: Wallet;
   };
   addresses: {
     usdc: Address;
@@ -149,12 +152,13 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     } satisfies Wallet;
   });
   // Destructure with non-null assertions — the array literal above guarantees
-  // 5 elements, but TS can't see that through `Array.prototype.map`.
+  // 6 elements, but TS can't see that through `Array.prototype.map`.
   const owner = wallets[0]!;
   const alice = wallets[1]!;
   const bob = wallets[2]!;
   const liquidator = wallets[3]!;
   const validator = wallets[4]!;
+  const dave = wallets[5]!;
 
   // ── Infrastructure: Multicall3 ────────────────────────────────────────
   // Deployed first because `buildKeeper` reads its address into the chain
@@ -259,13 +263,13 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
   ]);
 
   // ── Fund & approve test wallets ───────────────────────────────────────
-  for (const w of [alice, bob, liquidator, validator]) {
+  for (const w of [alice, bob, liquidator, validator, dave]) {
     await write(publicClient, owner.client, usdc, usdcArt.abi, "transfer", [
       w.account.address,
       INITIAL_USER_BALANCE,
     ]);
   }
-  for (const w of [owner, alice, bob, liquidator, validator]) {
+  for (const w of [owner, alice, bob, liquidator, validator, dave]) {
     await write(publicClient, w.client, usdc, usdcArt.abi, "approve", [vault, APPROVE_MAX]);
   }
 
@@ -278,7 +282,7 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     publicClient,
     testClient,
     rpcUrl,
-    accounts: { owner, alice, bob, liquidator, validator },
+    accounts: { owner, alice, bob, liquidator, validator, dave },
     addresses: {
       usdc,
       hashpriceOracle,

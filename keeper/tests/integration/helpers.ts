@@ -158,6 +158,51 @@ export async function expectNoOpenOrders(
 }
 
 // ─────────────────────────────────────────────────────────────────────────
+// Liquidation-event ordering helpers
+// ─────────────────────────────────────────────────────────────────────────
+//
+// All four readers return the *earliest* block number a given event was
+// emitted at for `user`, or `null` if no matching event was emitted.
+// Tests then compare block numbers across helpers to assert the planner's
+// invariants (orders-leg before position-leg, worst-leg first, etc).
+//
+// The perps event indexes `user`; the futures event indexes `participant`.
+// viem doesn't auto-translate, so each helper passes the right kwarg.
+
+export const readPerpsPositionLiquidationBlock = (s: DeployedStack, u: Address) =>
+  earliestEventBlock(s, "perps", "PositionLiquidated", { user: u });
+
+export const readFuturesPositionLiquidationBlock = (s: DeployedStack, u: Address) =>
+  earliestEventBlock(s, "futures", "PositionLiquidated", { participant: u });
+
+export const readPerpsOrderLiquidationBlock = (s: DeployedStack, u: Address) =>
+  earliestEventBlock(s, "perps", "OrderLiquidated", { user: u });
+
+export const readFuturesOrderLiquidationBlock = (s: DeployedStack, u: Address) =>
+  earliestEventBlock(s, "futures", "OrderLiquidated", { participant: u });
+
+async function earliestEventBlock(
+  stack: DeployedStack,
+  venue: "perps" | "futures",
+  eventName: "PositionLiquidated" | "OrderLiquidated",
+  args: Record<string, Address>,
+): Promise<bigint | null> {
+  const logs = await stack.publicClient.getContractEvents({
+    address: stack.addresses[venue],
+    abi: stack.abis[venue],
+    eventName,
+    args,
+    fromBlock: 0n,
+  });
+  let earliest: bigint | null = null;
+  for (const log of logs) {
+    if (log.blockNumber === null) continue;
+    if (earliest === null || log.blockNumber < earliest) earliest = log.blockNumber;
+  }
+  return earliest;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
 // PlanOutcome assertions
 // ─────────────────────────────────────────────────────────────────────────
 

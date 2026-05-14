@@ -15,16 +15,27 @@ import { startWebhookSink } from "./webhookSink.ts";
 import {
   aliceDepositFixtureBuilder,
   perpsLongCrashFixtureBuilder,
+  perpsShortCrashFixtureBuilder,
+  perpsOrdersAndPositionFixtureBuilder,
+  twoUnderwaterUsersFixtureBuilder,
   futuresLongCrashFixtureBuilder,
   futuresOrdersAndPositionFixtureBuilder,
   multiFuturesFixtureBuilder,
-  crossVenueFixtureBuilder,
+  crossVenuePerpsDominantFixtureBuilder,
+  crossVenueFuturesDominantFixtureBuilder,
+  crossVenueOrdersAndPositionsFixtureBuilder,
 } from "./scenarios.ts";
 import {
   discoverUser,
   discoverAndIndex,
   runOneSweep,
+  readPerpsOrderIds,
   readFuturesOrderIds,
+  readPerpsPositionLiquidationBlock,
+  readFuturesPositionLiquidationBlock,
+  readPerpsOrderLiquidationBlock,
+  readFuturesOrderLiquidationBlock,
+  readPerpsPosition,
   expectPerpsClosed,
   expectFuturesClosed,
   expectNoOpenOrders,
@@ -63,10 +74,15 @@ let keeper: KeeperHarness | undefined;
 // Fixture closures held at module scope — see scenarios.ts for why.
 let aliceDepositFixture: ReturnType<typeof aliceDepositFixtureBuilder>;
 let perpsLongCrashFixture: ReturnType<typeof perpsLongCrashFixtureBuilder>;
+let perpsShortCrashFixture: ReturnType<typeof perpsShortCrashFixtureBuilder>;
+let perpsOrdersAndPositionFixture: ReturnType<typeof perpsOrdersAndPositionFixtureBuilder>;
+let twoUnderwaterUsersFixture: ReturnType<typeof twoUnderwaterUsersFixtureBuilder>;
 let futuresLongCrashFixture: ReturnType<typeof futuresLongCrashFixtureBuilder>;
 let futuresOrdersAndPositionFixture: ReturnType<typeof futuresOrdersAndPositionFixtureBuilder>;
 let multiFuturesFixture: ReturnType<typeof multiFuturesFixtureBuilder>;
-let crossVenueFixture: ReturnType<typeof crossVenueFixtureBuilder>;
+let crossVenuePerpsDominantFixture: ReturnType<typeof crossVenuePerpsDominantFixtureBuilder>;
+let crossVenueFuturesDominantFixture: ReturnType<typeof crossVenueFuturesDominantFixtureBuilder>;
+let crossVenueOrdersAndPositionsFixture: ReturnType<typeof crossVenueOrdersAndPositionsFixtureBuilder>;
 
 before(
   async () => {
@@ -80,10 +96,15 @@ before(
       .extend(walletActions);
     aliceDepositFixture = aliceDepositFixtureBuilder(node.rpcUrl);
     perpsLongCrashFixture = perpsLongCrashFixtureBuilder(node.rpcUrl);
+    perpsShortCrashFixture = perpsShortCrashFixtureBuilder(node.rpcUrl);
+    perpsOrdersAndPositionFixture = perpsOrdersAndPositionFixtureBuilder(node.rpcUrl);
+    twoUnderwaterUsersFixture = twoUnderwaterUsersFixtureBuilder(node.rpcUrl);
     futuresLongCrashFixture = futuresLongCrashFixtureBuilder(node.rpcUrl);
     futuresOrdersAndPositionFixture = futuresOrdersAndPositionFixtureBuilder(node.rpcUrl);
     multiFuturesFixture = multiFuturesFixtureBuilder(node.rpcUrl);
-    crossVenueFixture = crossVenueFixtureBuilder(node.rpcUrl);
+    crossVenuePerpsDominantFixture = crossVenuePerpsDominantFixtureBuilder(node.rpcUrl);
+    crossVenueFuturesDominantFixture = crossVenueFuturesDominantFixtureBuilder(node.rpcUrl);
+    crossVenueOrdersAndPositionsFixture = crossVenueOrdersAndPositionsFixtureBuilder(node.rpcUrl);
   },
   { timeout: 60_000 },
 );
@@ -153,18 +174,100 @@ describe("Perps liquidation", () => {
     },
   );
 
-  // NOTE: this exercises the planner's orders-leg-then-position-leg flow
-  // on the perps venue. Currently blocked by a keeper/contract drift —
-  // `PerpsVenue.liquidateOrders` calls a batch `liquidateOrders(user, ids[])`
-  // entry point that was retired in favour of N `liquidateOrder` calls
-  // composed via `multicallStopOnFailure` (see
-  // perps/contracts/tests/liquidateOrdersAndPosition.test.ts). The keeper
-  // adapter needs to switch to that primitive before this scenario
-  // becomes pass-able. Until then the planner's two-leg flow is still
-  // exercised on the *futures* venue (see "Futures liquidation" below),
-  // which retains a native batch `liquidateOrders(user)`.
-  it.todo(
-    "cancels resting orders alongside the position liquidation (blocked on keeper#perps batch-orders gap)",
+  it(
+    "closes an underwater short position when the price rises",
+    { timeout: 60_000 },
+    async () => {
+      // Precondition: alice is SHORT 40 perps at $4.21. A 2× price pump
+      // to $8.42 puts her short ~$168 underwater on a $100 deposit. This
+      // is the mirror of `closes a deeply underwater long position` and
+      // pins down the PnL sign handling in `PerpsVenue.readPositions`
+      // — `netQuantity < 0` ⇒ short ⇒ loss when price moves *up*.
+      const ctx = await loadFixture(perpsShortCrashFixture, testClient);
+      keeper = buildKeeper(ctx);
+      await keeper.start();
+
+      const alice = ctx.accounts.alice.account.address;
+      await ctx.makeLiquidatable();
+      await runOneSweep(keeper, alice);
+
+      await expectPerpsClosed(ctx, alice);
+    },
+  );
+
+  it(
+    "cancels resting orders alongside the position liquidation",
+    { timeout: 60_000 },
+    async () => {
+      // Precondition: alice holds a perps long AND a stale far-out-of-
+      // market resting buy order. The perps venue cancels the resting
+      // order via `multicallStopOnFailure([liquidateOrder(user, id)])`
+      // (the contract retired the batch `liquidateOrders` entry point);
+      // the planner then walks the position-leg in the same plan.
+      const ctx = await loadFixture(perpsOrdersAndPositionFixture, testClient);
+      keeper = buildKeeper(ctx);
+      await keeper.start();
+
+      const alice = ctx.accounts.alice.account.address;
+      assert.equal(
+        (await readPerpsOrderIds(ctx, alice)).length,
+        ctx.restingOrderCount,
+        "test precondition: alice should have a resting perps order at fixture time",
+      );
+
+      await ctx.makeLiquidatable();
+      await runOneSweep(keeper, alice);
+
+      await expectPerpsClosed(ctx, alice);
+      await expectNoOpenOrders(ctx, alice);
+    },
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Multi-account coordination (queue priority, serialized execution)
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("Multi-account coordination", () => {
+  it(
+    "liquidates both underwater users, worst-mmSurplus first",
+    { timeout: 60_000 },
+    async () => {
+      // Precondition: alice and dave are both long perps with the same
+      // deposit ($100) but different sizes — alice is 40-qty (~$168
+      // loss after crash), dave is 20-qty (~$84 loss). Post-crash
+      // `mmSurplus` is more negative for alice.
+      //
+      // The queue is a priority queue ordered by `mmSurplus` ASC, so
+      // alice must be popped first. With `maxConcurrentAccounts: 1`
+      // (default) the executor processes them serially — alice closes
+      // first, then dave. We assert ordering via the block numbers of
+      // their respective `PositionLiquidated` events.
+      const ctx = await loadFixture(twoUnderwaterUsersFixture, testClient);
+      keeper = buildKeeper(ctx);
+      await keeper.start();
+
+      // Both users are pre-existing in the fixture snapshot; seed them
+      // directly into the tracker rather than relying on the `Deposited`
+      // watcher to back-scan. This test is about queue priority and the
+      // executor's serial behavior, not tracker discovery (covered above).
+      keeper.tracker.add(ctx.worseUser);
+      keeper.tracker.add(ctx.betterUser);
+
+      await ctx.makeLiquidatable();
+      await keeper.scheduler.runSweep();
+
+      await expectPerpsClosed(ctx, ctx.worseUser);
+      await expectPerpsClosed(ctx, ctx.betterUser);
+
+      const worseBlock = await readPerpsPositionLiquidationBlock(ctx, ctx.worseUser);
+      const betterBlock = await readPerpsPositionLiquidationBlock(ctx, ctx.betterUser);
+      assert.ok(worseBlock !== null && betterBlock !== null);
+      assert.ok(
+        worseBlock <= betterBlock,
+        `expected worse-mmSurplus user liquidated first, got worse=${worseBlock} better=${betterBlock}`,
+      );
+    },
   );
 });
 
@@ -258,7 +361,7 @@ describe("Cross-venue coordination", () => {
       // test is: both legs end up flat from a single sweep — neither
       // venue is left stranded just because the other one's closure made
       // alice momentarily healthy on a different venue's MM math.
-      const ctx = await loadFixture(crossVenueFixture, testClient);
+      const ctx = await loadFixture(crossVenuePerpsDominantFixture, testClient);
       keeper = buildKeeper(ctx);
       await keeper.start();
 
@@ -268,6 +371,130 @@ describe("Cross-venue coordination", () => {
 
       await expectPerpsClosed(ctx, alice);
       await expectFuturesClosed(ctx, alice);
+    },
+  );
+
+  it(
+    "liquidates the perps leg first when perps unrealized loss dominates",
+    { timeout: 60_000 },
+    async () => {
+      // Precondition: 100-qty perps long ($420 loss) + 1-unit futures
+      // long ($29.40 loss). The planner's `rankPositions` orders by
+      // `unrealizedLoss DESC`, so perps must be closed strictly before
+      // futures. Observable signal: the block number of the perps
+      // `PositionLiquidated` event is strictly less than the futures one.
+      const ctx = await loadFixture(crossVenuePerpsDominantFixture, testClient);
+      keeper = buildKeeper(ctx);
+      await keeper.start();
+
+      const alice = ctx.accounts.alice.account.address;
+      await ctx.makeLiquidatable();
+      await runOneSweep(keeper, alice);
+
+      await expectPerpsClosed(ctx, alice);
+      await expectFuturesClosed(ctx, alice);
+
+      const perpsBlock = await readPerpsPositionLiquidationBlock(ctx, alice);
+      const futuresBlock = await readFuturesPositionLiquidationBlock(ctx, alice);
+      assert.ok(perpsBlock !== null, "expected a perps PositionLiquidated event");
+      assert.ok(futuresBlock !== null, "expected a futures PositionLiquidated event");
+      assert.ok(
+        perpsBlock < futuresBlock,
+        `expected perps liquidated before futures, got perps=${perpsBlock} futures=${futuresBlock}`,
+      );
+    },
+  );
+
+  it(
+    "liquidates the futures leg first when futures unrealized loss dominates",
+    { timeout: 60_000 },
+    async () => {
+      // Precondition: inverted from the previous test — 1-qty perps long
+      // ($4.20 loss) + 20-unit futures long ($588 loss across the 7-day
+      // delivery window). Futures must be closed strictly before perps,
+      // confirming the planner's ranking is by loss size and not by a
+      // hard-coded venue order.
+      const ctx = await loadFixture(crossVenueFuturesDominantFixture, testClient);
+      keeper = buildKeeper(ctx);
+      await keeper.start();
+
+      const alice = ctx.accounts.alice.account.address;
+      await ctx.makeLiquidatable();
+      await runOneSweep(keeper, alice);
+
+      await expectPerpsClosed(ctx, alice);
+      await expectFuturesClosed(ctx, alice);
+
+      const perpsBlock = await readPerpsPositionLiquidationBlock(ctx, alice);
+      const futuresBlock = await readFuturesPositionLiquidationBlock(ctx, alice);
+      assert.ok(perpsBlock !== null, "expected a perps PositionLiquidated event");
+      assert.ok(futuresBlock !== null, "expected a futures PositionLiquidated event");
+      assert.ok(
+        futuresBlock < perpsBlock,
+        `expected futures liquidated before perps, got perps=${perpsBlock} futures=${futuresBlock}`,
+      );
+    },
+  );
+
+  it(
+    "liquidates orders across every venue before touching any position",
+    { timeout: 60_000 },
+    async () => {
+      // Precondition: alice has positions on both venues AND a stale
+      // resting order on each book. After the crash, the planner's
+      // contract is:
+      //
+      //   1. orders-leg fans out across every venue (perps then
+      //      futures) and cancels open orders;
+      //   2. only THEN does position-leg run and start closing
+      //      positions worst-first.
+      //
+      // Observable invariant: every `OrderLiquidated` event lives in a
+      // block ≤ every `PositionLiquidated` event, on either venue. We
+      // pick the latest order block and the earliest position block and
+      // compare — that catches any interleaving regression.
+      const ctx = await loadFixture(crossVenueOrdersAndPositionsFixture, testClient);
+      keeper = buildKeeper(ctx);
+      await keeper.start();
+
+      const alice = ctx.accounts.alice.account.address;
+      assert.equal(
+        (await readPerpsOrderIds(ctx, alice)).length,
+        ctx.perpsRestingOrderCount,
+        "test precondition: alice should have a resting perps order at fixture time",
+      );
+      assert.equal(
+        (await readFuturesOrderIds(ctx, alice)).length,
+        ctx.futuresRestingOrderCount,
+        "test precondition: alice should have a resting futures order at fixture time",
+      );
+
+      await ctx.makeLiquidatable();
+      await runOneSweep(keeper, alice);
+
+      // End state: nothing left on either venue.
+      await expectPerpsClosed(ctx, alice);
+      await expectFuturesClosed(ctx, alice);
+      await expectNoOpenOrders(ctx, alice);
+
+      // The actual ordering invariant.
+      const perpsOrderBlock = await readPerpsOrderLiquidationBlock(ctx, alice);
+      const futuresOrderBlock = await readFuturesOrderLiquidationBlock(ctx, alice);
+      const perpsPositionBlock = await readPerpsPositionLiquidationBlock(ctx, alice);
+      const futuresPositionBlock = await readFuturesPositionLiquidationBlock(ctx, alice);
+      assert.ok(perpsOrderBlock !== null, "expected a perps OrderLiquidated event");
+      assert.ok(futuresOrderBlock !== null, "expected a futures OrderLiquidated event");
+      assert.ok(perpsPositionBlock !== null, "expected a perps PositionLiquidated event");
+      assert.ok(futuresPositionBlock !== null, "expected a futures PositionLiquidated event");
+
+      const latestOrderBlock = max(perpsOrderBlock, futuresOrderBlock);
+      const earliestPositionBlock = min(perpsPositionBlock, futuresPositionBlock);
+      assert.ok(
+        latestOrderBlock <= earliestPositionBlock,
+        `expected every order liquidation to precede every position liquidation, ` +
+          `got orders={perps:${perpsOrderBlock}, futures:${futuresOrderBlock}} ` +
+          `positions={perps:${perpsPositionBlock}, futures:${futuresPositionBlock}}`,
+      );
     },
   );
 });
@@ -300,6 +527,56 @@ describe("PredictiveCoordinator (live oracle events)", () => {
       await expectPerpsClosed(ctx, alice);
     },
   );
+
+  it(
+    "stays silent when the oracle moves but no user threshold is crossed",
+    { timeout: 30_000 },
+    async () => {
+      // Precondition: alice holds a healthy perps long ($4.21 entry,
+      // ~$1.82 `liqDown` threshold per the predictor's solver). A 3%
+      // BTC/USDC tick translates to a ~3% hashprice change — comfortably
+      // above her liquidation threshold.
+      //
+      // Contract: the predictor must observe the `AnswerUpdated` event
+      // (price feed *does* update) but conclude no user is crossing and
+      // therefore enqueue nothing. We verify the negative invariant:
+      //   1. queue stays empty,
+      //   2. alice's position is untouched,
+      //   3. her account survives a planner run with `healthy` outcome.
+      //
+      // This guards against a regression where every oracle tick would
+      // wastefully fan out into a full planner sweep.
+      const ctx = await loadFixture(perpsLongCrashFixture, testClient);
+      keeper = buildKeeper(ctx);
+      await keeper.start();
+
+      const alice = ctx.accounts.alice.account.address;
+      await discoverAndIndex(keeper, alice);
+      assert.equal(keeper.queue.size(), 0, "precondition: queue empty before move");
+
+      // 3% downward tick on BTC/USDC. Hashprice is derived from
+      // BTC/USDC, so we don't need to touch the hashprice oracle directly.
+      const smallMovedBtc = (ctx.config.initialBtcUsdc * 97n) / 100n;
+      await ctx.bumpBtcUsdc(smallMovedBtc);
+
+      // Let the predictor's `AnswerUpdated` watcher process the event
+      // and finish any rebuild. `awaitIdle` blocks on the rebuild queue.
+      await keeper.predictor.awaitIdle();
+
+      assert.equal(
+        keeper.queue.size(),
+        0,
+        "predictor enqueued the user on a sub-threshold move (false positive)",
+      );
+
+      // Sanity: the planner agrees alice is still healthy.
+      const outcome = await keeper.planner.run(alice);
+      expectHealthy(outcome);
+
+      const position = await readPerpsPosition(ctx, alice);
+      assert.notEqual(position.netQuantity, 0n, "position should still be open");
+    },
+  );
 });
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -328,3 +605,15 @@ describe("Notifier (live HTTP)", () => {
     },
   );
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// Local utilities
+// ─────────────────────────────────────────────────────────────────────────
+
+function max(a: bigint, b: bigint): bigint {
+  return a > b ? a : b;
+}
+
+function min(a: bigint, b: bigint): bigint {
+  return a < b ? a : b;
+}

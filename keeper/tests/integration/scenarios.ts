@@ -35,8 +35,17 @@ export interface BaseFixture extends DeployedStack {
   bumpBtcUsdc(newPrice: bigint): Promise<void>;
   /** Deposit USDC into the vault from the given (test-known) wallet. */
   deposit(userAddr: Address, amount: bigint): Promise<void>;
-  /** Crash both oracles in lockstep so the predictor reacts via BTC/USDC. */
+  /**
+   * Apply a fresh hashprice and a *paired* BTC/USDC tick. The predictor
+   * only listens to the BTC/USDC channel, so the second write is what
+   * makes the event-driven liquidation path observable; the hashprice
+   * write is what actually moves PnL.
+   *
+   * `crashOracles` moves BTC/USDC *down* (long-side loss); `pumpOracles`
+   * moves it *up* (short-side loss).
+   */
   crashOracles(hashpricePrice: bigint): Promise<void>;
+  pumpOracles(hashpricePrice: bigint): Promise<void>;
 }
 
 export interface AliceDepositFixture extends BaseFixture {
@@ -48,6 +57,28 @@ export interface PerpsLongFixture extends BaseFixture {
   aliceDeposit: bigint;
   aliceQty: bigint;
   /** Crash hashprice + BTC/USDC so Alice's long becomes liquidatable. */
+  makeLiquidatable(): Promise<void>;
+}
+
+/** Alice holds a perps short that is healthy at the entry price. */
+export interface PerpsShortFixture extends BaseFixture {
+  aliceDeposit: bigint;
+  /** Positive — the absolute value of alice's short. */
+  aliceQty: bigint;
+  /** Pump hashprice + BTC/USDC so Alice's short becomes liquidatable. */
+  makeLiquidatable(): Promise<void>;
+}
+
+/** Two independent users both hold underwater positions after the crash. */
+export interface TwoUnderwaterUsersFixture extends BaseFixture {
+  /** Deeper-underwater user (closed first by mmSurplus priority). */
+  worseDeposit: bigint;
+  worseQty: bigint;
+  worseUser: Address;
+  /** Less-underwater user (closed second). */
+  betterDeposit: bigint;
+  betterQty: bigint;
+  betterUser: Address;
   makeLiquidatable(): Promise<void>;
 }
 
@@ -85,6 +116,16 @@ export interface CrossVenueFixture extends BaseFixture {
   makeLiquidatable(): Promise<void>;
 }
 
+/**
+ * Alice has perps + futures *positions* AND a resting order on each
+ * venue. The crash makes everything underwater so the planner has to run
+ * its full two-leg flow (orders across both venues, then positions).
+ */
+export interface CrossVenueOrdersAndPositionsFixture extends CrossVenueFixture {
+  perpsRestingOrderCount: number;
+  futuresRestingOrderCount: number;
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Base fixture
 // ─────────────────────────────────────────────────────────────────────────
@@ -96,15 +137,14 @@ export async function baseFixture(rpcUrl: string): Promise<BaseFixture> {
     bumpHashprice: (price) => writeOracle(stack, stack.addresses.hashpriceOracle, price),
     bumpBtcUsdc: (price) => writeOracle(stack, stack.addresses.btcUsdcFeed, price),
     deposit: (user, amount) => depositTo(stack, user, amount),
-    /**
-     * Apply a fresh hashprice and a *paired* BTC/USDC tick. The predictor
-     * only listens to the BTC/USDC channel, so the second write is what
-     * makes the event-driven liquidation path observable; the hashprice
-     * write is what actually moves PnL.
-     */
     crashOracles: async (hashpricePrice) => {
       await writeOracle(stack, stack.addresses.hashpriceOracle, hashpricePrice);
       const movedBtc = (stack.config.initialBtcUsdc * 9n) / 10n;
+      await writeOracle(stack, stack.addresses.btcUsdcFeed, movedBtc);
+    },
+    pumpOracles: async (hashpricePrice) => {
+      await writeOracle(stack, stack.addresses.hashpriceOracle, hashpricePrice);
+      const movedBtc = (stack.config.initialBtcUsdc * 11n) / 10n;
       await writeOracle(stack, stack.addresses.btcUsdcFeed, movedBtc);
     },
   };
@@ -157,6 +197,91 @@ export function perpsLongCrashFixtureBuilder(rpcUrl: string) {
       ...base,
       aliceDeposit,
       aliceQty,
+      makeLiquidatable: () =>
+        base.crashOracles(parseUnits("0.01", base.config.oracleDecimals)),
+    };
+  };
+}
+
+/**
+ * Mirror of `perpsLongCrashFixtureBuilder` for short-side coverage. Alice
+ * sells (negative qty) into Bob's bid; a price *rise* makes her short
+ * unrealized-loss climb past the deposit. Sizing is identical to the
+ * long-side case (40 qty, $100 deposit) — symmetry test for the PnL sign
+ * handling in `PerpsVenue.readPositions`.
+ *
+ *   - IM at entry: 40 · 0.10 · $4.21 = $16.84 → fits.
+ *   - On price doubling to $8.42: unrealized loss = ($8.42 − $4.21) · 40 = $168.40.
+ *   - Vault $100 < MM (~$168) ⇒ liquidatable.
+ */
+export function perpsShortCrashFixtureBuilder(rpcUrl: string) {
+  return async (): Promise<PerpsShortFixture> => {
+    const base = await baseFixture(rpcUrl);
+    const aliceDeposit = parseUnits("100", base.config.tokenDecimals);
+    const bobDeposit = parseUnits("2000", base.config.tokenDecimals);
+    const aliceQty = parseUnits("40", base.config.quantityDecimals);
+
+    await base.deposit(base.accounts.alice.account.address, aliceDeposit);
+    await base.deposit(base.accounts.bob.account.address, bobDeposit);
+
+    // Bob bids, alice sells into it. Sign convention: positive qty = buy.
+    await matchPerpsTrade(base, {
+      buyer: base.accounts.bob,
+      seller: base.accounts.alice,
+      price: base.config.initialHashprice,
+      quantity: aliceQty,
+    });
+
+    return {
+      ...base,
+      aliceDeposit,
+      aliceQty,
+      makeLiquidatable: () =>
+        base.pumpOracles(parseUnits("8.42", base.config.oracleDecimals)),
+    };
+  };
+}
+
+/**
+ * Two independent users (`alice` + `dave`) both go long perps. Alice has
+ * a larger position so her post-crash `mmSurplus` is more negative than
+ * dave's — she should be popped from the coordinator queue first.
+ *
+ * Bob is the shared counterparty taking the combined short.
+ */
+export function twoUnderwaterUsersFixtureBuilder(rpcUrl: string) {
+  return async (): Promise<TwoUnderwaterUsersFixture> => {
+    const base = await baseFixture(rpcUrl);
+    // Both deposits are insufficient to cover the post-crash unrealized
+    // loss; alice's deficit is bigger so her `mmSurplus` is more negative.
+    const aliceDeposit = parseUnits("100", base.config.tokenDecimals);
+    const daveDeposit = parseUnits("30", base.config.tokenDecimals);
+    const bobDeposit = parseUnits("3000", base.config.tokenDecimals);
+    const aliceQty = parseUnits("40", base.config.quantityDecimals); // ~$168 loss, $100 cover ⇒ −$68
+    const daveQty = parseUnits("20", base.config.quantityDecimals); // ~$84 loss, $30 cover  ⇒ −$54
+
+    await base.deposit(base.accounts.alice.account.address, aliceDeposit);
+    await base.deposit(base.accounts.dave.account.address, daveDeposit);
+    await base.deposit(base.accounts.bob.account.address, bobDeposit);
+
+    // One bob short covering both — placed first so both takers match it.
+    await placePerpsOrder(
+      base,
+      base.accounts.bob,
+      base.config.initialHashprice,
+      -(aliceQty + daveQty),
+    );
+    await placePerpsOrder(base, base.accounts.alice, base.config.initialHashprice, aliceQty);
+    await placePerpsOrder(base, base.accounts.dave, base.config.initialHashprice, daveQty);
+
+    return {
+      ...base,
+      worseDeposit: aliceDeposit,
+      worseQty: aliceQty,
+      worseUser: base.accounts.alice.account.address,
+      betterDeposit: daveDeposit,
+      betterQty: daveQty,
+      betterUser: base.accounts.dave.account.address,
       makeLiquidatable: () =>
         base.crashOracles(parseUnits("0.01", base.config.oracleDecimals)),
     };
@@ -336,18 +461,22 @@ export function multiFuturesFixtureBuilder(rpcUrl: string) {
  * puts both legs underwater at once, exercising the planner's coordinated
  * cross-venue ranking.
  *
- * Sized so the perps leg is the worst (largest `unrealizedLoss`) and the
- * futures leg is meaningful but secondary — the planner closes the perps
- * position first, then loops to clear futures.
+ * Two parameterised variants are exposed via dedicated builders:
+ *
+ *   - `crossVenuePerpsDominantFixtureBuilder` — perps `unrealizedLoss`
+ *     dominates futures (ratio ≈ 14:1). The planner should liquidate
+ *     perps first, then futures.
+ *   - `crossVenueFuturesDominantFixtureBuilder` — futures dominates perps
+ *     (ratio ≈ 1:140). The planner should liquidate futures first.
+ *
+ * Together they prove the planner ranks by *loss size*, not venue order.
  */
-export function crossVenueFixtureBuilder(rpcUrl: string) {
-  return async (): Promise<CrossVenueFixture> => {
-    const base = await baseFixture(rpcUrl);
-    const aliceDeposit = parseUnits("200", base.config.tokenDecimals);
-    const bobDeposit = parseUnits("5000", base.config.tokenDecimals);
-    const alicePerpsQty = parseUnits("100", base.config.quantityDecimals);
-    const aliceFuturesQty = 1;
-
+function crossVenueFixtureBody(
+  base: BaseFixture,
+  sizing: { aliceDeposit: bigint; bobDeposit: bigint; alicePerpsQty: bigint; aliceFuturesQty: number },
+): Promise<CrossVenueFixture> {
+  return (async () => {
+    const { aliceDeposit, bobDeposit, alicePerpsQty, aliceFuturesQty } = sizing;
     await base.deposit(base.accounts.alice.account.address, aliceDeposit);
     await base.deposit(base.accounts.bob.account.address, bobDeposit);
 
@@ -373,6 +502,115 @@ export function crossVenueFixtureBuilder(rpcUrl: string) {
       makeLiquidatable: () =>
         base.crashOracles(parseUnits("0.01", base.config.oracleDecimals)),
     };
+  })();
+}
+
+/**
+ * Perps-dominant: alice has a 100-qty perps long ($420 unrealized loss
+ * after the crash) and a 1-unit futures long ($29.40 loss). The planner
+ * must liquidate perps first by `unrealizedLoss` ranking.
+ */
+export function crossVenuePerpsDominantFixtureBuilder(rpcUrl: string) {
+  return async (): Promise<CrossVenueFixture> => {
+    const base = await baseFixture(rpcUrl);
+    return crossVenueFixtureBody(base, {
+      aliceDeposit: parseUnits("200", base.config.tokenDecimals),
+      bobDeposit: parseUnits("5000", base.config.tokenDecimals),
+      alicePerpsQty: parseUnits("100", base.config.quantityDecimals),
+      aliceFuturesQty: 1,
+    });
+  };
+}
+
+/**
+ * Cross-venue with resting orders on *both* venues. Alice has matched
+ * positions (perps long + futures long) plus a stale far-out-of-market
+ * resting buy order on each book. The crash makes everything underwater.
+ *
+ * The keeper must:
+ *   1. Cancel the resting perps order   (orders-leg, perps venue)
+ *   2. Cancel the resting futures order (orders-leg, futures venue)
+ *   3. Close the perps position         (position-leg, worst-first)
+ *   4. Close the futures position       (position-leg, next-worst)
+ *
+ * Steps 1–2 must strictly precede 3–4: the planner walks every venue's
+ * orders-leg before touching any position. The test verifies this by
+ * comparing block numbers of `OrderLiquidated` vs `PositionLiquidated`
+ * events on each venue.
+ */
+export function crossVenueOrdersAndPositionsFixtureBuilder(rpcUrl: string) {
+  return async (): Promise<CrossVenueOrdersAndPositionsFixture> => {
+    const base = await baseFixture(rpcUrl);
+    const aliceDeposit = parseUnits("250", base.config.tokenDecimals);
+    const bobDeposit = parseUnits("5000", base.config.tokenDecimals);
+    const alicePerpsQty = parseUnits("40", base.config.quantityDecimals);
+    const aliceFuturesQty = 6;
+
+    await base.deposit(base.accounts.alice.account.address, aliceDeposit);
+    await base.deposit(base.accounts.bob.account.address, bobDeposit);
+
+    await matchPerpsTrade(base, {
+      buyer: base.accounts.alice,
+      seller: base.accounts.bob,
+      price: base.config.initialHashprice,
+      quantity: alicePerpsQty,
+    });
+    await matchFuturesTrade(base, {
+      buyer: base.accounts.alice,
+      seller: base.accounts.bob,
+      price: base.config.initialHashprice,
+      deliveryAt: base.config.futuresFirstDeliveryDate,
+      quantity: aliceFuturesQty,
+    });
+
+    // Stale buys well below current marks — no counterparty exists at
+    // these levels so each order rests on its book.
+    const restingPrice = parseUnits("1.00", base.config.oracleDecimals);
+    await placePerpsOrder(
+      base,
+      base.accounts.alice,
+      restingPrice,
+      parseUnits("5", base.config.quantityDecimals),
+    );
+    await placeFuturesOrder(
+      base,
+      base.accounts.alice,
+      parseUnits("2.00", base.config.oracleDecimals),
+      base.config.futuresFirstDeliveryDate,
+      1,
+    );
+
+    return {
+      ...base,
+      aliceDeposit,
+      alicePerpsQty,
+      aliceFuturesQty,
+      perpsRestingOrderCount: 1,
+      futuresRestingOrderCount: 1,
+      makeLiquidatable: () =>
+        base.crashOracles(parseUnits("0.01", base.config.oracleDecimals)),
+    };
+  };
+}
+
+/**
+ * Futures-dominant: alice has a 1-qty perps long ($4.20 unrealized loss)
+ * and a 12-unit futures long ($352.80 loss over the 7-day delivery
+ * window). The planner must liquidate futures first.
+ *
+ * The futures qty is capped at 12 because `createOrder` loops once per
+ * contract in the matching engine; larger values blow past Hardhat's
+ * per-tx gas cap (16M).
+ */
+export function crossVenueFuturesDominantFixtureBuilder(rpcUrl: string) {
+  return async (): Promise<CrossVenueFixture> => {
+    const base = await baseFixture(rpcUrl);
+    return crossVenueFixtureBody(base, {
+      aliceDeposit: parseUnits("300", base.config.tokenDecimals),
+      bobDeposit: parseUnits("5000", base.config.tokenDecimals),
+      alicePerpsQty: parseUnits("1", base.config.quantityDecimals),
+      aliceFuturesQty: 12,
+    });
   };
 }
 
