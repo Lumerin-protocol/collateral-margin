@@ -51,7 +51,10 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
       functionName: "getUserPosition",
       args: [owner],
     });
-    return { netQuantity: pos.netQuantity, entryPrice: pos.aggregatedEntryPrice };
+    return {
+      netQuantity: pos.netQuantity,
+      entryPrice: pos.aggregatedEntryPrice,
+    };
   }
 
   async getContext(): Promise<InstrumentContext> {
@@ -95,7 +98,8 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
     // Ensure the venue has a cached spot shock; if not, fall back to the
     // no-op estimate. The first canPlace call is allowed through optimistically.
     // The cached value is fetched lazily by `account.imSpotShock()` and cached.
-    const cached = (this.venue as unknown as { imSpotShockCache?: bigint }).imSpotShockCache;
+    const cached = (this.venue as unknown as { imSpotShockCache?: bigint })
+      .imSpotShockCache;
     if (!cached) return 0n;
     const notional = calculateNotional(intent.price, intent.size);
     return (notional * cached) / 10n ** 18n;
@@ -147,7 +151,8 @@ class PerpsBook implements BookSource {
       functionName: "getOrderBookPrices",
       args: [depth],
     });
-    if (bidPrices.length === 0 && askPrices.length === 0) return { bids: [], asks: [] };
+    if (bidPrices.length === 0 && askPrices.length === 0)
+      return { bids: [], asks: [] };
 
     const depthCalls = [
       ...bidPrices.map((p) => ({
@@ -163,8 +168,14 @@ class PerpsBook implements BookSource {
         args: [p, false] as const,
       })),
     ];
-    const results = await v.publicClient.multicall({ allowFailure: false, contracts: depthCalls });
-    const bids: DepthLevel[] = bidPrices.map((p, i) => ({ price: p, quantity: results[i] }));
+    const results = await v.publicClient.multicall({
+      allowFailure: false,
+      contracts: depthCalls,
+    });
+    const bids: DepthLevel[] = bidPrices.map((p, i) => ({
+      price: p,
+      quantity: results[i],
+    }));
     const asks: DepthLevel[] = askPrices.map((p, i) => ({
       price: p,
       quantity: results[bidPrices.length + i],
@@ -201,7 +212,10 @@ class PerpsOwnOrders implements OwnOrderSource {
       functionName: "getOrder" as const,
       args: [id] as const,
     }));
-    const results = await v.publicClient.multicall({ allowFailure: false, contracts: calls });
+    const results = await v.publicClient.multicall({
+      allowFailure: false,
+      contracts: calls,
+    });
     return orderIds.map((orderId, i) => {
       const q = results[i].quantity;
       return {
@@ -234,7 +248,7 @@ class PerpsOwnOrders implements OwnOrderSource {
           return;
         }
         case "order-cancelled": {
-          if (evt.participant.toLowerCase() !== own) return;
+          if (!evt.participant || evt.participant.toLowerCase() !== own) return;
           cb({ type: "removed", orderId: evt.orderId });
           return;
         }

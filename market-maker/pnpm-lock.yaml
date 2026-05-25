@@ -28,7 +28,7 @@ importers:
         version: 5.3.4
       futures-contracts:
         specifier: github:Lumerin-protocol/futures-marketplace#dev&path:/contracts
-        version: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/64e5bc5af2397111d4b3392a9edbbd18f26a4474#path:/contracts(@types/node@22.19.17)(ethers@5.8.0)(typescript@5.9.3)
+        version: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/f3fa176dd95c456a91dccd4feee4e54f610af05c#path:/contracts(@types/node@22.19.17)(ethers@5.8.0)(typescript@5.9.3)
       js-yaml:
         specifier: ^4.1.0
         version: 4.1.1
@@ -48,6 +48,9 @@ importers:
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.17
+      '@typescript/native-preview':
+        specifier: 7.0.0-dev.20260525.1
+        version: 7.0.0-dev.20260525.1
       pino-pretty:
         specifier: ^13.1.3
         version: 13.1.3
@@ -449,10 +452,6 @@ packages:
 
   '@manypkg/get-packages@1.1.3':
     resolution: {integrity: sha512-fo+QhuU3qE/2TQMQmbVMqaQ6EWbMhi4ABWP+O4AM1NqPBuy0OrApV5LO6BrrgnhtAHS2NH6RrVk9OL181tTi8A==}
-
-  '@multicall/multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012':
-    resolution: {tarball: https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012}
-    version: 0.0.0
 
   '@noble/ciphers@1.3.0':
     resolution: {integrity: sha512-2I0gnIVPtfnMw9ee9h1dJG7tp81+8Ob3OJb3Mv37rx5L40/b0i7djjCVvGOVqc9AEIQyvyu1i6ypKdFw8R8gQw==}
@@ -924,6 +923,53 @@ packages:
   '@types/secp256k1@4.0.7':
     resolution: {integrity: sha512-Rcvjl6vARGAKRO6jHeKMatGrvOMGrR/AR11N1x2LqintPCyDZ7NBhrh238Z2VZc7aM7KIwnFpFQ7fnfK4H/9Qw==}
 
+  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260525.1':
+    resolution: {integrity: sha512-x0ClBYc6xQDLXvpRn/zg6SViX/r1F8LXHyfSHmKx4ieiaZiVvGsEww/qzdHind+Y62MIUN3e/XfDFrpRxWDv0g==}
+    engines: {node: '>=16.20.0'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260525.1':
+    resolution: {integrity: sha512-CSHbx6HfM+xXqceGFtG4kcqqoQ5xjT1BHO0bqLfLeQtKlMlze59dIV2DbOb5Aj6wm2ACTKU4K9aurJDdHARx1g==}
+    engines: {node: '>=16.20.0'}
+    cpu: [x64]
+    os: [darwin]
+
+  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260525.1':
+    resolution: {integrity: sha512-0DFKd3EuZ/Z0/mB114mATrlRxQUo7rcpXYgd5CJN7y1dbIgkavbjVamzzJKt3s42tkJGfdys83w6aIHDu6fykw==}
+    engines: {node: '>=16.20.0'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@typescript/native-preview-linux-arm@7.0.0-dev.20260525.1':
+    resolution: {integrity: sha512-hY2EVAaGc1bsaxthJiNUbzn6ESkMSLBiWRCNhQl8XdhDWew8KhKCjw4DHe0lAYSdxLJBe6fCPpcFjDnoSowBxA==}
+    engines: {node: '>=16.20.0'}
+    cpu: [arm]
+    os: [linux]
+
+  '@typescript/native-preview-linux-x64@7.0.0-dev.20260525.1':
+    resolution: {integrity: sha512-GhC0kXeYxn55Rk3klmWET/Y033AHeMzLBMO58yP7R8m5ZdGiBisejDZnvttzczYJtgT42LNOtVmbtsG/+R8XWw==}
+    engines: {node: '>=16.20.0'}
+    cpu: [x64]
+    os: [linux]
+
+  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260525.1':
+    resolution: {integrity: sha512-L2+bsx73FyuEzLNgybtIxhnT9lYYAh9rTRFWZ4wZlJg44DGstjgz4FBKVHBO/cm3Hz7YNWeJESrB9ROUNbffPg==}
+    engines: {node: '>=16.20.0'}
+    cpu: [arm64]
+    os: [win32]
+
+  '@typescript/native-preview-win32-x64@7.0.0-dev.20260525.1':
+    resolution: {integrity: sha512-xJCdFz9smVQVpXYW0vZZJsM0GIANPqSt8eMDRYfDY6M/BcXNXYOAt7tsxnSRyYWnFf9Ci7wKNRZaihZrDJ2m6A==}
+    engines: {node: '>=16.20.0'}
+    cpu: [x64]
+    os: [win32]
+
+  '@typescript/native-preview@7.0.0-dev.20260525.1':
+    resolution: {integrity: sha512-hZ3BSv2Q45UZPC8mi7YIWNRirdT99eipknsgigp7GfczYisSjfn6/XERgUfspHDWI7k4zM/KK4j/peHWtpqcmg==}
+    engines: {node: '>=16.20.0'}
+    hasBin: true
+
   '@yarnpkg/lockfile@1.1.0':
     resolution: {integrity: sha512-GpSwvyXOcOOlV70vbnzjj4fW5xW/FdUF6nQEt1ENy7m4ZCczi1+/buVUPAqmGfqznsORNFzUMjctTIp8a9tuCQ==}
 
@@ -1089,6 +1135,9 @@ packages:
 
   brace-expansion@2.1.0:
     resolution: {integrity: sha512-TN1kCZAgdgweJhWWpgKYrQaMNHcDULHkWwQIspdtjV4Y5aurRdZpjAqn6yX3FPqTA9ngHCc4hJxMAMgGfve85w==}
+
+  brace-expansion@2.1.1:
+    resolution: {integrity: sha512-WR1cURNjuvBLMZBMbqM0UoE+WAfdUcEV1ccD8PVBVOI+Z3ND4+SZbN8RsfT2bMuG1qwz5RFvPukSZm5fF2D5eA==}
 
   braces@3.0.3:
     resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
@@ -1496,8 +1545,8 @@ packages:
   function-bind@1.1.2:
     resolution: {integrity: sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==}
 
-  futures-contracts@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/64e5bc5af2397111d4b3392a9edbbd18f26a4474#path:/contracts:
-    resolution: {path: /contracts, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/64e5bc5af2397111d4b3392a9edbbd18f26a4474}
+  futures-contracts@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/f3fa176dd95c456a91dccd4feee4e54f610af05c#path:/contracts:
+    resolution: {path: /contracts, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/f3fa176dd95c456a91dccd4feee4e54f610af05c}
     version: 1.0.0
     engines: {node: 24.x}
 
@@ -1858,6 +1907,10 @@ packages:
 
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
+
+  multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012:
+    resolution: {tarball: https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012}
+    version: 0.0.0
 
   nice-try@1.0.5:
     resolution: {integrity: sha512-1nh45deeb5olNY7eX82BkPO7SSxR5SSYJiPTrTdFUVYwAl8CKMA5N9PjTYkHiRjisVcxcQ1HXdLhx2qxxJzLNQ==}
@@ -2454,8 +2507,8 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
-  ws@7.5.10:
-    resolution: {integrity: sha512-+dbF1tHwZpXcbOJdVOkzLDxZP1ailvSxM6ZweXTegylPny803bFhA+vqBYw4s31NSAk4S2Qz+AKXK9a4wkdjcQ==}
+  ws@7.5.11:
+    resolution: {integrity: sha512-zS54Oen9bITtp7kp2XM3AydrCIq1D+HwJOuH+c+e4LfpL/lotP5osijd+UoMnxwAam1GN8R4KtLAyIrIcBNpiA==}
     engines: {node: '>=8.3.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -3423,8 +3476,6 @@ snapshots:
       globby: 11.1.0
       read-yaml-file: 1.1.0
 
-  '@multicall/multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012': {}
-
   '@noble/ciphers@1.3.0': {}
 
   '@noble/curves@1.4.2':
@@ -4099,6 +4150,37 @@ snapshots:
     dependencies:
       '@types/node': 22.19.17
 
+  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260525.1':
+    optional: true
+
+  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260525.1':
+    optional: true
+
+  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260525.1':
+    optional: true
+
+  '@typescript/native-preview-linux-arm@7.0.0-dev.20260525.1':
+    optional: true
+
+  '@typescript/native-preview-linux-x64@7.0.0-dev.20260525.1':
+    optional: true
+
+  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260525.1':
+    optional: true
+
+  '@typescript/native-preview-win32-x64@7.0.0-dev.20260525.1':
+    optional: true
+
+  '@typescript/native-preview@7.0.0-dev.20260525.1':
+    optionalDependencies:
+      '@typescript/native-preview-darwin-arm64': 7.0.0-dev.20260525.1
+      '@typescript/native-preview-darwin-x64': 7.0.0-dev.20260525.1
+      '@typescript/native-preview-linux-arm': 7.0.0-dev.20260525.1
+      '@typescript/native-preview-linux-arm64': 7.0.0-dev.20260525.1
+      '@typescript/native-preview-linux-x64': 7.0.0-dev.20260525.1
+      '@typescript/native-preview-win32-arm64': 7.0.0-dev.20260525.1
+      '@typescript/native-preview-win32-x64': 7.0.0-dev.20260525.1
+
   '@yarnpkg/lockfile@1.1.0': {}
 
   abitype@1.2.3(typescript@5.9.3):
@@ -4259,6 +4341,10 @@ snapshots:
       concat-map: 0.0.1
 
   brace-expansion@2.1.0:
+    dependencies:
+      balanced-match: 1.0.2
+
+  brace-expansion@2.1.1:
     dependencies:
       balanced-match: 1.0.2
 
@@ -4481,13 +4567,13 @@ snapshots:
   derivatives-contracts@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/ce6471c9e2b6b8058dd89a440c68a6e06ab082fc#path:/contracts(@nomicfoundation/hardhat-ethers@3.1.3(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3)))(@types/node@22.19.17)(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3)):
     dependencies:
       '@chainlink/contracts': 1.5.0(@types/node@22.19.17)(ethers@5.8.0)
-      '@multicall/multicall3': https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012
+      '@multicall/multicall3': multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012
       '@openzeppelin/contracts': 5.1.0
       '@openzeppelin/contracts-upgradeable': 5.1.0(@openzeppelin/contracts@5.1.0)
       '@openzeppelin/hardhat-upgrades': 3.9.1(@nomicfoundation/hardhat-ethers@3.1.3(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3)))(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3))
       collateral-margin: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/ef77952259de3abc1b219e18618ef3fb49ebce79
       hashprice-oracle: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/b65adbfeb7e6c4417747bfd3d94b6e89e162ed50
-      multicall3: '@multicall/multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012'
+      multicall3: https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012
       solidity-linked-list: 6.5.0
     transitivePeerDependencies:
       - '@nomicfoundation/hardhat-ethers'
@@ -4761,7 +4847,7 @@ snapshots:
 
   function-bind@1.1.2: {}
 
-  futures-contracts@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/64e5bc5af2397111d4b3392a9edbbd18f26a4474#path:/contracts(@types/node@22.19.17)(ethers@5.8.0)(typescript@5.9.3):
+  futures-contracts@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/f3fa176dd95c456a91dccd4feee4e54f610af05c#path:/contracts(@types/node@22.19.17)(ethers@5.8.0)(typescript@5.9.3):
     dependencies:
       '@chainlink/contracts': 1.5.0(@types/node@22.19.17)(ethers@5.8.0)
       '@noble/curves': 1.9.1
@@ -4772,7 +4858,7 @@ snapshots:
       '@safe-global/types-kit': 2.0.1(typescript@5.9.3)
       collateral-margin: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/ef77952259de3abc1b219e18618ef3fb49ebce79
       hashprice-oracle: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/55776ca92c86c69e38e5210e9b63d77d9e4218d8
-      multicall3: '@multicall/multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012'
+      multicall3: https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012
       solidity-linked-list: 6.5.0
       viem: 2.48.4(typescript@5.9.3)
     transitivePeerDependencies:
@@ -4883,7 +4969,7 @@ snapshots:
       tsort: 0.0.1
       undici: 5.29.0
       uuid: 8.3.2
-      ws: 7.5.10
+      ws: 7.5.11
     optionalDependencies:
       typescript: 5.9.3
     transitivePeerDependencies:
@@ -5148,7 +5234,7 @@ snapshots:
 
   minimatch@5.1.9:
     dependencies:
-      brace-expansion: 2.1.0
+      brace-expansion: 2.1.1
 
   minimatch@9.0.9:
     dependencies:
@@ -5186,6 +5272,8 @@ snapshots:
   mri@1.2.0: {}
 
   ms@2.1.3: {}
+
+  multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012: {}
 
   nice-try@1.0.5: {}
 
@@ -5747,7 +5835,7 @@ snapshots:
 
   wrappy@1.0.2: {}
 
-  ws@7.5.10: {}
+  ws@7.5.11: {}
 
   ws@8.18.0: {}
 
