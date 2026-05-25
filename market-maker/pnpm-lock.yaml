@@ -28,7 +28,7 @@ importers:
         version: 5.3.4
       futures-contracts:
         specifier: github:Lumerin-protocol/futures-marketplace#dev&path:/contracts
-        version: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/fd51b4e07c3c11b728ab0d8f00efc38aecb2bd5a#path:/contracts(@types/node@22.19.17)(ethers@5.8.0)(typescript@5.9.3)
+        version: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/64e5bc5af2397111d4b3392a9edbbd18f26a4474#path:/contracts(@types/node@22.19.17)(ethers@5.8.0)(typescript@5.9.3)
       js-yaml:
         specifier: ^4.1.0
         version: 4.1.1
@@ -1195,8 +1195,8 @@ packages:
     version: 1.0.0
     engines: {node: 24.x}
 
-  collateral-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/b8045fafcf7178928d414269e6d86d797b2e2cdc:
-    resolution: {tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/b8045fafcf7178928d414269e6d86d797b2e2cdc}
+  collateral-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/ef77952259de3abc1b219e18618ef3fb49ebce79:
+    resolution: {tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/ef77952259de3abc1b219e18618ef3fb49ebce79}
     version: 1.0.0
 
   color-convert@2.0.1:
@@ -1496,8 +1496,8 @@ packages:
   function-bind@1.1.2:
     resolution: {integrity: sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==}
 
-  futures-contracts@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/fd51b4e07c3c11b728ab0d8f00efc38aecb2bd5a#path:/contracts:
-    resolution: {path: /contracts, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/fd51b4e07c3c11b728ab0d8f00efc38aecb2bd5a}
+  futures-contracts@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/64e5bc5af2397111d4b3392a9edbbd18f26a4474#path:/contracts:
+    resolution: {path: /contracts, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/64e5bc5af2397111d4b3392a9edbbd18f26a4474}
     version: 1.0.0
     engines: {node: 24.x}
 
@@ -4395,7 +4395,7 @@ snapshots:
       - utf-8-validate
       - zod
 
-  collateral-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/b8045fafcf7178928d414269e6d86d797b2e2cdc: {}
+  collateral-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/ef77952259de3abc1b219e18618ef3fb49ebce79: {}
 
   color-convert@2.0.1:
     dependencies:
@@ -4485,7 +4485,7 @@ snapshots:
       '@openzeppelin/contracts': 5.1.0
       '@openzeppelin/contracts-upgradeable': 5.1.0(@openzeppelin/contracts@5.1.0)
       '@openzeppelin/hardhat-upgrades': 3.9.1(@nomicfoundation/hardhat-ethers@3.1.3(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3)))(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3))
-      collateral-margin: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/b8045fafcf7178928d414269e6d86d797b2e2cdc
+      collateral-margin: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/ef77952259de3abc1b219e18618ef3fb49ebce79
       hashprice-oracle: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/b65adbfeb7e6c4417747bfd3d94b6e89e162ed50
       multicall3: '@multicall/multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012'
       solidity-linked-list: 6.5.0
@@ -4761,7 +4761,7 @@ snapshots:
 
   function-bind@1.1.2: {}
 
-  futures-contracts@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/fd51b4e07c3c11b728ab0d8f00efc38aecb2bd5a#path:/contracts(@types/node@22.19.17)(ethers@5.8.0)(typescript@5.9.3):
+  futures-contracts@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/64e5bc5af2397111d4b3392a9edbbd18f26a4474#path:/contracts(@types/node@22.19.17)(ethers@5.8.0)(typescript@5.9.3):
     dependencies:
       '@chainlink/contracts': 1.5.0(@types/node@22.19.17)(ethers@5.8.0)
       '@noble/curves': 1.9.1
@@ -4770,7 +4770,7 @@ snapshots:
       '@safe-global/api-kit': 3.0.2(typescript@5.9.3)
       '@safe-global/protocol-kit': 6.1.2(typescript@5.9.3)
       '@safe-global/types-kit': 2.0.1(typescript@5.9.3)
-      collateral-margin: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/b8045fafcf7178928d414269e6d86d797b2e2cdc
+      collateral-margin: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/ef77952259de3abc1b219e18618ef3fb49ebce79
       hashprice-oracle: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/55776ca92c86c69e38e5210e9b63d77d9e4218d8
       multicall3: '@multicall/multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012'
       solidity-linked-list: 6.5.0

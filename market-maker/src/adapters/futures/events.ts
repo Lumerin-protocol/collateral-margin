@@ -1,6 +1,6 @@
 import type { Log, PublicClient, WatchContractEventReturnType } from "viem";
 import type { Unsubscribe, VenueEvent, VenueEvents } from "../../core/adapter.ts";
-import { FuturesAbi } from "futures-contracts/abi/Futures.ts";
+import { FuturesAbi } from "futures-contracts/abi/Futures";
 
 export const FUTURES_INSTRUMENT_ID = "futures";
 
@@ -83,7 +83,11 @@ export function decodeEvent(log: FuturesLog): VenueEvent | null {
       };
     }
     case "PositionClosed":
-      return { type: "position-changed", participant: "0x0" as `0x${string}`, instrumentId: FUTURES_INSTRUMENT_ID };
+      return {
+        type: "position-changed",
+        participant: "0x0" as `0x${string}`,
+        instrumentId: FUTURES_INSTRUMENT_ID,
+      };
     default:
       return null;
   }

@@ -1,4 +1,4 @@
-import { erc20Abi } from "viem";
+import { encodeFunctionData, erc20Abi } from "viem";
 import type { Chain, PublicClient, Transport } from "viem";
 import type pino from "pino";
 import type {
@@ -16,6 +16,7 @@ import { PortfolioMarginEngineAbi } from "collateral-margin-contracts/abi/Portfo
 import { Multicall3Abi } from "perps-contracts/abi/Multicall3.ts";
 import { depositToVault } from "../../core/vaultDeposit.ts";
 import { RawOracleReader, chainlinkAggregatorAbi } from "../../core/rawOracle.ts";
+import { attachTenderlyUrl } from "../../core/tenderly.ts";
 import { PerpsInstrumentAdapter } from "./instrument.ts";
 import { PerpsVenueEvents } from "./events.ts";
 
@@ -112,15 +113,30 @@ export class PerpsVenueAdapter implements VenueAdapter {
   }
 
   async multicall(calls: `0x${string}`[], opts: { maxFeePerGas?: bigint } = {}): Promise<`0x${string}`> {
-    return await this.wallet.walletClient.writeContract({
-      address: this.address,
-      abi: HashPowerPerpsDEXAbi,
-      functionName: "multicall",
-      args: [calls],
-      account: this.wallet.account,
-      chain: this.chain,
-      maxFeePerGas: opts.maxFeePerGas,
-    });
+    try {
+      return await this.wallet.walletClient.writeContract({
+        address: this.address,
+        abi: HashPowerPerpsDEXAbi,
+        functionName: "multicall",
+        args: [calls],
+        account: this.wallet.account,
+        chain: this.chain,
+        maxFeePerGas: opts.maxFeePerGas,
+      });
+    } catch (err) {
+      // Attach a Tenderly simulation URL so the failed multicall can be
+      // replayed/debugged with one click from the log.
+      throw attachTenderlyUrl(err, {
+        chainId: this.chain.id,
+        from: this.wallet.account.address,
+        to: this.address,
+        data: encodeFunctionData({
+          abi: HashPowerPerpsDEXAbi,
+          functionName: "multicall",
+          args: [calls],
+        }),
+      });
+    }
   }
 
   // ── Internal helpers used by the collateral account & instrument ─────────

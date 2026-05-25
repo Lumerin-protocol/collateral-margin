@@ -11,7 +11,7 @@ import type {
   OrderIntent,
   Position,
 } from "../../core/adapter.ts";
-import { FuturesAbi } from "futures-contracts/abi/Futures.ts";
+import { FuturesAbi } from "futures-contracts/abi/Futures";
 import type { FuturesVenueAdapter } from "./venue.ts";
 import { FuturesOwnOrders } from "./ownOrders.ts";
 
@@ -126,7 +126,8 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
     if (this.deliveryDurationDaysCache === null) return 0n;
     // marginPct is loaded lazily at first canPlace call; if we don't have it
     // yet, return 0 and let the engine gate sort it out on the first tx.
-    const cachedMarginPct = (this.venue as unknown as { marginPercentCache?: bigint }).marginPercentCache;
+    const cachedMarginPct = (this.venue as unknown as { marginPercentCache?: bigint })
+      .marginPercentCache;
     if (!cachedMarginPct) return 0n;
     return (intent.price * this.deliveryDurationDaysCache * intent.size * cachedMarginPct) / 100n;
   }

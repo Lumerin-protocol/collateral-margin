@@ -1,6 +1,6 @@
 import type pino from "pino";
 import type { OwnOrder, OwnOrderEvent, OwnOrderSource, Unsubscribe } from "../../core/adapter.ts";
-import { FuturesAbi } from "futures-contracts/abi/Futures.ts";
+import { FuturesAbi } from "futures-contracts/abi/Futures";
 import type { FuturesVenueAdapter } from "./venue.ts";
 import { FUTURES_INSTRUMENT_ID } from "./events.ts";
 

@@ -1,4 +1,4 @@
-import { erc20Abi } from "viem";
+import { encodeFunctionData, erc20Abi } from "viem";
 import type { Chain, PublicClient, Transport } from "viem";
 import type pino from "pino";
 import type {
@@ -10,12 +10,13 @@ import type {
   WalletContext,
 } from "../../core/adapter.ts";
 import type { NetworkClients } from "../../core/client.ts";
-import { FuturesAbi } from "futures-contracts/abi/Futures.ts";
+import { FuturesAbi } from "futures-contracts/abi/Futures";
 import { CollateralVaultAbi } from "collateral-margin-contracts/abi/CollateralVault.ts";
 import { PortfolioMarginEngineAbi } from "collateral-margin-contracts/abi/PortfolioMarginEngine.ts";
 import { Multicall3Abi } from "perps-contracts/abi/Multicall3.ts";
 import { depositToVault } from "../../core/vaultDeposit.ts";
 import { RawOracleReader } from "../../core/rawOracle.ts";
+import { attachTenderlyUrl } from "../../core/tenderly.ts";
 import { FuturesInstrumentAdapter } from "./instrument.ts";
 import { FuturesVenueEvents } from "./events.ts";
 
@@ -70,7 +71,9 @@ export class FuturesVenueAdapter implements VenueAdapter {
     this.address = opts.address;
     this.logger = opts.logger.child({ component: "futures-venue" });
 
-    const mc3 = opts.multicall3Address ?? (this.chain.contracts?.multicall3?.address as `0x${string}` | undefined);
+    const mc3 =
+      opts.multicall3Address ??
+      (this.chain.contracts?.multicall3?.address as `0x${string}` | undefined);
     if (!mc3) throw new Error(`chain ${this.chain.name} has no multicall3 address`);
     this.multicall3Address = mc3;
 
@@ -103,21 +106,43 @@ export class FuturesVenueAdapter implements VenueAdapter {
     return this.instrumentSingleton;
   }
 
-  async multicall(calls: `0x${string}`[], opts: { maxFeePerGas?: bigint } = {}): Promise<`0x${string}`> {
-    return await this.wallet.walletClient.writeContract({
-      address: this.address,
-      abi: FuturesAbi,
-      functionName: "multicall",
-      args: [calls],
-      account: this.wallet.account,
-      chain: this.chain,
-      maxFeePerGas: opts.maxFeePerGas,
-    });
+  async multicall(
+    calls: `0x${string}`[],
+    opts: { maxFeePerGas?: bigint } = {},
+  ): Promise<`0x${string}`> {
+    try {
+      return await this.wallet.walletClient.writeContract({
+        address: this.address,
+        abi: FuturesAbi,
+        functionName: "multicall",
+        args: [calls],
+        account: this.wallet.account,
+        chain: this.chain,
+        maxFeePerGas: opts.maxFeePerGas,
+      });
+    } catch (err) {
+      // Attach a Tenderly simulation URL so the failed multicall can be
+      // replayed/debugged with one click from the log.
+      throw attachTenderlyUrl(err, {
+        chainId: this.chain.id,
+        from: this.wallet.account.address,
+        to: this.address,
+        data: encodeFunctionData({
+          abi: FuturesAbi,
+          functionName: "multicall",
+          args: [calls],
+        }),
+      });
+    }
   }
 
   // ── Internal helpers ────────────────────────────────────────────────────
 
-  async resolveAddresses(): Promise<{ vault: `0x${string}`; engine: `0x${string}`; token: `0x${string}` }> {
+  async resolveAddresses(): Promise<{
+    vault: `0x${string}`;
+    engine: `0x${string}`;
+    token: `0x${string}`;
+  }> {
     if (this.vaultAddressCache && this.engineAddressCache && this.collateralTokenCache) {
       return {
         vault: this.vaultAddressCache,
@@ -183,7 +208,10 @@ export class FuturesVenueAdapter implements VenueAdapter {
     // The on-chain check is the real authority; this is just our pre-trade gate.
     this.deliveryDurationDaysCache = BigInt(duration);
     this.marginPercentCache = BigInt(liqMarginPct);
-    return { deliveryDurationDays: this.deliveryDurationDaysCache, marginPct: this.marginPercentCache };
+    return {
+      deliveryDurationDays: this.deliveryDurationDaysCache,
+      marginPct: this.marginPercentCache,
+    };
   }
 }
 
@@ -217,10 +245,30 @@ class FuturesCollateralAccount implements CollateralAccount {
       allowFailure: false,
       contracts: [
         { address: vault, abi: CollateralVaultAbi, functionName: "balanceOf", args: [owner] },
-        { address: engine, abi: PortfolioMarginEngineAbi, functionName: "computePortfolioIM", args: [owner] },
-        { address: engine, abi: PortfolioMarginEngineAbi, functionName: "computePortfolioMM", args: [owner] },
-        { address: this.venue.address, abi: FuturesAbi, functionName: "getFuturesOrderMargin", args: [owner] },
-        { address: this.venue.address, abi: FuturesAbi, functionName: "getFuturesUnrealizedPnl", args: [owner] },
+        {
+          address: engine,
+          abi: PortfolioMarginEngineAbi,
+          functionName: "computePortfolioIM",
+          args: [owner],
+        },
+        {
+          address: engine,
+          abi: PortfolioMarginEngineAbi,
+          functionName: "computePortfolioMM",
+          args: [owner],
+        },
+        {
+          address: this.venue.address,
+          abi: FuturesAbi,
+          functionName: "getFuturesOrderMargin",
+          args: [owner],
+        },
+        {
+          address: this.venue.address,
+          abi: FuturesAbi,
+          functionName: "getFuturesUnrealizedPnl",
+          args: [owner],
+        },
         { address: token, abi: erc20Abi, functionName: "balanceOf", args: [owner] },
         { address: mc3, abi: Multicall3Abi, functionName: "getEthBalance", args: [owner] },
       ],
