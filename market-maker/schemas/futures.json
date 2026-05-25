@@ -30,7 +30,7 @@
     },
     "commitHash": {
       "default": "unknown",
-      "description": "Build-time commit SHA; surfaced via /healthz for ops correlation.",
+      "description": "Build-time commit SHA; surfaced via /health for ops correlation.",
       "type": "string"
     },
     "logLevel": {
@@ -905,6 +905,21 @@
           "default": 3001
         }
       }
+    },
+    "multicallBatchSize": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+          "description": "Environment variable interpolation (resolved at startup)"
+        }
+      ],
+      "description": "Maximum number of contract calls bundled into a single Multicall3 read. Calls are chunked transparently; lower values reduce RPC timeouts on busy providers at the cost of more round-trips.",
+      "default": 10
     }
   }
 }

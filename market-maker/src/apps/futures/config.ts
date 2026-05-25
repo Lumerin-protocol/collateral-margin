@@ -160,14 +160,16 @@ export const futuresRootSchema = Type.Object(
     oracle: oracleSchema,
     timing: timingSchema,
     health: healthSchema,
-    multicallBatchSize: Type.Number({
-      minimum: 1,
-      default: 10,
-      description:
-        "Maximum number of contract calls bundled into a single Multicall3 read. " +
-        "Calls are chunked transparently; lower values reduce RPC timeouts on busy providers " +
-        "at the cost of more round-trips.",
-    }),
+    multicallBatchSize: Type.Optional(
+      Type.Number({
+        minimum: 1,
+        default: 10,
+        description:
+          "Maximum number of contract calls bundled into a single Multicall3 read. " +
+          "Calls are chunked transparently; lower values reduce RPC timeouts on busy providers " +
+          "at the cost of more round-trips.",
+      }),
+    ),
   },
   { ...Closed, description: "Titan Market Maker — Futures app config." },
 );
