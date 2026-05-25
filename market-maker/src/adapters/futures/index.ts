@@ -8,6 +8,7 @@ export interface CreateFuturesVenueOpts {
   wallet: WalletContext;
   address: `0x${string}`;
   multicall3Address?: `0x${string}`;
+  multicallBatchSize?: number;
   logger: pino.Logger;
 }
 
@@ -16,7 +17,9 @@ export interface CreateFuturesVenueOpts {
  *
  * matchingMode = "exact" — fills only happen when prices coincide exactly.
  */
-export async function createFuturesVenue(opts: CreateFuturesVenueOpts): Promise<VenueAdapter> {
+export async function createFuturesVenue(
+  opts: CreateFuturesVenueOpts,
+): Promise<VenueAdapter> {
   return new FuturesVenueAdapter(opts);
 }
 

@@ -33,10 +33,16 @@ export class FuturesOwnOrders implements OwnOrderSource {
 
   private readonly venue: FuturesVenueAdapter;
   private readonly logger: pino.Logger;
+  private readonly multicallBatchSize: number;
 
-  constructor(venue: FuturesVenueAdapter, logger: pino.Logger) {
+  constructor(
+    venue: FuturesVenueAdapter,
+    logger: pino.Logger,
+    multicallBatchSize: number,
+  ) {
     this.venue = venue;
     this.logger = logger.child({ component: "futures-own-orders" });
+    this.multicallBatchSize = multicallBatchSize;
   }
 
   async list(): Promise<OwnOrder[]> {
@@ -75,19 +81,31 @@ export class FuturesOwnOrders implements OwnOrderSource {
       return;
     }
 
-    const calls = orderIds.map((id) => ({
+    const allCalls = orderIds.map((id) => ({
       address: this.venue.address,
       abi: FuturesAbi,
       functionName: "getOrderById" as const,
       args: [id] as const,
     }));
-    const orders = await this.venue.publicClient.multicall({
-      allowFailure: false,
-      contracts: calls,
-    });
+
+    // Chunk to stay under RPC payload / timeout limits.
+    const batchSize = this.multicallBatchSize;
+    const allOrders: unknown[] = [];
+    for (let i = 0; i < allCalls.length; i += batchSize) {
+      const chunk = allCalls.slice(i, i + batchSize);
+      const chunkResults = await this.venue.publicClient.multicall({
+        allowFailure: false,
+        contracts: chunk,
+      });
+      allOrders.push(...chunkResults);
+    }
 
     for (let i = 0; i < orderIds.length; i++) {
-      const o = orders[i];
+      const o = allOrders[i] as {
+        participant: string;
+        pricePerDay: bigint;
+        isBuy: boolean;
+      };
       if (
         !o.participant ||
         o.participant === "0x0000000000000000000000000000000000000000"

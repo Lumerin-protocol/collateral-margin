@@ -40,12 +40,18 @@ const futuresVenueSchema = Type.Object(
     kind: Type.Literal("futures", {
       description: "Venue type — must be 'futures' for the Futures contract.",
     }),
-    address: TypeEthAddress({ description: "Deployed Futures contract address." }),
+    address: TypeEthAddress({
+      description: "Deployed Futures contract address.",
+    }),
     wallet: Type.String({
-      description: "Key in the top-level `wallets` map identifying the signer for this venue.",
+      description:
+        "Key in the top-level `wallets` map identifying the signer for this venue.",
     }),
   },
-  { ...Closed, description: "Futures venue identification and signer selection." },
+  {
+    ...Closed,
+    description: "Futures venue identification and signer selection.",
+  },
 );
 
 const futuresPricingSchema = Type.Object(
@@ -56,7 +62,8 @@ const futuresPricingSchema = Type.Object(
     }),
     riskAversion: Type.Number({
       minimum: 0,
-      description: "Avellaneda–Stoikov risk aversion γ. Higher = stronger inventory skew.",
+      description:
+        "Avellaneda–Stoikov risk aversion γ. Higher = stronger inventory skew.",
     }),
     marginCallTimeSec: Type.Number({
       minimum: 0,
@@ -65,16 +72,19 @@ const futuresPricingSchema = Type.Object(
     }),
     minSpreadBps: Type.Number({
       minimum: 0,
-      description: "Floor on the half-spread in bps. Quotes never tighten below this.",
+      description:
+        "Floor on the half-spread in bps. Quotes never tighten below this.",
     }),
     volatilityMultiplier: Type.Number({
       minimum: 0,
-      description: "Multiplier applied to realized volatility when widening the spread.",
+      description:
+        "Multiplier applied to realized volatility when widening the spread.",
     }),
     maxSkewTicks: Type.Number({
       const: 0,
       default: 0,
-      description: "Pinned to 0 — under reservation-price the skew is encoded in r itself.",
+      description:
+        "Pinned to 0 — under reservation-price the skew is encoded in r itself.",
     }),
   },
   { ...Closed, description: "Reservation-price pricing parameters." },
@@ -103,7 +113,8 @@ const futuresSizingSchema = Type.Object(
     taperRatio: Type.Number({
       exclusiveMinimum: 0,
       exclusiveMaximum: 1,
-      description: "Geometric decay ratio in (0, 1). Each subsequent level is taperRatio × the previous.",
+      description:
+        "Geometric decay ratio in (0, 1). Each subsequent level is taperRatio × the previous.",
     }),
   },
   { ...Closed, description: "Geometric-taper sizing parameters." },
@@ -113,11 +124,13 @@ export const futuresRootSchema = Type.Object(
   {
     nodeEnv: Type.String({
       default: "development",
-      description: "Environment label (development/staging/production). Used for log enrichment only.",
+      description:
+        "Environment label (development/staging/production). Used for log enrichment only.",
     }),
     commitHash: Type.String({
       default: "unknown",
-      description: "Build-time commit SHA; surfaced via /healthz for ops correlation.",
+      description:
+        "Build-time commit SHA; surfaced via /health for ops correlation.",
     }),
     logLevel: Type.String({
       default: "info",
@@ -125,7 +138,8 @@ export const futuresRootSchema = Type.Object(
     }),
     dryRun: Type.Boolean({
       default: false,
-      description: "If true, all order writes are skipped — quotes are computed but not submitted.",
+      description:
+        "If true, all order writes are skipped — quotes are computed but not submitted.",
     }),
     cancelOrdersOnShutdown: Type.Boolean({
       default: true,
@@ -133,7 +147,8 @@ export const futuresRootSchema = Type.Object(
         "If true (default), SIGINT/SIGTERM trigger executor.cancelAll() before exit. Set false to leave resting orders on the book on exit (useful for restarts).",
     }),
     wallets: Type.Record(Type.String(), walletSchema, {
-      description: "Map of named signer wallets; venue.wallet selects which one signs.",
+      description:
+        "Map of named signer wallets; venue.wallet selects which one signs.",
     }),
     network: networkSchema,
     venue: futuresVenueSchema,
@@ -145,6 +160,14 @@ export const futuresRootSchema = Type.Object(
     oracle: oracleSchema,
     timing: timingSchema,
     health: healthSchema,
+    multicallBatchSize: Type.Number({
+      minimum: 1,
+      default: 10,
+      description:
+        "Maximum number of contract calls bundled into a single Multicall3 read. " +
+        "Calls are chunked transparently; lower values reduce RPC timeouts on busy providers " +
+        "at the cost of more round-trips.",
+    }),
   },
   { ...Closed, description: "Titan Market Maker — Futures app config." },
 );
@@ -160,10 +183,14 @@ export type FuturesMakerConfig = Omit<
   timing: ParsedTimingConfig;
   collateral: ParsedCollateralConfig;
   oracle: ParsedOracleConfig;
-  sizing: Omit<RawFuturesConfig["sizing"], "baseQuantity"> & { baseQuantity: bigint };
+  sizing: Omit<RawFuturesConfig["sizing"], "baseQuantity"> & {
+    baseQuantity: bigint;
+  };
 };
 
-export function loadFuturesConfig(opts: { path?: string; env?: NodeJS.ProcessEnv } = {}): FuturesMakerConfig {
+export function loadFuturesConfig(
+  opts: { path?: string; env?: NodeJS.ProcessEnv } = {},
+): FuturesMakerConfig {
   return loadConfigFromFile<FuturesMakerConfig, RawFuturesConfig>({
     schema: futuresRootSchema,
     path: opts.path,
@@ -176,12 +203,17 @@ export function loadFuturesConfig(opts: { path?: string; env?: NodeJS.ProcessEnv
       oracle: parseOracleConfig(raw.oracle),
       sizing: {
         ...raw.sizing,
-        baseQuantity: configBigint(String(raw.sizing.baseQuantity), "sizing.baseQuantity"),
+        baseQuantity: configBigint(
+          String(raw.sizing.baseQuantity),
+          "sizing.baseQuantity",
+        ),
       },
     }),
     validate: (cfg) => {
       if (!cfg.wallets[cfg.venue.wallet]) {
-        throw new ConfigError(`venue.wallet "${cfg.venue.wallet}" not in wallets map`);
+        throw new ConfigError(
+          `venue.wallet "${cfg.venue.wallet}" not in wallets map`,
+        );
       }
     },
   });

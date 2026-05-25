@@ -25,6 +25,8 @@ export interface FuturesVenueOptions {
   wallet: WalletContext;
   address: `0x${string}`;
   multicall3Address?: `0x${string}`;
+  /** Max calls per Multicall3 read batch. Default 100. */
+  multicallBatchSize?: number;
   logger: pino.Logger;
 }
 
@@ -54,6 +56,7 @@ export class FuturesVenueAdapter implements VenueAdapter {
 
   private readonly logger: pino.Logger;
   private readonly multicall3Address: `0x${string}`;
+  readonly multicallBatchSize: number;
   private instrumentSingleton: FuturesInstrumentAdapter | null = null;
 
   private vaultAddressCache: `0x${string}` | null = null;
@@ -74,8 +77,10 @@ export class FuturesVenueAdapter implements VenueAdapter {
     const mc3 =
       opts.multicall3Address ??
       (this.chain.contracts?.multicall3?.address as `0x${string}` | undefined);
-    if (!mc3) throw new Error(`chain ${this.chain.name} has no multicall3 address`);
+    if (!mc3)
+      throw new Error(`chain ${this.chain.name} has no multicall3 address`);
     this.multicall3Address = mc3;
+    this.multicallBatchSize = opts.multicallBatchSize ?? 100;
 
     this.events = new FuturesVenueEvents(this.publicClient, this.address);
     this.account = new FuturesCollateralAccount(this);
@@ -90,8 +95,16 @@ export class FuturesVenueAdapter implements VenueAdapter {
         const [oracle, divisor] = await this.publicClient.multicall({
           allowFailure: false,
           contracts: [
-            { address: this.address, abi: FuturesAbi, functionName: "hashrateOracle" },
-            { address: this.address, abi: FuturesAbi, functionName: "hashpriceScalingDivisor" },
+            {
+              address: this.address,
+              abi: FuturesAbi,
+              functionName: "hashrateOracle",
+            },
+            {
+              address: this.address,
+              abi: FuturesAbi,
+              functionName: "hashpriceScalingDivisor",
+            },
           ],
         });
         return { oracle, divisor };
@@ -101,7 +114,10 @@ export class FuturesVenueAdapter implements VenueAdapter {
 
   async getInstrument(): Promise<InstrumentAdapter> {
     if (!this.instrumentSingleton) {
-      this.instrumentSingleton = new FuturesInstrumentAdapter(this, this.logger);
+      this.instrumentSingleton = new FuturesInstrumentAdapter(
+        this,
+        this.logger,
+      );
     }
     return this.instrumentSingleton;
   }
@@ -143,7 +159,11 @@ export class FuturesVenueAdapter implements VenueAdapter {
     engine: `0x${string}`;
     token: `0x${string}`;
   }> {
-    if (this.vaultAddressCache && this.engineAddressCache && this.collateralTokenCache) {
+    if (
+      this.vaultAddressCache &&
+      this.engineAddressCache &&
+      this.collateralTokenCache
+    ) {
       return {
         vault: this.vaultAddressCache,
         engine: this.engineAddressCache,
@@ -153,8 +173,16 @@ export class FuturesVenueAdapter implements VenueAdapter {
     const [vault, engine] = await this.publicClient.multicall({
       allowFailure: false,
       contracts: [
-        { address: this.address, abi: FuturesAbi, functionName: "collateralVault" },
-        { address: this.address, abi: FuturesAbi, functionName: "marginEngine" },
+        {
+          address: this.address,
+          abi: FuturesAbi,
+          functionName: "collateralVault",
+        },
+        {
+          address: this.address,
+          abi: FuturesAbi,
+          functionName: "marginEngine",
+        },
       ],
     });
     const token = await this.publicClient.readContract({
@@ -189,8 +217,14 @@ export class FuturesVenueAdapter implements VenueAdapter {
    * static-ish (admin-changeable) so we read them once and reuse for the
    * `estimateOrderMargin` formula.
    */
-  async getMarginInputs(): Promise<{ deliveryDurationDays: bigint; marginPct: bigint }> {
-    if (this.deliveryDurationDaysCache !== null && this.marginPercentCache !== null) {
+  async getMarginInputs(): Promise<{
+    deliveryDurationDays: bigint;
+    marginPct: bigint;
+  }> {
+    if (
+      this.deliveryDurationDaysCache !== null &&
+      this.marginPercentCache !== null
+    ) {
       return {
         deliveryDurationDays: this.deliveryDurationDaysCache,
         marginPct: this.marginPercentCache,
@@ -199,8 +233,16 @@ export class FuturesVenueAdapter implements VenueAdapter {
     const [duration, liqMarginPct] = await this.publicClient.multicall({
       allowFailure: false,
       contracts: [
-        { address: this.address, abi: FuturesAbi, functionName: "deliveryDurationDays" },
-        { address: this.address, abi: FuturesAbi, functionName: "liquidationMarginPercent" },
+        {
+          address: this.address,
+          abi: FuturesAbi,
+          functionName: "deliveryDurationDays",
+        },
+        {
+          address: this.address,
+          abi: FuturesAbi,
+          functionName: "liquidationMarginPercent",
+        },
       ],
     });
     // Note: `getMarginPercent` on chain adds a breach-penalty term we don't
@@ -244,7 +286,12 @@ class FuturesCollateralAccount implements CollateralAccount {
     ] = await this.venue.publicClient.multicall({
       allowFailure: false,
       contracts: [
-        { address: vault, abi: CollateralVaultAbi, functionName: "balanceOf", args: [owner] },
+        {
+          address: vault,
+          abi: CollateralVaultAbi,
+          functionName: "balanceOf",
+          args: [owner],
+        },
         {
           address: engine,
           abi: PortfolioMarginEngineAbi,
@@ -269,8 +316,18 @@ class FuturesCollateralAccount implements CollateralAccount {
           functionName: "getFuturesUnrealizedPnl",
           args: [owner],
         },
-        { address: token, abi: erc20Abi, functionName: "balanceOf", args: [owner] },
-        { address: mc3, abi: Multicall3Abi, functionName: "getEthBalance", args: [owner] },
+        {
+          address: token,
+          abi: erc20Abi,
+          functionName: "balanceOf",
+          args: [owner],
+        },
+        {
+          address: mc3,
+          abi: Multicall3Abi,
+          functionName: "getEthBalance",
+          args: [owner],
+        },
       ],
     });
 
