@@ -1,4 +1,10 @@
-import type { Account, Chain, PublicClient, Transport, WalletClient } from "viem";
+import type {
+  Account,
+  Chain,
+  PublicClient,
+  Transport,
+  WalletClient,
+} from "viem";
 
 // ─── Order intents ───────────────────────────────────────────────────────────
 
@@ -179,11 +185,40 @@ export interface OwnOrderSource {
  * `OwnOrderSource.list()` (perps).
  */
 export type VenueEvent =
-  | { type: "order-created"; orderId: `0x${string}`; participant: `0x${string}`; price: bigint; side: Side; size: bigint; instrumentId?: string }
-  | { type: "order-updated"; orderId: `0x${string}`; participant: `0x${string}`; newSize: bigint; instrumentId?: string }
-  | { type: "order-cancelled"; orderId: `0x${string}`; participant: `0x${string}`; instrumentId?: string }
-  | { type: "order-matched"; makerOrderId: `0x${string}`; maker?: `0x${string}`; taker?: `0x${string}`; instrumentId?: string }
-  | { type: "position-changed"; participant: `0x${string}`; instrumentId?: string };
+  | {
+      type: "order-created";
+      orderId: `0x${string}`;
+      participant: `0x${string}`;
+      price: bigint;
+      side: Side;
+      size: bigint;
+      instrumentId?: string;
+    }
+  | {
+      type: "order-updated";
+      orderId: `0x${string}`;
+      participant: `0x${string}`;
+      newSize: bigint;
+      instrumentId?: string;
+    }
+  | {
+      type: "order-cancelled";
+      orderId: `0x${string}`;
+      participant?: `0x${string}`;
+      instrumentId?: string;
+    }
+  | {
+      type: "order-matched";
+      makerOrderId: `0x${string}`;
+      maker?: `0x${string}`;
+      taker?: `0x${string}`;
+      instrumentId?: string;
+    }
+  | {
+      type: "position-changed";
+      participant: `0x${string}`;
+      instrumentId?: string;
+    };
 
 export interface VenueEvents {
   subscribe(cb: (event: VenueEvent) => void): Unsubscribe;
@@ -266,5 +301,8 @@ export interface VenueAdapter {
    * Batch cancels/creates in one tx. Returns tx hash. Implementations route
    * through the venue contract's multicall function.
    */
-  multicall(calls: `0x${string}`[], opts: { maxFeePerGas?: bigint }): Promise<`0x${string}`>;
+  multicall(
+    calls: `0x${string}`[],
+    opts: { maxFeePerGas?: bigint },
+  ): Promise<`0x${string}`>;
 }

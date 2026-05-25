@@ -1,10 +1,21 @@
 import type { Log, PublicClient, WatchContractEventReturnType } from "viem";
-import type { Unsubscribe, VenueEvent, VenueEvents } from "../../core/adapter.ts";
-import { FuturesAbi } from "futures-contracts/abi/Futures.ts";
+import type {
+  Unsubscribe,
+  VenueEvent,
+  VenueEvents,
+} from "../../core/adapter.ts";
+import { FuturesAbi } from "futures-contracts/abi/Futures";
 
 export const FUTURES_INSTRUMENT_ID = "futures";
 
-type FuturesLog = Log<bigint, number, false, undefined, false, typeof FuturesAbi>;
+type FuturesLog = Log<
+  bigint,
+  number,
+  false,
+  undefined,
+  false,
+  typeof FuturesAbi
+>;
 
 /** Multiplexes one viem watcher across many subscribers. Decode-only. */
 export class FuturesVenueEvents implements VenueEvents {
@@ -51,7 +62,13 @@ export function decodeEvent(log: FuturesLog): VenueEvent | null {
   switch (log.eventName) {
     case "OrderCreated": {
       const { orderId, participant, pricePerDay, isBuy } = log.args;
-      if (!orderId || !participant || pricePerDay === undefined || isBuy === undefined) return null;
+      if (
+        !orderId ||
+        !participant ||
+        pricePerDay === undefined ||
+        isBuy === undefined
+      )
+        return null;
       return {
         type: "order-created",
         orderId,
@@ -63,27 +80,29 @@ export function decodeEvent(log: FuturesLog): VenueEvent | null {
       };
     }
     case "OrderClosed": {
-      const { orderId, participant } = log.args;
-      if (!orderId || !participant) return null;
+      const { orderId } = log.args;
+      if (!orderId) return null;
       return {
         type: "order-cancelled",
         orderId,
-        participant,
         instrumentId: FUTURES_INSTRUMENT_ID,
       };
     }
-    case "PositionCreated": {
-      const { seller, buyer } = log.args;
-      if (!seller || !buyer) return null;
-      // Emit a position-changed for both sides; consumers filter by participant.
+    case "LotCreated": {
+      const { lotId, seller, buyer } = log.args;
+      if (!lotId || !seller || !buyer) return null;
       return {
         type: "position-changed",
         participant: seller,
         instrumentId: FUTURES_INSTRUMENT_ID,
       };
     }
-    case "PositionClosed":
-      return { type: "position-changed", participant: "0x0" as `0x${string}`, instrumentId: FUTURES_INSTRUMENT_ID };
+    case "LotClosed":
+      return {
+        type: "position-changed",
+        participant: "0x0" as `0x${string}`,
+        instrumentId: FUTURES_INSTRUMENT_ID,
+      };
     default:
       return null;
   }

@@ -5,7 +5,7 @@ import type {
   OwnOrderSource,
   Unsubscribe,
 } from "../../core/adapter.ts";
-import { FuturesAbi } from "futures-contracts/abi/Futures.ts";
+import { FuturesAbi } from "futures-contracts/abi/Futures";
 import type { FuturesVenueAdapter } from "./venue.ts";
 import { FUTURES_INSTRUMENT_ID } from "./events.ts";
 
@@ -68,7 +68,10 @@ export class FuturesOwnOrders implements OwnOrderSource {
 
     if (orderIds.length === 0) {
       this.bootstrapped = true;
-      this.logger.info({ orders: 0 }, "futures own-orders bootstrapped (empty)");
+      this.logger.info(
+        { orders: 0 },
+        "futures own-orders bootstrapped (empty)",
+      );
       return;
     }
 
@@ -78,11 +81,18 @@ export class FuturesOwnOrders implements OwnOrderSource {
       functionName: "getOrderById" as const,
       args: [id] as const,
     }));
-    const orders = await this.venue.publicClient.multicall({ allowFailure: false, contracts: calls });
+    const orders = await this.venue.publicClient.multicall({
+      allowFailure: false,
+      contracts: calls,
+    });
 
     for (let i = 0; i < orderIds.length; i++) {
       const o = orders[i];
-      if (!o.participant || o.participant === "0x0000000000000000000000000000000000000000") continue;
+      if (
+        !o.participant ||
+        o.participant === "0x0000000000000000000000000000000000000000"
+      )
+        continue;
       this.cache.set(orderIds[i], {
         orderId: orderIds[i],
         price: o.pricePerDay,
@@ -93,7 +103,10 @@ export class FuturesOwnOrders implements OwnOrderSource {
     }
 
     this.bootstrapped = true;
-    this.logger.info({ orders: this.cache.size }, "futures own-orders bootstrapped");
+    this.logger.info(
+      { orders: this.cache.size },
+      "futures own-orders bootstrapped",
+    );
   }
 
   private attach(): Unsubscribe {
@@ -113,7 +126,7 @@ export class FuturesOwnOrders implements OwnOrderSource {
         return;
       }
       if (evt.type === "order-cancelled") {
-        if (evt.participant.toLowerCase() !== own) return;
+        // OrderClosed no longer carries participant; identify own orders by cache.
         if (!this.cache.has(evt.orderId)) return;
         this.cache.delete(evt.orderId);
         this.notify({ type: "removed", orderId: evt.orderId });
