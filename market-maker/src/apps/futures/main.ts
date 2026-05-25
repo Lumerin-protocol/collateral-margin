@@ -21,17 +21,31 @@ import { loadFuturesConfig } from "./config.ts";
 async function main(): Promise<void> {
   loadDotenvFiles(import.meta.dirname);
   const config = loadFuturesConfig();
-  const logger = pino({ level: config.logLevel, serializers: { err: serializeError } });
-  logger.info({ venue: "futures", address: config.venue.address, dryRun: config.dryRun }, "starting futures mm");
+  const logger = pino({
+    level: config.logLevel,
+    serializers: { err: serializeError },
+  });
+  logger.info(
+    { venue: "futures", address: config.venue.address, dryRun: config.dryRun },
+    "starting futures mm",
+  );
 
-  const network = createNetworkClients(config.network.name, config.network.rpcUrl);
-  const wallets = new WalletRegistry(config.wallets, network.chain, network.transport);
+  const network = createNetworkClients(
+    config.network.name,
+    config.network.rpcUrl,
+  );
+  const wallets = new WalletRegistry(
+    config.wallets,
+    network.chain,
+    network.transport,
+  );
   const wallet = wallets.get(config.venue.wallet);
 
   const venue = await createFuturesVenue({
     network,
     wallet,
     address: config.venue.address,
+    multicallBatchSize: config.multicallBatchSize,
     logger,
   });
   const instrument = await venue.getInstrument();
@@ -42,7 +56,10 @@ async function main(): Promise<void> {
   await instrument.ownOrders.bootstrap();
 
   const history = config.oracle.history
-    ? new HashpriceOracleSubgraphSource({ url: config.oracle.history.subgraphUrl, logger })
+    ? new HashpriceOracleSubgraphSource({
+        url: config.oracle.history.subgraphUrl,
+        logger,
+      })
     : undefined;
   const oracle = new OracleTracker(instrument, logger, {
     windowSize: config.oracle.windowSize,
@@ -54,7 +71,10 @@ async function main(): Promise<void> {
   const gas = new GasTracker(
     network.publicClient,
     {
-      ethPriceFeedAddress: config.network.ethPriceFeed === "" ? undefined : config.network.ethPriceFeed,
+      ethPriceFeedAddress:
+        config.network.ethPriceFeed === ""
+          ? undefined
+          : config.network.ethPriceFeed,
       gasSpikeThresholdPct: config.risk.gasSpikeThresholdPct,
       gasCapMultiplier: config.gas.gasCapMultiplier,
     },

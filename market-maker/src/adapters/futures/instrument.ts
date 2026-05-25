@@ -29,8 +29,9 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
 
   constructor(venue: FuturesVenueAdapter, logger: pino.Logger) {
     this.venue = venue;
-    this.book = new FuturesBook(this);
-    this.ownOrders = new FuturesOwnOrders(venue, logger);
+    const batchSize = venue.multicallBatchSize;
+    this.book = new FuturesBook(this, batchSize);
+    this.ownOrders = new FuturesOwnOrders(venue, logger, batchSize);
   }
 
   async getIndexPrice(): Promise<bigint> {
@@ -73,7 +74,8 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
       abi: FuturesAbi,
       functionName: "getDeliveryDates",
     });
-    if (deliveryDates.length === 0) throw new Error("futures contract returned no delivery dates");
+    if (deliveryDates.length === 0)
+      throw new Error("futures contract returned no delivery dates");
     this.deliveryDateCache = deliveryDates[0];
 
     // Eagerly cache margin inputs so `estimateOrderMargin` can be synchronous.
@@ -88,13 +90,17 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
 
   encodeCreate(intent: OrderIntent): `0x${string}` {
     if (this.deliveryDateCache === null) {
-      throw new Error("futures: getContext() must be called before encodeCreate()");
+      throw new Error(
+        "futures: getContext() must be called before encodeCreate()",
+      );
     }
     const qty = Number(intent.size);
     if (qty <= 0 || qty > 127) {
       throw new Error(`futures: order size ${qty} must be in (0, 127]`);
     }
-    const signed = (intent.side === "buy" ? qty : -qty) as number & { readonly __int8__: true };
+    const signed = (intent.side === "buy" ? qty : -qty) as number & {
+      readonly __int8__: true;
+    };
     return encodeFunctionData({
       abi: FuturesAbi,
       functionName: "createOrder",
@@ -126,10 +132,17 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
     if (this.deliveryDurationDaysCache === null) return 0n;
     // marginPct is loaded lazily at first canPlace call; if we don't have it
     // yet, return 0 and let the engine gate sort it out on the first tx.
-    const cachedMarginPct = (this.venue as unknown as { marginPercentCache?: bigint })
-      .marginPercentCache;
+    const cachedMarginPct = (
+      this.venue as unknown as { marginPercentCache?: bigint }
+    ).marginPercentCache;
     if (!cachedMarginPct) return 0n;
-    return (intent.price * this.deliveryDurationDaysCache * intent.size * cachedMarginPct) / 100n;
+    return (
+      (intent.price *
+        this.deliveryDurationDaysCache *
+        intent.size *
+        cachedMarginPct) /
+      100n
+    );
   }
 
   async estimateCreateGas(account: `0x${string}`): Promise<bigint> {
@@ -139,7 +152,12 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
         address: this.venue.address,
         abi: FuturesAbi,
         functionName: "createOrder",
-        args: [1_000_000n, this.deliveryDateCache, "", 1 as number & { readonly __int8__: true }],
+        args: [
+          1_000_000n,
+          this.deliveryDateCache,
+          "",
+          1 as number & { readonly __int8__: true },
+        ],
         account,
       });
     } catch {
@@ -171,8 +189,10 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
 class FuturesBook implements BookSource {
   readonly matchingMode: MatchingMode = "exact";
   private readonly inst: FuturesInstrumentAdapter;
-  constructor(inst: FuturesInstrumentAdapter) {
+  private readonly multicallBatchSize: number;
+  constructor(inst: FuturesInstrumentAdapter, multicallBatchSize: number) {
     this.inst = inst;
+    this.multicallBatchSize = multicallBatchSize;
   }
 
   async tick(): Promise<bigint> {
@@ -183,21 +203,34 @@ class FuturesBook implements BookSource {
     const v = this.inst.venue;
     const dd = this.inst.getDeliveryDate();
     if (dd === null) {
-      throw new Error("futures: getContext() must be called before book.snapshot()");
+      throw new Error(
+        "futures: getContext() must be called before book.snapshot()",
+      );
     }
     const depth = BigInt(opts.depth ?? 200);
 
     const [bidPrices, askPrices] = await v.publicClient.multicall({
       allowFailure: false,
       contracts: [
-        { address: v.address, abi: FuturesAbi, functionName: "getBidPrices", args: [dd, depth] },
-        { address: v.address, abi: FuturesAbi, functionName: "getAskPrices", args: [dd, depth] },
+        {
+          address: v.address,
+          abi: FuturesAbi,
+          functionName: "getBidPrices",
+          args: [dd, depth],
+        },
+        {
+          address: v.address,
+          abi: FuturesAbi,
+          functionName: "getAskPrices",
+          args: [dd, depth],
+        },
       ],
     });
 
-    if (bidPrices.length === 0 && askPrices.length === 0) return { bids: [], asks: [] };
+    if (bidPrices.length === 0 && askPrices.length === 0)
+      return { bids: [], asks: [] };
 
-    const calls = [
+    const allCalls = [
       ...bidPrices.map((p) => ({
         address: v.address,
         abi: FuturesAbi,
@@ -211,16 +244,34 @@ class FuturesBook implements BookSource {
         args: [dd, p, false] as const,
       })),
     ];
-    const results = await v.publicClient.multicall({ allowFailure: false, contracts: calls });
 
-    const bidsRaw: DepthLevel[] = bidPrices.map((p, i) => ({ price: p, quantity: results[i] }));
+    // Chunk to stay under RPC payload / timeout limits.
+    const batchSize = this.multicallBatchSize;
+    const allResults: bigint[] = [];
+    for (let i = 0; i < allCalls.length; i += batchSize) {
+      const chunk = allCalls.slice(i, i + batchSize);
+      const chunkResults = await v.publicClient.multicall({
+        allowFailure: false,
+        contracts: chunk,
+      });
+      allResults.push(...chunkResults);
+    }
+
+    const bidsRaw: DepthLevel[] = bidPrices.map((p, i) => ({
+      price: p,
+      quantity: allResults[i],
+    }));
     const asksRaw: DepthLevel[] = askPrices.map((p, i) => ({
       price: p,
-      quantity: results[bidPrices.length + i],
+      quantity: allResults[bidPrices.length + i],
     }));
     // EnumerableSet returns prices in unspecified order; sort for the consumer.
-    const bids = bidsRaw.sort((a, b) => (a.price < b.price ? 1 : a.price > b.price ? -1 : 0));
-    const asks = asksRaw.sort((a, b) => (a.price < b.price ? -1 : a.price > b.price ? 1 : 0));
+    const bids = bidsRaw.sort((a, b) =>
+      a.price < b.price ? 1 : a.price > b.price ? -1 : 0,
+    );
+    const asks = asksRaw.sort((a, b) =>
+      a.price < b.price ? -1 : a.price > b.price ? 1 : 0,
+    );
     return { bids, asks };
   }
 }

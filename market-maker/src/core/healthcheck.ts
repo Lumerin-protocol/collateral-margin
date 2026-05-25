@@ -51,7 +51,8 @@ export class HealthCheck {
   lastTickAt = 0;
   executorStats: ExecutorStats | null = null;
   walletAddress = "";
-  status: "initializing" | "init-error" | "running" | "error" | "stopped" = "initializing";
+  status: "initializing" | "init-error" | "running" | "error" | "stopped" =
+    "initializing";
   lastError: ErrorInfo | null = null;
   paused = false;
 
@@ -69,9 +70,12 @@ export class HealthCheck {
       this.startedAt = Date.now();
       this.server = createServer((req, res) => {
         try {
-          if (req.method === "POST" && req.url === "/stop") return this.handleStop(res);
-          if (req.method === "POST" && req.url === "/start") return this.handleStart(res);
-          if (req.method === "GET" && req.url === "/health") return this.handleHealth(res);
+          if (req.method === "POST" && req.url === "/stop")
+            return this.handleStop(res);
+          if (req.method === "POST" && req.url === "/start")
+            return this.handleStart(res);
+          if (req.method === "GET" && req.url === "/health")
+            return this.handleHealth(res);
           res.writeHead(404);
           res.end();
         } catch (err) {
@@ -84,7 +88,10 @@ export class HealthCheck {
       const logger = this.opts.logger;
       const port = this.opts.port;
       this.server.listen(port, () => {
-        logger.info({ url: `http://localhost:${port}/health` }, "health endpoint started");
+        logger.info(
+          { url: `http://localhost:${port}/health` },
+          "health endpoint started",
+        );
         resolve();
       });
     });
@@ -222,28 +229,60 @@ function bigIntReplacer(_key: string, value: unknown): unknown {
 
 interface OwnOrdersView {
   count: number;
-  bids: Array<{ orderId: `0x${string}`; price: bigint; size: bigint }>;
-  asks: Array<{ orderId: `0x${string}`; price: bigint; size: bigint }>;
+  bids: Array<{ price: bigint; quantity: bigint; orderIds: `0x${string}`[] }>;
+  asks: Array<{ price: bigint; quantity: bigint; orderIds: `0x${string}`[] }>;
 }
 
 /**
- * Snapshot of resting MM orders, split by side and sorted top-of-book first
- * (best bid = highest price, best ask = lowest price). Bigints are stringified
- * by `bigIntReplacer` when the payload is serialised.
+ * Snapshot of resting MM orders, aggregated by (price, side) so that multiple
+ * orders at the same price level are collapsed into one entry with the
+ * individual `orderIds` listed as a nested array.
+ *
+ * Sorted top-of-book first (best bid = highest price, best ask = lowest price).
+ * Bigints are stringified by `bigIntReplacer` when the payload is serialised.
  */
-function serializeOwnOrders(orders: ReadonlyMap<`0x${string}`, OwnOrder>): OwnOrdersView {
-  const bids: OwnOrder[] = [];
-  const asks: OwnOrder[] = [];
+function serializeOwnOrders(
+  orders: ReadonlyMap<`0x${string}`, OwnOrder>,
+): OwnOrdersView {
+  // Aggregate by price within each side.
+  const bidMap = new Map<
+    bigint,
+    { quantity: bigint; orderIds: `0x${string}`[] }
+  >();
+  const askMap = new Map<
+    bigint,
+    { quantity: bigint; orderIds: `0x${string}`[] }
+  >();
   for (const order of orders.values()) {
-    (order.side === "buy" ? bids : asks).push(order);
+    const map = order.side === "buy" ? bidMap : askMap;
+    const entry = map.get(order.price);
+    if (entry) {
+      entry.quantity += order.size;
+      entry.orderIds.push(order.orderId);
+    } else {
+      map.set(order.price, { quantity: order.size, orderIds: [order.orderId] });
+    }
   }
-  // bigint compare; Number(a-b) would lose precision on large prices.
-  bids.sort((a, b) => (a.price < b.price ? 1 : a.price > b.price ? -1 : 0));
-  asks.sort((a, b) => (a.price < b.price ? -1 : a.price > b.price ? 1 : 0));
-  const project = (o: OwnOrder) => ({ orderId: o.orderId, price: o.price, size: o.size });
+
+  const sortDesc = (a: [bigint, unknown], b: [bigint, unknown]) =>
+    a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0;
+  const sortAsc = (a: [bigint, unknown], b: [bigint, unknown]) =>
+    a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
+
+  const bidEntries = [...bidMap.entries()].sort(sortDesc);
+  const askEntries = [...askMap.entries()].sort(sortAsc);
+
   return {
     count: orders.size,
-    bids: bids.map(project),
-    asks: asks.map(project),
+    bids: bidEntries.map(([price, v]) => ({
+      price,
+      quantity: v.quantity,
+      orderIds: v.orderIds,
+    })),
+    asks: askEntries.map(([price, v]) => ({
+      price,
+      quantity: v.quantity,
+      orderIds: v.orderIds,
+    })),
   };
 }

@@ -39,7 +39,7 @@ pricing:
 
 sizing:
   strategy: geometric-taper
-  baseQuantity: "500000000"           # venue-native (contracts base units)
+  baseQuantity: "500000000" # venue-native (contracts base units)
   numLevelsPerSide: 4
   taperRatio: 0.6
 
@@ -80,3 +80,5 @@ oracle:
 
 health:
   port: ${MAKER_HEALTH_PORT:-3001}
+
+multicallBatchSize: 10
