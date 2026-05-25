@@ -147,6 +147,48 @@ export class PredictiveCoordinator {
     return this.inflightRebuilds.size;
   }
 
+  /** Addresses with an in-flight snapshot rebuild right now. */
+  inflightUsers(): Address[] {
+    return Array.from(this.inflightRebuilds.keys());
+  }
+
+  /**
+   * One entry per user the predictor is watching. Combines the three
+   * indices (liquidation / warn-alert / critical-alert) into a single
+   * per-user record so consumers see "for user X, here are all the price
+   * levels that trigger something" instead of three separate rosters.
+   *
+   * `down` = price falling to/through the threshold trips the action;
+   * `up`   = price rising to/through it trips the action;
+   * `null` = the solver returned no threshold on that side (the user is
+   *          structurally safe in that direction at any plausible price,
+   *          OR is already past the threshold — see `solve.ts` for the
+   *          "already past" short-circuit).
+   *
+   * Bigint thresholds are stringified — JSON has no native bigint and the
+   * ops dashboards downstream need string-comparable values anyway.
+   */
+  thresholds(): PredictedThresholds[] {
+    const users = new Set<Address>([
+      ...this.liqIndex.users(),
+      ...this.warnIndex.users(),
+      ...this.critIndex.users(),
+    ]);
+    const out: PredictedThresholds[] = [];
+    for (const user of users) {
+      const liq = this.liqIndex.get(user);
+      const warn = this.warnIndex.get(user);
+      const crit = this.critIndex.get(user);
+      out.push({
+        user,
+        liq: priceSides(liq?.liqDown, liq?.liqUp),
+        warn: priceSides(warn?.liqDown, warn?.liqUp),
+        crit: priceSides(crit?.liqDown, crit?.liqUp),
+      });
+    }
+    return out;
+  }
+
   /**
    * Await all currently in-flight rebuilds. Used at startup so we can
    * declare "ready" only after the startup backfill has populated
@@ -327,6 +369,31 @@ export class PredictiveCoordinator {
       this.logger.error({ err, users: allUsers.length }, "handleCrossings failed");
     }
   }
+}
+
+/**
+ * One row of `thresholds()`. Three triggers per user (liquidation /
+ * warn-alert / critical-alert), each with a `down` and `up` price (or
+ * `null` if not crossable on that side).
+ */
+export interface PredictedThresholds {
+  user: Address;
+  liq: ThresholdSides;
+  warn: ThresholdSides;
+  crit: ThresholdSides;
+}
+
+/** `down`/`up` price levels for one trigger, JSON-friendly strings. */
+export interface ThresholdSides {
+  down: string | null;
+  up: string | null;
+}
+
+function priceSides(down: bigint | undefined, up: bigint | undefined): ThresholdSides {
+  return {
+    down: down === undefined ? null : down.toString(),
+    up: up === undefined ? null : up.toString(),
+  };
 }
 
 /**

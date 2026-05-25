@@ -13,6 +13,8 @@ import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
 import { HashPowerPerpsDEXAbi } from "derivatives-marketplace/HashPowerPerpsDEX.ts";
 import { sendLiquidate } from "../tx/liquidate.ts";
+import { formatGasCost } from "../tx/gasCost.ts";
+import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
 import type {
   LiquidateOrdersOutcome,
   LiquidatePositionOutcome,
@@ -33,11 +35,15 @@ export class PerpsVenue implements Venue {
   private readonly chain: Chain;
   private readonly config: Config;
   private readonly logger: pino.Logger;
+  private readonly ethUsdFeed: EthUsdFeed | undefined;
 
-  constructor(chain: Chain, config: Config, logger: pino.Logger) {
+  constructor(chain: Chain, config: Config, logger: pino.Logger, ethUsdFeed?: EthUsdFeed) {
     this.chain = chain;
     this.config = config;
     this.logger = logger.child({ venue: "perps" });
+    // See note in FuturesVenue — optional ETH/USD feed for `gasCostUsd`
+    // enrichment on confirmed-tx logs.
+    this.ethUsdFeed = ethUsdFeed;
   }
 
   marketLabel(_marketId: MarketId): string {
@@ -185,7 +191,7 @@ export class PerpsVenue implements Venue {
     const feeEarned = sumOrderLiquidatedFees(receipt);
     const ordersClosed = countSuccesses(successes);
     this.logger.info(
-      { user, hash, ordersClosed, feeEarned },
+      { user, hash, ordersClosed, feeEarned, ...formatGasCost(receipt, this.ethUsdFeed) },
       "perps batch liquidate confirmed",
     );
     return { feeEarned };
@@ -208,6 +214,7 @@ export class PerpsVenue implements Venue {
         // it the same way.
         return "notLiquidatable";
       },
+      ethUsdFeed: this.ethUsdFeed,
     });
 
     return "skipped" in result ? { skipped: result.skipped } : { feeEarned: result.feeEarned };

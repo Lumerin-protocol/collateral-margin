@@ -183,17 +183,26 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
   // ── Vault (UUPS proxy) ────────────────────────────────────────────────
   const vaultArt = artifacts.vault();
   const vaultImpl = await deploy(publicClient, owner.client, vaultArt, []);
-  const vault = await deployProxy(publicClient, owner.client, vaultImpl, vaultArt.abi, "initialize", [
-    usdc,
-  ]);
+  const vault = await deployProxy(
+    publicClient,
+    owner.client,
+    vaultImpl,
+    vaultArt.abi,
+    "initialize",
+    [usdc],
+  );
 
   // ── Perps (UUPS proxy) ────────────────────────────────────────────────
   const perpsArt = artifacts.perps();
   const perpsImpl = await deploy(publicClient, owner.client, perpsArt, [MIN_PRICE_INCREMENT]);
-  const perps = await deployProxy(publicClient, owner.client, perpsImpl, perpsArt.abi, "initialize", [
-    hashpriceOracle,
-    vault,
-  ]);
+  const perps = await deployProxy(
+    publicClient,
+    owner.client,
+    perpsImpl,
+    perpsArt.abi,
+    "initialize",
+    [hashpriceOracle, vault],
+  );
 
   // ── Futures (UUPS proxy, takes vault in constructor) ──────────────────
   const futuresArt = artifacts.futures();
@@ -234,7 +243,10 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
 
   // Vault -> point at the single margin engine + authorize each venue.
   await write(publicClient, owner.client, vault, vaultArt.abi, "setMarginEngine", [pme]);
-  await write(publicClient, owner.client, vault, vaultArt.abi, "setAuthorizedCaller", [perps, true]);
+  await write(publicClient, owner.client, vault, vaultArt.abi, "setAuthorizedCaller", [
+    perps,
+    true,
+  ]);
   await write(publicClient, owner.client, vault, vaultArt.abi, "setAuthorizedCaller", [
     futures,
     true,
@@ -338,7 +350,7 @@ async function deploy(
     chain: hardhat,
   });
   const receipt = await pc.waitForTransactionReceipt({ hash });
-  if (receipt.contractAddress === null) {
+  if (!receipt.contractAddress) {
     throw new Error("deployContract receipt missing contractAddress");
   }
   return receipt.contractAddress;

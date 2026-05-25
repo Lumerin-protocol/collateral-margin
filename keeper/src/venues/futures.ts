@@ -4,6 +4,7 @@ import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
 import { FuturesAbi } from "futures-marketplace/Futures.ts";
 import { sendLiquidate } from "../tx/liquidate.ts";
+import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
 import type {
   LiquidateOrdersOutcome,
   LiquidatePositionOutcome,
@@ -28,12 +29,18 @@ export class FuturesVenue implements Venue {
   private readonly chain: Chain;
   private readonly config: Config;
   private readonly logger: pino.Logger;
+  private readonly ethUsdFeed: EthUsdFeed | undefined;
   private deliveryDurationDays: bigint | undefined;
 
-  constructor(chain: Chain, config: Config, logger: pino.Logger) {
+  constructor(chain: Chain, config: Config, logger: pino.Logger, ethUsdFeed?: EthUsdFeed) {
     this.chain = chain;
     this.config = config;
     this.logger = logger.child({ venue: "futures" });
+    // Optional — when present every confirmed-tx log gets `gasCostUsd`
+    // alongside `gasCostEth`. Wiring keeps the field absent (rather than
+    // zero) when the feed is unset so log search can distinguish "feed
+    // off" from a literal zero-cost tx.
+    this.ethUsdFeed = ethUsdFeed;
   }
 
   marketLabel(marketId: MarketId): string {
@@ -136,6 +143,7 @@ export class FuturesVenue implements Venue {
       functionName: "liquidateOrders",
       args: [user],
       feeEventName: "OrderLiquidated",
+      ethUsdFeed: this.ethUsdFeed,
     });
 
     return "skipped" in result ? { skipped: "notLiquidatable" } : { feeEarned: result.feeEarned };
@@ -155,6 +163,7 @@ export class FuturesVenue implements Venue {
         if (errorName === "OrdersStillOpen") return "ordersStillOpen";
         return "notLiquidatable";
       },
+      ethUsdFeed: this.ethUsdFeed,
     });
 
     return "skipped" in result ? { skipped: result.skipped } : { feeEarned: result.feeEarned };

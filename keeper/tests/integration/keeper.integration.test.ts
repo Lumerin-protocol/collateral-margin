@@ -31,10 +31,12 @@ import {
   runOneSweep,
   readPerpsOrderIds,
   readFuturesOrderIds,
+  readFuturesPositionIds,
   readPerpsPositionLiquidationBlock,
   readFuturesPositionLiquidationBlock,
   readPerpsOrderLiquidationBlock,
   readFuturesOrderLiquidationBlock,
+  readPositionDeliveryClosedBlock,
   readPerpsPosition,
   expectPerpsClosed,
   expectFuturesClosed,
@@ -43,6 +45,7 @@ import {
   isCriticalAlert,
   waitFor,
 } from "./helpers.ts";
+import { HARDHAT_PRIVATE_KEYS } from "./deployStack.ts";
 
 /**
  * Integration test suite for `@collateral-margin/keeper`.
@@ -601,6 +604,282 @@ describe("Notifier (live HTTP)", () => {
         await waitFor(() => sink.received.some((r) => isCriticalAlert(r.body)), 15_000);
       } finally {
         await sink.stop();
+      }
+    },
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Delivery coordinator (live RPC, opt-in keeper module)
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("DeliveryCoordinator (live RPC)", () => {
+  it(
+    "settles a futures position at its delivery date with the current market price",
+    { timeout: 60_000 },
+    async () => {
+      // Precondition: alice holds a single long futures contract created
+      // at fixture time. The keeper boots with delivery enabled and the
+      // *validator* signing key — so `closeDelivery` simulations clear
+      // the contract's `_msgSender() == validatorAddress` guard.
+      //
+      // We then fast-forward the chain past `deliveryAt` and trigger one
+      // sweep. The contract's `_closeAndCashSettleDelivery` cash-settles
+      // the entire window at the current market price (positionElapsedTime
+      // = 0 → no contract-price portion), and emits `PositionDeliveryClosed`
+      // followed by `PositionClosed`.
+      const ctx = await loadFixture(futuresLongCrashFixture, testClient);
+      keeper = buildKeeper(ctx, {
+        liquidatorPrivateKey: HARDHAT_PRIVATE_KEYS[4], // validator
+        delivery: true,
+      });
+      await keeper.start();
+      assert.ok(keeper.delivery, "delivery coordinator should be wired when override is true");
+
+      const alice = ctx.accounts.alice.account.address;
+      const positionsBefore = await readFuturesPositionIds(ctx, alice);
+      // The fixture creates one position per matched contract — Alice's
+      // 12-contract long becomes 12 separate position entries sharing one
+      // `deliveryAt`. Settling them all is the realistic case (one signer
+      // serializing many positions due at the same timestamp).
+      assert.equal(positionsBefore.length, ctx.aliceFuturesQty);
+
+      // Seed the delivery index from history — the positions were created
+      // before the keeper booted, so the live watcher hasn't seen them.
+      await keeper.delivery.backfill(0n, 10_000n);
+      for (const id of positionsBefore) {
+        assert.ok(keeper.delivery.has(id), `backfill should index position ${id}`);
+      }
+
+      // Fast-forward past `deliveryAt`. `closeDelivery` requires
+      // `block.timestamp >= position.deliveryAt`, and `block.timestamp` is
+      // only advanced once a block is mined at the new clock.
+      const deliveryAt = ctx.config.futuresFirstDeliveryDate;
+      await testClient.setNextBlockTimestamp({ timestamp: deliveryAt + 60n });
+      await testClient.mine({ blocks: 1 });
+
+      // The hashprice oracle has been silent for 7 days — refresh it so
+      // `_getHashpriceUsd` doesn't revert `OracleStale` inside
+      // `closeDelivery`. We re-post the entry price; the cash-settlement
+      // formula uses this as the "current market price" applied to the
+      // full delivery window (positionElapsedTime = 0).
+      await ctx.bumpHashprice(ctx.config.initialHashprice);
+
+      await keeper.delivery.sweep();
+
+      // End state: every position is gone from chain storage, each emitted
+      // a `PositionDeliveryClosed` event from the keeper's signer, and the
+      // index dropped all of them.
+      await expectFuturesClosed(ctx, alice);
+      const settledBlocks: bigint[] = [];
+      for (const id of positionsBefore) {
+        const settledBlock = await readPositionDeliveryClosedBlock(ctx, id);
+        assert.ok(
+          settledBlock !== null,
+          `expected a PositionDeliveryClosed event for position ${id}`,
+        );
+        settledBlocks.push(settledBlock);
+        assert.equal(keeper.delivery.has(id), false, `settled position ${id} is dropped`);
+      }
+      // Batching invariant: all 12 settlements ride a single
+      // `Futures.multicall(bytes[])` transaction, so every
+      // `PositionDeliveryClosed` event lands in the same block. Without
+      // batching they would have been N separate txs across N blocks
+      // (plus a `replacement transaction underpriced` race in production
+      // when two of them collided on the same nonce). This assertion
+      // locks in the multicall path — if someone reverts the coordinator
+      // to per-id sends, the blocks fan out and this fails.
+      const uniqueBlocks = new Set(settledBlocks.map((b) => b.toString()));
+      assert.equal(
+        uniqueBlocks.size,
+        1,
+        `expected all settlements in one multicall block, got ${uniqueBlocks.size} distinct blocks: ${[...uniqueBlocks].join(", ")}`,
+      );
+    },
+  );
+
+  it(
+    "sweeps missing past deliveries during backfill — settles immediately on boot",
+    { timeout: 60_000 },
+    async () => {
+      // Precondition: alice's position was created at fixture time and
+      // its `deliveryAt` is *already in the past* by the time the keeper
+      // boots. The contract is the spec for "missing delivery": until
+      // someone calls `closeDelivery` the position lingers, and the
+      // settlement window stays open for `deliveryDurationDays`.
+      //
+      // Contract under test: `backfill()` discovers the position from
+      // history AND its trailing `sweep()` settles it on the same boot —
+      // no live event, no scheduler tick required.
+      const ctx = await loadFixture(futuresLongCrashFixture, testClient);
+
+      // Move time past deliveryAt *before* the keeper boots, so the live
+      // subscription would miss the (long-past) PositionCreated event.
+      const deliveryAt = ctx.config.futuresFirstDeliveryDate;
+      await testClient.setNextBlockTimestamp({ timestamp: deliveryAt + 120n });
+      await testClient.mine({ blocks: 1 });
+      // Refresh the oracle so `_getHashpriceUsd` doesn't revert `OracleStale`
+      // when settlement reads the mark.
+      await ctx.bumpHashprice(ctx.config.initialHashprice);
+
+      keeper = buildKeeper(ctx, {
+        liquidatorPrivateKey: HARDHAT_PRIVATE_KEYS[4],
+        delivery: true,
+      });
+      await keeper.start();
+      assert.ok(keeper.delivery);
+
+      const alice = ctx.accounts.alice.account.address;
+      const positionsBefore = await readFuturesPositionIds(ctx, alice);
+      assert.ok(positionsBefore.length > 0, "precondition: alice has positions to settle");
+
+      // backfill() runs an immediate sweep at the end — past-due positions
+      // settle without waiting on the periodic timer.
+      await keeper.delivery.backfill(0n, 10_000n);
+
+      await expectFuturesClosed(ctx, alice);
+      for (const id of positionsBefore) {
+        assert.ok(
+          (await readPositionDeliveryClosedBlock(ctx, id)) !== null,
+          `missed delivery for ${id} should be settled by backfill sweep`,
+        );
+      }
+    },
+  );
+
+  it(
+    "bootstrapFromUsers indexes & settles via contract views (no log scan)",
+    { timeout: 60_000 },
+    async () => {
+      // Production reality: on Alchemy free tier `eth_getLogs` is capped
+      // at 10 blocks, so log-based backfill is unusable for any non-trivial
+      // window. The view-based discovery path (`bootstrapFromUsers`) reads
+      // `getPositionIds` + `getPositionById` directly from contract storage,
+      // sidestepping the log limit entirely. This test exercises that exact
+      // recovery shape: we never call `backfill()` — only `bootstrapFromUsers`
+      // — and verify every still-alive position is found and settled.
+      const ctx = await loadFixture(futuresLongCrashFixture, testClient);
+      keeper = buildKeeper(ctx, {
+        liquidatorPrivateKey: HARDHAT_PRIVATE_KEYS[4],
+        delivery: true,
+      });
+      await keeper.start();
+      assert.ok(keeper.delivery);
+
+      const alice = ctx.accounts.alice.account.address;
+      const positionsBefore = await readFuturesPositionIds(ctx, alice);
+      assert.ok(positionsBefore.length > 0);
+
+      await keeper.delivery.bootstrapFromUsers([alice]);
+      for (const id of positionsBefore) {
+        assert.ok(keeper.delivery.has(id), `bootstrap should index position ${id}`);
+      }
+
+      const deliveryAt = ctx.config.futuresFirstDeliveryDate;
+      await testClient.setNextBlockTimestamp({ timestamp: deliveryAt + 60n });
+      await testClient.mine({ blocks: 1 });
+      await ctx.bumpHashprice(ctx.config.initialHashprice);
+
+      await keeper.delivery.sweep();
+
+      await expectFuturesClosed(ctx, alice);
+      for (const id of positionsBefore) {
+        assert.ok(
+          (await readPositionDeliveryClosedBlock(ctx, id)) !== null,
+          `position ${id} should be settled via view-based bootstrap`,
+        );
+        assert.equal(keeper.delivery.has(id), false);
+      }
+    },
+  );
+
+  it(
+    "DELIVERY_BOOTSTRAP_USERS recovers a stuck user the tracker never discovered",
+    { timeout: 60_000 },
+    async () => {
+      // Operational scenario from production: the tracker's log backfill
+      // failed (Alchemy free tier rate-limits eth_getLogs), so a known user
+      // with a past-due futures position is invisible to every other
+      // discovery path. Operator sets DELIVERY_BOOTSTRAP_USERS=<addr> as
+      // an emergency seed; the coordinator reads the user's positions via
+      // the view path and settles them on the first sweep.
+      const ctx = await loadFixture(futuresLongCrashFixture, testClient);
+
+      // Move past deliveryAt before boot — same shape as the production
+      // outage where the keeper has been down/blind during the delivery
+      // window.
+      const deliveryAt = ctx.config.futuresFirstDeliveryDate;
+      await testClient.setNextBlockTimestamp({ timestamp: deliveryAt + 120n });
+      await testClient.mine({ blocks: 1 });
+      await ctx.bumpHashprice(ctx.config.initialHashprice);
+
+      const alice = ctx.accounts.alice.account.address;
+      keeper = buildKeeper(ctx, {
+        liquidatorPrivateKey: HARDHAT_PRIVATE_KEYS[4],
+        delivery: true,
+        deliveryBootstrapUsers: [alice],
+      });
+      await keeper.start();
+      assert.ok(keeper.delivery);
+
+      const positionsBefore = await readFuturesPositionIds(ctx, alice);
+      assert.ok(positionsBefore.length > 0, "precondition: alice has past-due positions");
+
+      // Mimic the boot wiring: tracker.list() is empty (we never started
+      // backfill / live discovery), but the manual seed list configured via
+      // DELIVERY_BOOTSTRAP_USERS still feeds the coordinator.
+      await keeper.delivery.bootstrapFromUsers(keeper.config.delivery.bootstrapUsers);
+      assert.deepEqual(
+        [...keeper.config.delivery.bootstrapUsers],
+        [alice],
+        "bootstrap list should be the seeded address",
+      );
+
+      await expectFuturesClosed(ctx, alice);
+      for (const id of positionsBefore) {
+        assert.ok(
+          (await readPositionDeliveryClosedBlock(ctx, id)) !== null,
+          `manually-seeded position ${id} should be settled`,
+        );
+      }
+    },
+  );
+
+  it(
+    "refuses to start when the keeper signer is not the futures validator",
+    { timeout: 60_000 },
+    async () => {
+      // Operator-safety contract: if `DELIVERY_KEEPER_ENABLED=true` is set
+      // but `LIQUIDATOR_PRIVATE_KEY` does not derive to
+      // `Futures.validatorAddress()`, the coordinator must throw at start.
+      // Bubbles up to `main().catch` → `process.exit(1)`; the orchestrator
+      // (k8s, systemd) sees the crash, healthcheck flips to 503, and
+      // standard infra alerting (CrashLoopBackOff etc.) pages on-call.
+      // The alternative — silent `simulateContract` reverts at debug level —
+      // is invisible at the default `info` log level and was the actual
+      // production failure mode that motivated this check.
+      const ctx = await loadFixture(futuresLongCrashFixture, testClient);
+      const k = buildKeeper(ctx, {
+        // Default liquidator key (account #3), NOT the validator (#4).
+        delivery: true,
+      });
+      keeper = k;
+      await assert.rejects(
+        () => k.start(),
+        /signer is not the futures validator/i,
+        "boot must fail loudly so the operator cannot miss the misconfig",
+      );
+
+      // Sanity: nothing was indexed and no positions were settled.
+      const alice = ctx.accounts.alice.account.address;
+      const positionsBefore = await readFuturesPositionIds(ctx, alice);
+      assert.ok(positionsBefore.length > 0, "fixture should have created positions");
+      for (const id of positionsBefore) {
+        assert.equal(
+          await readPositionDeliveryClosedBlock(ctx, id),
+          null,
+          `position ${id} must not be settled by a misconfigured keeper`,
+        );
       }
     },
   );

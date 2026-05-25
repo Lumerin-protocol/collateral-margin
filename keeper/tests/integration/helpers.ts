@@ -181,6 +181,30 @@ export const readPerpsOrderLiquidationBlock = (s: DeployedStack, u: Address) =>
 export const readFuturesOrderLiquidationBlock = (s: DeployedStack, u: Address) =>
   earliestEventBlock(s, "futures", "OrderLiquidated", { participant: u });
 
+/**
+ * Earliest block at which `Futures.PositionDeliveryClosed(positionId)` was
+ * emitted. Used by the delivery-coordinator e2e tests to confirm the keeper
+ * actually sent `closeDelivery` for a specific position id.
+ */
+export async function readPositionDeliveryClosedBlock(
+  stack: DeployedStack,
+  positionId: Hex,
+): Promise<bigint | null> {
+  const logs = await stack.publicClient.getContractEvents({
+    address: stack.addresses.futures,
+    abi: stack.abis.futures,
+    eventName: "PositionDeliveryClosed",
+    args: { positionId },
+    fromBlock: 0n,
+  });
+  let earliest: bigint | null = null;
+  for (const log of logs) {
+    if (log.blockNumber === null) continue;
+    if (earliest === null || log.blockNumber < earliest) earliest = log.blockNumber;
+  }
+  return earliest;
+}
+
 async function earliestEventBlock(
   stack: DeployedStack,
   venue: "perps" | "futures",

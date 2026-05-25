@@ -10,6 +10,8 @@ import {
 import type pino from "pino";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
+import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
+import { formatGasCost } from "./gasCost.ts";
 
 /**
  * Common shape returned by all liquidate-style calls. Either we earned a fee
@@ -59,6 +61,12 @@ interface SendLiquidateOptions<S extends string> {
    * — defaults to "notLiquidatable" so the planner keeps moving.
    */
   mapSkip?: (errorName: KnownRevert) => S;
+  /**
+   * Optional ETH/USD price source. When provided the confirmation log
+   * picks up a `gasCostUsd` field alongside `gasCostEth`. Always
+   * optional so deployments without a configured feed stay supported.
+   */
+  ethUsdFeed?: EthUsdFeed;
 }
 
 /**
@@ -76,7 +84,18 @@ interface SendLiquidateOptions<S extends string> {
 export async function sendLiquidate<S extends string>(
   opts: SendLiquidateOptions<S>,
 ): Promise<LiquidateOutcome<S>> {
-  const { chain, config, logger, address, abi, functionName, args, feeEventName, mapSkip } = opts;
+  const {
+    chain,
+    config,
+    logger,
+    address,
+    abi,
+    functionName,
+    args,
+    feeEventName,
+    mapSkip,
+    ethUsdFeed,
+  } = opts;
 
   // Always simulate first — this is how we surface the recoverable reverts
   // before we burn gas on a tx that can't possibly succeed. Viem's overloads
@@ -118,7 +137,10 @@ export async function sendLiquidate<S extends string>(
   });
 
   const feeEarned = feeEventName === null ? 0n : sumFees(abi, receipt, feeEventName);
-  logger.info({ functionName, args, hash, feeEarned }, "Liquidate tx confirmed");
+  logger.info(
+    { functionName, args, hash, feeEarned, ...formatGasCost(receipt, ethUsdFeed) },
+    "Liquidate tx confirmed",
+  );
   return { feeEarned, receipt };
 }
 

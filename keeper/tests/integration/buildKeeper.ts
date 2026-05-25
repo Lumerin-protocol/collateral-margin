@@ -4,6 +4,7 @@ import {
   createWalletClient,
   http,
   type Account,
+  type Address,
   type PublicClient,
   type WalletClient,
 } from "viem";
@@ -21,6 +22,7 @@ import { PerpsVenue } from "../../src/venues/perps.ts";
 import { FuturesVenue } from "../../src/venues/futures.ts";
 import { PriceFeed } from "../../src/oracle/priceFeed.ts";
 import { PredictiveCoordinator } from "../../src/predict/coordinator.ts";
+import { DeliveryCoordinator } from "../../src/delivery/coordinator.ts";
 import type { Venue } from "../../src/venues/types.ts";
 import type { DeployedStack } from "./deployStack.ts";
 import { HARDHAT_PRIVATE_KEYS } from "./deployStack.ts";
@@ -50,6 +52,14 @@ export interface KeeperHarness {
   notifier: Notifier;
   priceFeed: PriceFeed;
   predictor: PredictiveCoordinator;
+  /**
+   * Only present when `BuildKeeperOverrides.delivery` is set. Tests that
+   * exercise the delivery module must pass `delivery: true` and ensure the
+   * keeper signer equals the Futures contract's `validatorAddress` —
+   * otherwise every `closeDelivery` simulate fails authorization and the
+   * sweep silently no-ops.
+   */
+  delivery?: DeliveryCoordinator;
   start(): Promise<void>;
   stop(): Promise<void>;
 }
@@ -62,6 +72,27 @@ export interface BuildKeeperOverrides {
   logLevel?: pino.Level;
   /** Inject your own keeper signer key. Defaults to Hardhat account #3. */
   liquidatorPrivateKey?: `0x${string}`;
+  /**
+   * Wire up the optional `DeliveryCoordinator`. Defaults to false. When
+   * true, tests should also pass `liquidatorPrivateKey: HARDHAT_PRIVATE_KEYS[4]`
+   * (the validator) so `closeDelivery` simulations pass the contract's
+   * `_msgSender() == validatorAddress` guard.
+   */
+  delivery?: boolean;
+  /**
+   * Manual seed list for the delivery coordinator. Mirrors
+   * `DELIVERY_BOOTSTRAP_USERS` in production. Tests use it to verify that
+   * a known stuck user can be settled even when the tracker never
+   * discovered them (e.g. log backfill broken on a rate-limited RPC).
+   */
+  deliveryBootstrapUsers?: readonly Address[];
+  /**
+   * Maximum closeDelivery calls bundled into one Futures.multicall tx by
+   * the delivery coordinator. Defaults to 50 for parity with production.
+   * Override to a small value to assert batching behaviour explicitly
+   * (e.g. set to 1 to force per-id calls, or 2 to assert chunked sweeps).
+   */
+  deliveryMaxBatchSize?: number;
 }
 
 const LIQUIDATOR_PK = HARDHAT_PRIVATE_KEYS[3];
@@ -113,6 +144,13 @@ export function buildKeeper(stack: DeployedStack, overrides: BuildKeeperOverride
   // wires in production.
   tracker.onAdded(() => executor.kick());
 
+  // Optional delivery coordinator — opt-in per test. Built but not started;
+  // start() below boots it after the live tracker is up so it sees the same
+  // event ordering production does.
+  const delivery = overrides.delivery === true
+    ? new DeliveryCoordinator(chain, config, logger)
+    : undefined;
+
   let started = false;
   return {
     config,
@@ -125,12 +163,14 @@ export function buildKeeper(stack: DeployedStack, overrides: BuildKeeperOverride
     notifier,
     priceFeed,
     predictor,
+    delivery,
     async start() {
       if (started) return;
       started = true;
       await priceFeed.start();
       await predictor.start();
       await tracker.start();
+      if (delivery !== undefined) await delivery.start();
       await executor.start();
       // Scheduler is NOT started: tests drive it manually via
       // `scheduler.runSweep()` to avoid timer races against `evm_revert`.
@@ -141,6 +181,7 @@ export function buildKeeper(stack: DeployedStack, overrides: BuildKeeperOverride
       scheduler.stop();
       predictor.stop();
       priceFeed.stop();
+      delivery?.stop();
       await executor.stop();
       tracker.stop();
     },
@@ -186,6 +227,29 @@ function buildConfig(stack: DeployedStack, overrides: BuildKeeperOverrides): Con
       sweepIntervalMs: overrides.sweepIntervalMs ?? 60_000,
       healthPort: 0,
       logLevel: overrides.logLevel ?? "warn",
+      // Effectively disabled in integration tests — the monitor is wired
+      // in production (see `index.ts`) but has no role in fixture-driven
+      // assertions, and a 5-min interval would never fire anyway.
+      balanceCheckIntervalMs: 60 * 60 * 1000,
+      balanceLowWei: 10_000_000_000_000_000n,
+      balanceCriticalWei: 1_000_000_000_000_000n,
+    },
+    outdatedOrders: {
+      // Disabled by default in integration tests — they cover liquidation
+      // and delivery flows; expired-order sweep has its own unit tests.
+      // Tests that want to exercise it can override via a future flag.
+      sweepIntervalMs: 0,
+      maxBatchSize: 50,
+    },
+    delivery: {
+      enabled: overrides.delivery === true,
+      blameSeller: true,
+      // Tighter than production so tests don't have to wait a minute for
+      // the safety-net sweep when they want to verify backfill behaviour.
+      sweepIntervalMs: 1_000,
+      settleDelayMs: 0,
+      bootstrapUsers: overrides.deliveryBootstrapUsers ?? [],
+      maxBatchSize: overrides.deliveryMaxBatchSize ?? 50,
     },
   };
 }

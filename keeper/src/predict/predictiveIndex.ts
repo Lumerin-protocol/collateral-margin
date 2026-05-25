@@ -76,6 +76,11 @@ export class PredictiveIndex {
     return this.byUser.size;
   }
 
+  /** Addresses of every user with at least one defined threshold. */
+  users(): Address[] {
+    return Array.from(this.byUser.keys());
+  }
+
   /**
    * Find every user whose threshold was crossed by a price move from
    * `prev` to `next`. Both endpoints are inclusive of the boundary —
