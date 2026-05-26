@@ -72,7 +72,6 @@ export class OrderExecutor {
 
   async reconcile(desired: OrderIntent[]): Promise<void> {
     if (!this.shouldRequote(desired)) {
-      this.logger.debug("requote skipped (within threshold or cooldown)");
       return;
     }
 
@@ -164,15 +163,71 @@ export class OrderExecutor {
     this.stats.ordersCancelled += orders.length;
   }
 
+  /**
+   * Decide whether to run a reconciliation (cancel stale + place missing).
+   * Logs the reason at debug level so operators can diagnose stale orderbooks.
+   */
   private shouldRequote(desired: OrderIntent[]): boolean {
-    if (Date.now() - this.lastRequoteAt < this.effectiveCooldownMs())
+    const elapsed = Date.now() - this.lastRequoteAt;
+    const cooldownMs = this.effectiveCooldownMs();
+    if (elapsed < cooldownMs) {
+      this.logger.debug(
+        { elapsedMs: elapsed, cooldownMs },
+        "requote skipped: cooldown",
+      );
       return false;
+    }
 
     const expectedCount = desired.length;
-    if (this.book.ownOrders.size < expectedCount) return true;
-    if (this.hasQuantityDeficit(desired)) return true;
+    const actualCount = this.book.ownOrders.size;
+    if (actualCount < expectedCount) {
+      this.logger.debug(
+        { actualCount, expectedCount },
+        "requote triggered: order count deficit",
+      );
+      return true;
+    }
 
-    return this.priceDriftTicks() >= this.effectiveRequoteThreshold();
+    if (this.hasQuantityDeficit(desired)) {
+      this.logger.debug("requote triggered: quantity deficit");
+      return true;
+    }
+
+    if (this.hasStaleOrders(desired)) {
+      this.logger.debug("requote triggered: stale orders at wrong prices");
+      return true;
+    }
+
+    const drift = this.priceDriftTicks();
+    const threshold = this.effectiveRequoteThreshold();
+    if (drift >= threshold) {
+      this.logger.debug({ drift, threshold }, "requote triggered: price drift");
+      return true;
+    }
+
+    this.logger.debug(
+      { drift, threshold, actualCount, expectedCount },
+      "requote skipped: no deficit / no stale / no drift",
+    );
+    return false;
+  }
+
+  /** True when any own order sits at a price not in the desired set. */
+  private hasStaleOrders(desired: OrderIntent[]): boolean {
+    const desiredPrices = new Map<string, Set<bigint>>();
+    for (const i of desired) {
+      let set = desiredPrices.get(i.side);
+      if (!set) {
+        set = new Set<bigint>();
+        desiredPrices.set(i.side, set);
+      }
+      set.add(i.price);
+    }
+    for (const order of this.book.ownOrders.values()) {
+      const set = desiredPrices.get(order.side);
+      if (!set || !set.has(order.price)) return true;
+    }
+    return false;
   }
 
   private priceDriftTicks(): number {
@@ -271,7 +326,10 @@ export class OrderExecutor {
     const existing = this.aggregateOwnSizeByPriceSide();
     for (const i of desired) {
       const have = existing.get(keyOf(i.side, i.price));
-      if (have !== undefined && i.size - have > 0n) return true;
+      // Deficit means: no orders at this price at all, OR fewer than desired.
+      // The `undefined` branch catches stale orders at wrong prices that the
+      // other guards (count, price-drift) would also miss.
+      if (have === undefined || i.size - have > 0n) return true;
     }
     return false;
   }
