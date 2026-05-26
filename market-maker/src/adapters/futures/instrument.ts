@@ -19,11 +19,7 @@ import { FuturesOwnOrders } from "./ownOrders.ts";
 
 const FUTURES_INSTRUMENT_ID = "futures";
 
-/** Maximum closeOrder calls per cancellation batch. */
-const CANCEL_BATCH_SIZE = 20;
-/** Maximum orders per createOrders call. */
-const CREATE_BATCH_SIZE = 10;
-/** Maximum encoded calls per multicall write tx (conservative for Base 30M gas limit). */
+/** Maximum encoded calls per multicall write tx (safety net for block gas limit). */
 const WRITE_BATCH_SIZE = 50;
 
 export class FuturesInstrumentAdapter implements InstrumentAdapter {
@@ -38,7 +34,7 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
 
   constructor(venue: FuturesVenueAdapter, logger: pino.Logger) {
     this.venue = venue;
-    const batchSize = venue.multicallBatchSize;
+    const batchSize = venue.readBatchSize;
     this.book = new FuturesBook(this, batchSize);
     this.ownOrders = new FuturesOwnOrders(venue, logger, batchSize);
   }
@@ -216,19 +212,21 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
 
   /** Build the ordered call list: cancels (individual closeOrder) then creates (createOrders). */
   private buildCallList(intent: ExecuteOrdersIntent): `0x${string}`[] {
+    const cancelSize = this.venue.cancelBatchSize;
+    const createSize = this.venue.createBatchSize;
     const calls: `0x${string}`[] = [];
 
-    // Cancels: chunk by CANCEL_BATCH_SIZE, each = one closeOrder call.
-    for (let i = 0; i < intent.cancels.length; i += CANCEL_BATCH_SIZE) {
-      const batch = intent.cancels.slice(i, i + CANCEL_BATCH_SIZE);
+    // Cancels: chunk by cancelBatchSize, each = one closeOrder call.
+    for (let i = 0; i < intent.cancels.length; i += cancelSize) {
+      const batch = intent.cancels.slice(i, i + cancelSize);
       for (const c of batch) {
         calls.push(this.encodeCancel(c));
       }
     }
 
-    // Creates: chunk by CREATE_BATCH_SIZE, each chunk = one createOrders call.
-    for (let i = 0; i < intent.creates.length; i += CREATE_BATCH_SIZE) {
-      const batch = intent.creates.slice(i, i + CREATE_BATCH_SIZE);
+    // Creates: chunk by createBatchSize, each chunk = one createOrders call.
+    for (let i = 0; i < intent.creates.length; i += createSize) {
+      const batch = intent.creates.slice(i, i + createSize);
       calls.push(this.encodeCreateOrders(batch));
     }
 
@@ -328,10 +326,10 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
 class FuturesBook implements BookSource {
   readonly matchingMode: MatchingMode = "exact";
   private readonly inst: FuturesInstrumentAdapter;
-  private readonly multicallBatchSize: number;
-  constructor(inst: FuturesInstrumentAdapter, multicallBatchSize: number) {
+  private readonly readBatchSize: number;
+  constructor(inst: FuturesInstrumentAdapter, readBatchSize: number) {
     this.inst = inst;
-    this.multicallBatchSize = multicallBatchSize;
+    this.readBatchSize = readBatchSize;
   }
 
   async tick(): Promise<bigint> {
@@ -385,7 +383,7 @@ class FuturesBook implements BookSource {
     ];
 
     // Chunk to stay under RPC payload / timeout limits.
-    const batchSize = this.multicallBatchSize;
+    const batchSize = this.readBatchSize;
     const allResults: bigint[] = [];
     for (let i = 0; i < allCalls.length; i += batchSize) {
       const chunk = allCalls.slice(i, i + batchSize);

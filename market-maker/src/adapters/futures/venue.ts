@@ -26,7 +26,11 @@ export interface FuturesVenueOptions {
   address: `0x${string}`;
   multicall3Address?: `0x${string}`;
   /** Max calls per Multicall3 read batch. Default 100. */
-  multicallBatchSize?: number;
+  readBatchSize: number;
+  /** Max closeOrder calls per cancellation batch. Default 20. */
+  cancelBatchSize: number;
+  /** Max orders per createOrders call. Default 10. */
+  createBatchSize: number;
   logger: pino.Logger;
 }
 
@@ -56,7 +60,9 @@ export class FuturesVenueAdapter implements VenueAdapter {
 
   private readonly logger: pino.Logger;
   private readonly multicall3Address: `0x${string}`;
-  readonly multicallBatchSize: number;
+  readonly readBatchSize: number;
+  readonly cancelBatchSize: number;
+  readonly createBatchSize: number;
   private instrumentSingleton: FuturesInstrumentAdapter | null = null;
 
   private vaultAddressCache: `0x${string}` | null = null;
@@ -80,7 +86,9 @@ export class FuturesVenueAdapter implements VenueAdapter {
     if (!mc3)
       throw new Error(`chain ${this.chain.name} has no multicall3 address`);
     this.multicall3Address = mc3;
-    this.multicallBatchSize = opts.multicallBatchSize ?? 100;
+    this.readBatchSize = opts.readBatchSize;
+    this.cancelBatchSize = opts.cancelBatchSize;
+    this.createBatchSize = opts.createBatchSize;
 
     this.events = new FuturesVenueEvents(this.publicClient, this.address);
     this.account = new FuturesCollateralAccount(this);

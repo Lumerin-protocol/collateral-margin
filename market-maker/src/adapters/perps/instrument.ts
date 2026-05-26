@@ -96,20 +96,29 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
 
   // ── Private implementation ──────────────────────────────────────────
 
-  /** Max encoded calls per multicall write tx (conservative for Base 30M gas limit). */
-  private static readonly WRITE_BATCH_SIZE = 30;
-
+  /**
+   * Shared implementation — the inner `logger` param makes this testable
+   * without coupling to the full venue adapter.
+   */
   private async executeOrdersImpl(
     intent: ExecuteOrdersIntent,
     logger: pino.Logger,
   ): Promise<ExecuteOrdersResult> {
     // 1. Build the ordered call list: cancels first, then creates.
+    const cancelSize = this.venue.cancelBatchSize;
+    const createSize = this.venue.createBatchSize;
     const calls: `0x${string}`[] = [];
-    for (const c of intent.cancels) {
-      calls.push(this.encodeCancel(c));
+
+    // Cancels: chunk by cancelBatchSize.
+    for (let i = 0; i < intent.cancels.length; i += cancelSize) {
+      const batch = intent.cancels.slice(i, i + cancelSize);
+      for (const c of batch) calls.push(this.encodeCancel(c));
     }
-    for (const c of intent.creates) {
-      calls.push(this.encodeCreate(c));
+
+    // Creates: chunk by createBatchSize.
+    for (let i = 0; i < intent.creates.length; i += createSize) {
+      const batch = intent.creates.slice(i, i + createSize);
+      for (const c of batch) calls.push(this.encodeCreate(c));
     }
 
     if (calls.length === 0) {
@@ -117,7 +126,10 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
     }
 
     // 2. Chunk into tx-sized groups and broadcast sequentially.
-    const max = PerpsInstrumentAdapter.WRITE_BATCH_SIZE;
+    // Perps has no batch contract functions — each cancel/create is one call.
+    // The cancelBatchSize / createBatchSize already control grouping, so we
+    // use a generous tx-level safety limit.
+    const max = 200;
 
     if (intent.dryRun) {
       const totalBatches = Math.ceil(calls.length / max);

@@ -148,15 +148,29 @@ export const perpsRootSchema = Type.Object(
     oracle: oracleSchema,
     timing: timingSchema,
     health: healthSchema,
-    multicallBatchSize: Type.Optional(
-      Type.Number({
-        minimum: 1,
-        default: 10,
-        description:
-          "Maximum number of contract calls bundled into a single multicall write tx. " +
-          "Calls are chunked transparently; lower values reduce per-tx gas cost at the cost of more txs.",
-      }),
-    ),
+    readBatchSize: Type.Number({
+      minimum: 1,
+      default: 10,
+      description:
+        "Maximum number of contract calls bundled into a single Multicall3 read. " +
+        "Calls are chunked transparently; lower values reduce RPC timeouts.",
+    }),
+
+    cancelBatchSize: Type.Number({
+      minimum: 1,
+      default: 30,
+      description:
+        "Maximum cancelOrder calls per cancellation batch. " +
+        "Perps has no batch cancel — each cancel is one call.",
+    }),
+
+    createBatchSize: Type.Number({
+      minimum: 1,
+      default: 30,
+      description:
+        "Maximum createOrder calls per creation batch. " +
+        "Perps has no batch create — each create is one call.",
+    }),
   },
   { ...Closed, description: "Titan Market Maker — Perps app config." },
 );

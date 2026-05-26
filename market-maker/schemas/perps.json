@@ -20,7 +20,10 @@
     "collateral",
     "oracle",
     "timing",
-    "health"
+    "health",
+    "readBatchSize",
+    "cancelBatchSize",
+    "createBatchSize"
   ],
   "properties": {
     "nodeEnv": {
@@ -74,7 +77,9 @@
           "additionalProperties": false,
           "description": "Named signer wallet. Referenced by venue.wallet.",
           "type": "object",
-          "required": ["privateKey"],
+          "required": [
+            "privateKey"
+          ],
           "properties": {
             "privateKey": {
               "anyOf": [
@@ -98,7 +103,10 @@
       "additionalProperties": false,
       "description": "Network connection settings.",
       "type": "object",
-      "required": ["name", "rpcUrl"],
+      "required": [
+        "name",
+        "rpcUrl"
+      ],
       "properties": {
         "name": {
           "description": "Chain id (hardhat, base-sepolia, base, arbitrum). Resolves the viem chain object.",
@@ -136,7 +144,11 @@
       "additionalProperties": false,
       "description": "Perps venue identification and signer selection.",
       "type": "object",
-      "required": ["kind", "address", "wallet"],
+      "required": [
+        "kind",
+        "address",
+        "wallet"
+      ],
       "properties": {
         "kind": {
           "description": "Venue type — must be 'perps' for HashPowerPerpsDEX.",
@@ -242,7 +254,11 @@
       "additionalProperties": false,
       "description": "Linear-ladder sizing parameters.",
       "type": "object",
-      "required": ["strategy", "baseQuantity", "numLevelsPerSide"],
+      "required": [
+        "strategy",
+        "baseQuantity",
+        "numLevelsPerSide"
+      ],
       "properties": {
         "strategy": {
           "description": "Sizing strategy. Perps lock to 'linear' (level k receives (k+1) × baseQuantity).",
@@ -527,7 +543,9 @@
       "additionalProperties": false,
       "description": "Gas-pricing knobs.",
       "type": "object",
-      "required": ["gasCapMultiplier"],
+      "required": [
+        "gasCapMultiplier"
+      ],
       "properties": {
         "gasCapMultiplier": {
           "anyOf": [
@@ -549,7 +567,10 @@
       "additionalProperties": false,
       "description": "Collateral vault behaviour.",
       "type": "object",
-      "required": ["autoDeposit", "autoDepositMinAmount"],
+      "required": [
+        "autoDeposit",
+        "autoDepositMinAmount"
+      ],
       "properties": {
         "autoDeposit": {
           "anyOf": [
@@ -632,7 +653,11 @@
       "additionalProperties": false,
       "description": "OracleTracker / volatility-window configuration.",
       "type": "object",
-      "required": ["windowSize", "precisionBits", "historyLookbackMultiplier"],
+      "required": [
+        "windowSize",
+        "precisionBits",
+        "historyLookbackMultiplier"
+      ],
       "properties": {
         "windowSize": {
           "anyOf": [
@@ -684,7 +709,9 @@
           "additionalProperties": false,
           "description": "Historical price source for σ window backfill.",
           "type": "object",
-          "required": ["subgraphUrl"],
+          "required": [
+            "subgraphUrl"
+          ],
           "properties": {
             "subgraphUrl": {
               "description": "GraphQL endpoint for the hashprice-oracle subgraph (queries the HashpriceUsd time-series). Empty string is treated as 'no source' so YAML can use ${VAR:-} patterns; omit the entire `history` block for the same effect.",
@@ -838,7 +865,9 @@
       "additionalProperties": false,
       "description": "Health-check HTTP server.",
       "type": "object",
-      "required": ["port"],
+      "required": [
+        "port"
+      ],
       "properties": {
         "port": {
           "anyOf": [
@@ -857,7 +886,7 @@
         }
       }
     },
-    "multicallBatchSize": {
+    "readBatchSize": {
       "anyOf": [
         {
           "minimum": 1,
@@ -869,8 +898,38 @@
           "description": "Environment variable interpolation (resolved at startup)"
         }
       ],
-      "description": "Maximum number of contract calls bundled into a single multicall write tx. Calls are chunked transparently; lower values reduce per-tx gas cost at the cost of more txs.",
+      "description": "Maximum number of contract calls bundled into a single Multicall3 read. Calls are chunked transparently; lower values reduce RPC timeouts.",
       "default": 10
+    },
+    "cancelBatchSize": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+          "description": "Environment variable interpolation (resolved at startup)"
+        }
+      ],
+      "description": "Maximum cancelOrder calls per cancellation batch. Perps has no batch cancel — each cancel is one call.",
+      "default": 30
+    },
+    "createBatchSize": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+          "description": "Environment variable interpolation (resolved at startup)"
+        }
+      ],
+      "description": "Maximum createOrder calls per creation batch. Perps has no batch create — each create is one call.",
+      "default": 30
     }
   }
 }

@@ -45,6 +45,9 @@ async function main(): Promise<void> {
     network,
     wallet,
     address: config.venue.address,
+    readBatchSize: config.readBatchSize,
+    cancelBatchSize: config.cancelBatchSize,
+    createBatchSize: config.createBatchSize,
     logger,
   });
   const instrument = await venue.getInstrument();

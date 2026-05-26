@@ -9,6 +9,12 @@ export interface CreatePerpsVenueOpts {
   address: `0x${string}`;
   /** Optional Multicall3 override; defaults to chain.contracts.multicall3.address. */
   multicall3Address?: `0x${string}`;
+  /** Max calls per Multicall3 read batch. Default 100. */
+  readBatchSize: number;
+  /** Max cancelOrder calls per batch. Default 30. */
+  cancelBatchSize: number;
+  /** Max createOrder calls per batch. Default 30. */
+  createBatchSize: number;
   logger: pino.Logger;
 }
 
@@ -20,7 +26,9 @@ export interface CreatePerpsVenueOpts {
  *
  * matchingMode = "limit" — orders fill at any price better-or-equal.
  */
-export async function createPerpsVenue(opts: CreatePerpsVenueOpts): Promise<VenueAdapter> {
+export async function createPerpsVenue(
+  opts: CreatePerpsVenueOpts,
+): Promise<VenueAdapter> {
   return new PerpsVenueAdapter(opts);
 }
 
