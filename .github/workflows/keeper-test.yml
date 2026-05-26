@@ -74,10 +74,11 @@ jobs:
         with:
           repository: Lumerin-protocol/futures-marketplace
           ref: dev
+          path: futures
 
       - name: List folders
-        working-directory: ../
-        run: find . -maxdepth 4 -type d | sort
+        working-directory: ../../
+        run: find . -maxdepth 5 -type d | sort
 
       - name: Install perps contracts dependencies
         working-directory: perps/contracts
