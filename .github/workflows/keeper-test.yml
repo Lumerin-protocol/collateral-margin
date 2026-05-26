@@ -75,6 +75,9 @@ jobs:
           repository: Lumerin-protocol/futures-marketplace
           ref: dev
 
+      - name: List folders
+        run: find . -maxdepth 3 -type d | sort | head -50
+
       - name: Install perps contracts dependencies
         working-directory: perps/contracts
         run: pnpm install --frozen-lockfile
@@ -82,9 +85,6 @@ jobs:
       - name: Install futures contracts dependencies
         working-directory: futures-marketplace/contracts
         run: pnpm install --frozen-lockfile
-
-      - name: List folders
-        run: find . -maxdepth 3 -type d | sort | head -50
 
       - name: Compile siblings
         working-directory: collateral-margin/keeper
