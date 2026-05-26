@@ -168,19 +168,12 @@ export const futuresRootSchema = Type.Object(
         "Calls are chunked transparently; lower values reduce RPC timeouts on busy providers " +
         "at the cost of more round-trips.",
     }),
-    cancelBatchSize: Type.Number({
+    writeBatchSize: Type.Number({
       minimum: 1,
       default: 20,
       description:
-        "Maximum closeOrder calls per cancellation batch. " +
+        "Maximum qty per write batch. " +
         "The adapter groups cancels into chunks of this size before sending.",
-    }),
-    createBatchSize: Type.Number({
-      minimum: 1,
-      default: 10,
-      description:
-        "Maximum orders per createOrders call. " +
-        "The adapter packs creates into batches of this size.",
     }),
   },
   { ...Closed, description: "Titan Market Maker — Futures app config." },

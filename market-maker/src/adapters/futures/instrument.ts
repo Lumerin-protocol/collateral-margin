@@ -19,9 +19,6 @@ import { FuturesOwnOrders } from "./ownOrders.ts";
 
 const FUTURES_INSTRUMENT_ID = "futures";
 
-/** Maximum encoded calls per multicall write tx (safety net for block gas limit). */
-const WRITE_BATCH_SIZE = 50;
-
 export class FuturesInstrumentAdapter implements InstrumentAdapter {
   readonly id = FUTURES_INSTRUMENT_ID;
   readonly venue: FuturesVenueAdapter;
@@ -34,9 +31,8 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
 
   constructor(venue: FuturesVenueAdapter, logger: pino.Logger) {
     this.venue = venue;
-    const batchSize = venue.readBatchSize;
-    this.book = new FuturesBook(this, batchSize);
-    this.ownOrders = new FuturesOwnOrders(venue, logger, batchSize);
+    this.book = new FuturesBook(this, venue.readBatchSize);
+    this.ownOrders = new FuturesOwnOrders(venue, logger, venue.readBatchSize);
   }
 
   async getIndexPrice(): Promise<bigint> {
@@ -147,18 +143,12 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
   ): Promise<ExecuteOrdersResult> {
     // 1. Build the ordered call list: cancels first, then creates.
     const calls = this.buildCallList(intent);
-    if (calls.length === 0) {
-      return { receipts: [], errors: [] };
-    }
 
     if (intent.dryRun) {
-      const totalBatches = Math.ceil(calls.length / WRITE_BATCH_SIZE);
       logger.info(
         {
           cancels: intent.cancels.length,
           creates: intent.creates.length,
-          calls: calls.length,
-          batches: totalBatches,
         },
         "DRY RUN: would send multicall batches",
       );
@@ -168,12 +158,11 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
     // 2. Chunk into tx-sized groups and broadcast sequentially.
     const receipts: { gasUsed: bigint; effectiveGasPrice: bigint }[] = [];
     const errors: Error[] = [];
-    const totalBatches = Math.ceil(calls.length / WRITE_BATCH_SIZE);
+    const totalBatches = calls.length;
 
-    for (let offset = 0; offset < calls.length; offset += WRITE_BATCH_SIZE) {
-      const chunk = calls.slice(offset, offset + WRITE_BATCH_SIZE);
-      const batchNum = Math.floor(offset / WRITE_BATCH_SIZE) + 1;
-
+    console.log(calls);
+    for (let batchNum = 0; batchNum < totalBatches; batchNum++) {
+      const chunk = calls[batchNum];
       try {
         const hash = await this.venue.multicall(chunk, {
           maxFeePerGas: intent.maxFeePerGas,
@@ -211,26 +200,33 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
   }
 
   /** Build the ordered call list: cancels (individual closeOrder) then creates (createOrders). */
-  private buildCallList(intent: ExecuteOrdersIntent): `0x${string}`[] {
-    const cancelSize = this.venue.cancelBatchSize;
-    const createSize = this.venue.createBatchSize;
-    const calls: `0x${string}`[] = [];
+  private buildCallList(intent: ExecuteOrdersIntent): `0x${string}`[][] {
+    const batchSize = this.venue.writeBatchSize;
 
-    // Cancels: chunk by cancelBatchSize, each = one closeOrder call.
-    for (let i = 0; i < intent.cancels.length; i += cancelSize) {
-      const batch = intent.cancels.slice(i, i + cancelSize);
-      for (const c of batch) {
-        calls.push(this.encodeCancel(c));
+    let batchN = 0;
+    let qtyCount = 0; // we limit batch by qty count, since gas cost of one cancel approx eq one create order qty=1
+    const batch: `0x${string}`[][] = [];
+    function addTx(tx: `0x${string}`, qty: number) {
+      if (!batch[batchN]) {
+        batch[batchN] = new Array();
+      }
+      batch[batchN].push(tx);
+      qtyCount += qty;
+      if (batch[batchN].length >= batchSize) {
+        batchN++;
+        qtyCount = 0;
       }
     }
 
-    // Creates: chunk by createBatchSize, each chunk = one createOrders call.
-    for (let i = 0; i < intent.creates.length; i += createSize) {
-      const batch = intent.creates.slice(i, i + createSize);
-      calls.push(this.encodeCreateOrders(batch));
+    for (const c of intent.cancels) {
+      addTx(this.encodeCancel(c), 1);
     }
 
-    return calls;
+    for (const c of intent.creates) {
+      addTx(this.encodeCreate(c), Number(c.size));
+    }
+
+    return batch;
   }
 
   /** Encode a batch of creates via the `createOrders` contract function. */

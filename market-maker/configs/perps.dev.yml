@@ -91,7 +91,6 @@ oracle:
 health:
   port: ${MAKER_HEALTH_PORT:-3002}
 
-readBatchSize: 10
+readBatchSize: 100
 # Per-operation batch sizes for writes (perps: individual cancelOrder / createOrder).
-cancelBatchSize: 30
-createBatchSize: 30
+writeBatchSize: 20

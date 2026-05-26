@@ -155,21 +155,12 @@ export const perpsRootSchema = Type.Object(
         "Maximum number of contract calls bundled into a single Multicall3 read. " +
         "Calls are chunked transparently; lower values reduce RPC timeouts.",
     }),
-
-    cancelBatchSize: Type.Number({
+    writeBatchSize: Type.Number({
       minimum: 1,
-      default: 30,
+      default: 20,
       description:
-        "Maximum cancelOrder calls per cancellation batch. " +
-        "Perps has no batch cancel — each cancel is one call.",
-    }),
-
-    createBatchSize: Type.Number({
-      minimum: 1,
-      default: 30,
-      description:
-        "Maximum createOrder calls per creation batch. " +
-        "Perps has no batch create — each create is one call.",
+        "Maximum qty per write batch. " +
+        "The adapter groups cancels into chunks of this size before sending.",
     }),
   },
   { ...Closed, description: "Titan Market Maker — Perps app config." },
