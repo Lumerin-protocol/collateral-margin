@@ -23,4 +23,4 @@ COPY src/ src/
 RUN addgroup -S keeper && adduser -S keeper -G keeper
 USER keeper
 
-CMD ["node", "--import=amaro/strip --conditions=typescript", "src/index.ts"]
+CMD ["node", "--import=amaro/strip", "src/index.ts"]
