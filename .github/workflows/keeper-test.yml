@@ -47,19 +47,19 @@ jobs:
           cache-dependency-path: collateral-margin/keeper/pnpm-lock.yaml
 
       - name: Install keeper dependencies
-        working-directory: ./collateral-margin/keeper
+        working-directory: collateral-margin/keeper
         run: pnpm install --frozen-lockfile
 
       - name: TypeCheck
-        working-directory: ./collateral-margin/keeper
+        working-directory: collateral-margin/keeper
         run: pnpm typecheck
 
       - name: Unit tests
-        working-directory: ./collateral-margin/keeper
+        working-directory: collateral-margin/keeper
         run: pnpm test
 
       - name: Install contracts dependencies
-        working-directory: ./collateral-margin/contracts
+        working-directory: collateral-margin/contracts
         run: pnpm install --frozen-lockfile
 
       - name: Checkout perps
@@ -67,6 +67,7 @@ jobs:
         with:
           repository: Lumerin-protocol/derivatives-marketplace
           ref: dev
+          path: perps
 
       - name: Checkout futures-marketplace
         uses: actions/checkout@v6
@@ -75,20 +76,20 @@ jobs:
           ref: dev
 
       - name: Install perps contracts dependencies
-        working-directory: ./perps/contracts
+        working-directory: perps/contracts
         run: pnpm install --frozen-lockfile
 
       - name: Install futures contracts dependencies
-        working-directory: ./futures-marketplace/contracts
+        working-directory: futures-marketplace/contracts
         run: pnpm install --frozen-lockfile
 
       - name: List folders
         run: find . -maxdepth 3 -type d | sort | head -50
 
       - name: Compile siblings
-        working-directory: ./collateral-margin/keeper
+        working-directory: collateral-margin/keeper
         run: pnpm pretest:integration
 
       - name: Integration tests
-        working-directory: ./collateral-margin/keeper
+        working-directory: collateral-margin/keeper
         run: pnpm test:integration
