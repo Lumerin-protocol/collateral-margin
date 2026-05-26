@@ -1,6 +1,6 @@
 import pino from "pino";
 import { CollateralVaultAbi } from "collateral-margin-abi/CollateralVault.ts";
-import { serializeError } from "../../market-maker/src/core/errSerializer.ts";
+import { serializeError } from "./util/errSerializer.ts";
 import { loadConfig } from "./config.ts";
 import { createChain } from "./chain.ts";
 import { ParticipantTracker } from "./discovery/tracker.ts";

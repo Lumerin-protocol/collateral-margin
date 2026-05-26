@@ -25,6 +25,9 @@ defaults:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   test:
     name: Test
@@ -88,6 +91,6 @@ jobs:
       - name: Integration tests
         working-directory: ./keeper
         env:
-          PERPS_REPO: ${{ github.workspace }}/perps/contracts
-          FUTURES_REPO: ${{ github.workspace }}/futures-marketplace/contracts
+          PERPS_REPO: ${{ github.workspace }}/perps
+          FUTURES_REPO: ${{ github.workspace }}/futures-marketplace
         run: pnpm test:integration
