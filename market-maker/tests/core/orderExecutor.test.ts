@@ -1,23 +1,36 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { OrderExecutor, type OrderExecutorConfig } from "../../src/core/orderExecutor.ts";
-import type { InstrumentAdapter, OrderIntent, OwnOrder, MatchingMode } from "../../src/core/adapter.ts";
+import {
+  OrderExecutor,
+  type OrderExecutorConfig,
+} from "../../src/core/orderExecutor.ts";
+import type {
+  InstrumentAdapter,
+  OrderIntent,
+  OwnOrder,
+  MatchingMode,
+  ExecuteOrdersIntent,
+} from "../../src/core/adapter.ts";
 import type { Quoter } from "../../src/core/quoter.ts";
-import type { BookTracker } from "../../src/bookTracker.ts";
-import type { GasTracker } from "../../src/gasTracker.ts";
-import type { RiskManager } from "../../src/riskManager.ts";
-import type { OracleTracker } from "../../src/oracleTracker.ts";
+import type { BookTracker } from "../../src/core/bookTracker.ts";
+import type { GasTracker } from "../../src/core/gasTracker.ts";
+import type { RiskManager } from "../../src/core/riskManager.ts";
+import type { OracleTracker } from "../../src/core/oracleTracker.ts";
 
 const noop = () => {};
 function makeLogger(): never {
-  return { child: () => ({ debug: noop, info: noop, warn: noop, error: noop }) } as never;
+  return {
+    child: () => ({ debug: noop, info: noop, warn: noop, error: noop }),
+  } as never;
 }
 
 function makeOrderId(n: number): `0x${string}` {
   return `0x${n.toString(16).padStart(64, "0")}` as `0x${string}`;
 }
 
-function makeConfig(overrides: Partial<OrderExecutorConfig> = {}): OrderExecutorConfig {
+function makeConfig(
+  overrides: Partial<OrderExecutorConfig> = {},
+): OrderExecutorConfig {
   return {
     requoteCooldownMs: 0,
     requoteThresholdTicks: 2,
@@ -46,10 +59,13 @@ function makeDeps(overrides: Partial<TestDeps> = {}): TestDeps {
     instrument: {
       id: "test-instrument",
       book: { matchingMode: "exact" as MatchingMode },
-      executeOrders: async (intent) => {
+      executeOrders: async (intent: ExecuteOrdersIntent) => {
         for (const c of intent.cancels) cancelledOrderIds.push(c.orderId);
         for (const p of intent.creates) placedIntents.push(p);
-        return { receipts: [{ gasUsed: 200_000n, effectiveGasPrice: 1_000_000_000n }], errors: [] };
+        return {
+          receipts: [{ gasUsed: 200_000n, effectiveGasPrice: 1_000_000_000n }],
+          errors: [],
+        };
       },
     } as unknown as InstrumentAdapter,
     quoter: {
@@ -146,7 +162,11 @@ describe("OrderExecutor requote guards (regression)", () => {
     await executor.reconcile(desired);
 
     // All stale orders must be cancelled.
-    assert.equal(deps.cancelledOrderIds.length, 4, "all stale orders cancelled");
+    assert.equal(
+      deps.cancelledOrderIds.length,
+      4,
+      "all stale orders cancelled",
+    );
     // Missing desired levels must be placed.
     assert.equal(deps.placedIntents.length, 2, "missing levels placed");
   });
@@ -181,7 +201,11 @@ describe("OrderExecutor requote guards (regression)", () => {
     // Stale orders must be cancelled.
     assert.equal(deps.cancelledOrderIds.length, 2, "stale orders cancelled");
     // Correct orders must survive (no deficit → no new placement at same prices).
-    assert.equal(deps.placedIntents.length, 0, "no new orders at already-filled prices");
+    assert.equal(
+      deps.placedIntents.length,
+      0,
+      "no new orders at already-filled prices",
+    );
   });
 
   /**
