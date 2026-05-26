@@ -76,7 +76,8 @@ jobs:
           ref: dev
 
       - name: List folders
-        run: find . -maxdepth 3 -type d | sort | head -50
+        working-directory: ../
+        run: find . -maxdepth 4 -type d | sort
 
       - name: Install perps contracts dependencies
         working-directory: perps/contracts
