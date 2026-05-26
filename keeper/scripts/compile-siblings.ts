@@ -18,8 +18,10 @@
  * imports — and the keeper just reads the resulting artifact JSON.
  *
  * Path resolution mirrors `tests/integration/artifacts.ts`:
- *   PERPS_REPO   – defaults to ../../perps
- *   FUTURES_REPO – defaults to ../../futures-marketplace
+ *   PERPS_REPO   – sibling repo root (…/perps); defaults to ../../perps
+ *   FUTURES_REPO – sibling repo root; defaults to ../../futures-marketplace
+ *
+ * Each repo's Hardhat project lives in `<repo>/contracts`.
  *
  * Compilation is skipped when `SKIP_COMPILE_SIBLINGS=1` (used in CI when
  * the artifacts have already been built upstream and committed).
@@ -37,12 +39,32 @@ if (process.env.SKIP_COMPILE_SIBLINGS === "1") {
 const here = dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = resolve(here, "..", "..", "..");
 
+/** Repo root env var → Hardhat package dir (`<root>/contracts`). */
+function contractsPackageDir(repoRootEnv: string | undefined, defaultRepoRoot: string): string {
+  const root = repoRootEnv ?? defaultRepoRoot;
+  const pkg = resolve(root, "contracts");
+  if (existsSync(resolve(pkg, "hardhat.config.ts")) || existsSync(resolve(pkg, "hardhat.config.js"))) {
+    return pkg;
+  }
+  // Legacy: env pointed directly at the contracts package.
+  if (existsSync(resolve(root, "hardhat.config.ts")) || existsSync(resolve(root, "hardhat.config.js"))) {
+    return root;
+  }
+  return pkg;
+}
+
 const targets = [
   { name: "collateral-margin", dir: resolve(here, "..", "..", "contracts") },
-  { name: "perps", dir: process.env.PERPS_REPO ?? resolve(workspaceRoot, "perps", "contracts") },
+  {
+    name: "perps",
+    dir: contractsPackageDir(process.env.PERPS_REPO, resolve(workspaceRoot, "perps")),
+  },
   {
     name: "futures-marketplace",
-    dir: process.env.FUTURES_REPO ?? resolve(workspaceRoot, "futures-marketplace", "contracts"),
+    dir: contractsPackageDir(
+      process.env.FUTURES_REPO,
+      resolve(workspaceRoot, "futures-marketplace"),
+    ),
   },
 ];
 
