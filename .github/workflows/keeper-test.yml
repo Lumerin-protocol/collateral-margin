@@ -38,7 +38,7 @@ jobs:
           package_json_file: keeper/package.json
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "24"
           cache: "pnpm"
@@ -55,6 +55,39 @@ jobs:
       - name: Unit tests
         working-directory: ./keeper
         run: pnpm test
+
+      - name: Checkout perps
+        uses: actions/checkout@v6
+        with:
+          repository: Lumerin-protocol/derivatives-marketplace
+          ref: dev
+          path: perps
+
+      - name: Checkout futures-marketplace
+        uses: actions/checkout@v6
+        with:
+          repository: Lumerin-protocol/futures-marketplace
+          ref: dev
+          path: futures-marketplace
+
+      - name: Install contracts dependencies
+        working-directory: ./contracts
+        run: pnpm install --frozen-lockfile
+
+      - name: Install perps contracts dependencies
+        working-directory: ./perps/contracts
+        run: pnpm install --frozen-lockfile
+
+      - name: Install futures contracts dependencies
+        working-directory: ./futures-marketplace/contracts
+        run: pnpm install --frozen-lockfile
+
+      - name: Compile siblings
+        working-directory: ./keeper
+        run: pnpm pretest:integration
+        env:
+          PERPS_REPO: ${{ github.workspace }}/perps/contracts
+          FUTURES_REPO: ${{ github.workspace }}/futures-marketplace/contracts
 
       - name: Integration tests
         working-directory: ./keeper
