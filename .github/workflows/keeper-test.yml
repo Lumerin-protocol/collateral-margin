@@ -82,13 +82,9 @@ jobs:
         working-directory: ./futures-marketplace/contracts
         run: pnpm install --frozen-lockfile
 
-      - name: Compile siblings
-        working-directory: ./keeper
-        run: pnpm pretest:integration
-        env:
-          PERPS_REPO: ${{ github.workspace }}/perps/contracts
-          FUTURES_REPO: ${{ github.workspace }}/futures-marketplace/contracts
-
       - name: Integration tests
         working-directory: ./keeper
         run: pnpm test:integration
+        env:
+          PERPS_REPO: ${{ github.workspace }}/perps/contracts
+          FUTURES_REPO: ${{ github.workspace }}/futures-marketplace/contracts
