@@ -1,0 +1,61 @@
+name: Keeper Tests
+
+on:
+  push:
+    branches: [main, dev, stg]
+    paths:
+      - "keeper/**"
+      - ".github/workflows/keeper-test.yml"
+
+  pull_request:
+    paths:
+      - "keeper/**"
+      - ".github/workflows/keeper-test.yml"
+
+  workflow_dispatch:
+
+concurrency:
+  group: keeper-test-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "11"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: keeper/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: ./keeper
+        run: pnpm install --frozen-lockfile
+
+      - name: TypeCheck
+        working-directory: ./keeper
+        run: pnpm typecheck
+
+      - name: Unit tests
+        working-directory: ./keeper
+        run: pnpm test
+
+      - name: Integration tests
+        working-directory: ./keeper
+        run: pnpm test:integration

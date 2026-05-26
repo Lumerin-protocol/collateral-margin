@@ -7,7 +7,6 @@
     "node": ">=22.6.0"
   },
   "scripts": {
-    "postinstall": "node ./scripts/fix-placeholder-manifests.ts",
     "node": "node --import=amaro/strip",
     "dev": "pnpm node --env-file=../.env src/index.ts | pino-pretty",
     "dev:dry": "DRY_RUN=true pnpm node --env-file=.env src/index.ts | pino-pretty",
@@ -21,9 +20,9 @@
   },
   "dependencies": {
     "amaro": "^1.1.9",
-    "collateral-margin": "link:../contracts/abi",
-    "derivatives-marketplace": "link:../../perps/contracts/abi",
-    "futures-marketplace": "link:../../futures-marketplace/contracts/abi",
+    "collateral-margin": "github:Lumerin-protocol/collateral-margin.git#dev&path:/contracts/abi",
+    "derivatives-marketplace": "github:Lumerin-protocol/derivatives-marketplace#dev&path:/contracts/abi",
+    "futures-marketplace": "github:Lumerin-protocol/futures-marketplace#dev&path:/contracts/abi",
     "pino": "^10.3.1",
     "viem": "^2.48.8"
   },
