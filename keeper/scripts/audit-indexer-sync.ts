@@ -7,14 +7,19 @@
  */
 import { createPublicClient, http, type Address, type Hex } from "viem";
 import { baseSepolia } from "viem/chains";
-import { FuturesAbi } from "futures-marketplace/Futures.ts";
+import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
 
-const ENDPOINT = "https://api.goldsky.com/api/public/project_cmmz59uoa7b5201wthnkxbuqy/subgraphs/hpow-futures/dev-latest/gn";
+const ENDPOINT =
+  "https://api.goldsky.com/api/public/project_cmmz59uoa7b5201wthnkxbuqy/subgraphs/hpow-futures/dev-latest/gn";
 const USER = "0x1441Bc52156Cf18c12cde6A92aE6BDE8B7f775D4".toLowerCase();
-const FUT = (process.env.FUTURES_ADDRESS ?? "0x56d8d4a03a0f34b93B86E0b7941aFF29178D0479") as Address;
-const RPC = process.env.ETH_NODE_ADDRESS ?? `https://base-sepolia.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`;
+const FUT = (process.env.FUTURES_ADDRESS ??
+  "0x56d8d4a03a0f34b93B86E0b7941aFF29178D0479") as Address;
+const RPC =
+  process.env.ETH_NODE_ADDRESS ??
+  `https://base-sepolia.g.alchemy.com/v2/${process.env.ALCHEMY_API_KEY}`;
 
-if (!RPC) throw new Error("Need RPC URL via ETH_NODE_ADDRESS or ALCHEMY_API_KEY");
+if (!RPC)
+  throw new Error("Need RPC URL via ETH_NODE_ADDRESS or ALCHEMY_API_KEY");
 
 const client = createPublicClient({ chain: baseSepolia, transport: http(RPC) });
 
@@ -88,10 +93,28 @@ async function main() {
   const trades = await fetchTrades();
   console.log(`Found ${trades.length} trades\n`);
 
-  console.log("%-12s %-10s %-10s %-10s %-10s %s", "block", "indexer", "chainLen", "match", "tx", "status");
-  console.log("%-12s %-10s %-10s %-10s %-10s %s", "-----", "-------", "--------", "-----", "--", "------");
+  console.log(
+    "%-12s %-10s %-10s %-10s %-10s %s",
+    "block",
+    "indexer",
+    "chainLen",
+    "match",
+    "tx",
+    "status",
+  );
+  console.log(
+    "%-12s %-10s %-10s %-10s %-10s %s",
+    "-----",
+    "-------",
+    "--------",
+    "-----",
+    "--",
+    "------",
+  );
 
-  let firstMismatch: { block: number; indexer: number; chain: number; tx: string } | undefined;
+  let firstMismatch:
+    | { block: number; indexer: number; chain: number; tx: string }
+    | undefined;
 
   for (const t of trades) {
     const block = parseInt(t.blockNumber, 10);
@@ -104,17 +127,38 @@ async function main() {
     try {
       chainLen = await getChainPositionCount(block);
     } catch (err) {
-      console.log("%-12s %-10s %-10s %-10s %-10s %s", block, indexerAbs, "ERR", "-", t.transactionHash.slice(0, 10), "rpc-error");
+      console.log(
+        "%-12s %-10s %-10s %-10s %-10s %s",
+        block,
+        indexerAbs,
+        "ERR",
+        "-",
+        t.transactionHash.slice(0, 10),
+        "rpc-error",
+      );
       continue;
     }
 
     const match = indexerAbs === chainLen ? "✓" : "✗ MISMATCH";
     const status = indexerAbs === chainLen ? "ok" : "MISMATCH";
 
-    console.log("%-12d %-10d %-10d %-10s %-10s %s", block, indexerAbs, chainLen, indexerAbs === chainLen ? "yes" : "NO", t.transactionHash.slice(0, 10) + "...", status);
+    console.log(
+      "%-12d %-10d %-10d %-10s %-10s %s",
+      block,
+      indexerAbs,
+      chainLen,
+      indexerAbs === chainLen ? "yes" : "NO",
+      t.transactionHash.slice(0, 10) + "...",
+      status,
+    );
 
     if (indexerAbs !== chainLen && !firstMismatch) {
-      firstMismatch = { block, indexer: indexerAbs, chain: chainLen, tx: t.transactionHash };
+      firstMismatch = {
+        block,
+        indexer: indexerAbs,
+        chain: chainLen,
+        tx: t.transactionHash,
+      };
     }
   }
 

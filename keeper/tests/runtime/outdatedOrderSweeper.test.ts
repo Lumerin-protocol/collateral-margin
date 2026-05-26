@@ -8,7 +8,7 @@ import {
   type Hex,
 } from "viem";
 import pino from "pino";
-import { FuturesAbi } from "futures-marketplace/Futures.ts";
+import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
 import { OutdatedOrderSweeper } from "../../src/runtime/outdatedOrderSweeper.ts";
 import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
@@ -28,12 +28,15 @@ interface LogCall {
 function makeRecordingLogger(): { logger: pino.Logger; calls: LogCall[] } {
   const calls: LogCall[] = [];
   const record =
-    (level: LogCall["level"]) =>
-    (ctxOrMsg: unknown, msg?: string) => {
+    (level: LogCall["level"]) => (ctxOrMsg: unknown, msg?: string) => {
       if (typeof ctxOrMsg === "string") {
         calls.push({ level, msg: ctxOrMsg, ctx: {} });
       } else {
-        calls.push({ level, msg: msg ?? "", ctx: ctxOrMsg as Record<string, unknown> });
+        calls.push({
+          level,
+          msg: msg ?? "",
+          ctx: ctxOrMsg as Record<string, unknown>,
+        });
       }
     };
   const logger = {
@@ -78,7 +81,13 @@ function makeChain(opts: FakeChainOpts): { chain: Chain; recorded: Recorded } {
 
   const publicClient = {
     getBlock: async () => ({ timestamp: opts.blockTimestamp }),
-    readContract: async ({ functionName, args }: { functionName: string; args: unknown[] }) => {
+    readContract: async ({
+      functionName,
+      args,
+    }: {
+      functionName: string;
+      args: unknown[];
+    }) => {
       recorded.readContractCalls++;
       if (functionName !== "getOrderIds") {
         throw new Error(`unexpected readContract: ${functionName}`);
@@ -86,7 +95,11 @@ function makeChain(opts: FakeChainOpts): { chain: Chain; recorded: Recorded } {
       const user = args[0] as Address;
       return opts.orderIdsByUser.get(user) ?? [];
     },
-    multicall: async ({ contracts }: { contracts: Array<{ functionName: string; args: unknown[] }> }) => {
+    multicall: async ({
+      contracts,
+    }: {
+      contracts: Array<{ functionName: string; args: unknown[] }>;
+    }) => {
       recorded.multicallReadCalls++;
       return contracts.map((c) => {
         if (c.functionName !== "getOrderById") {
@@ -199,7 +212,12 @@ describe("OutdatedOrderSweeper", () => {
       orderIdsByUser: new Map(),
       orders: new Map(),
     });
-    const sweeper = new OutdatedOrderSweeper(chain, makeConfig(), makeTracker([]), logger);
+    const sweeper = new OutdatedOrderSweeper(
+      chain,
+      makeConfig(),
+      makeTracker([]),
+      logger,
+    );
     const closed = await sweeper.runSweep();
     assert.equal(closed, 0);
     assert.equal(recorded.writeCalls.length, 0);
@@ -214,7 +232,12 @@ describe("OutdatedOrderSweeper", () => {
       orderIdsByUser: new Map([[USER_A, []]]),
       orders: new Map(),
     });
-    const sweeper = new OutdatedOrderSweeper(chain, makeConfig(), makeTracker([USER_A]), logger);
+    const sweeper = new OutdatedOrderSweeper(
+      chain,
+      makeConfig(),
+      makeTracker([USER_A]),
+      logger,
+    );
     const closed = await sweeper.runSweep();
     assert.equal(closed, 0);
     assert.equal(recorded.writeCalls.length, 0);
@@ -223,7 +246,7 @@ describe("OutdatedOrderSweeper", () => {
 
   it("ignores orders whose deliveryAt is still in the future", async () => {
     const { logger } = makeRecordingLogger();
-    const orderId = "0x" + "11".repeat(32) as Hex;
+    const orderId = ("0x" + "11".repeat(32)) as Hex;
     const { chain, recorded } = makeChain({
       blockTimestamp: 1_000n,
       orderIdsByUser: new Map([[USER_A, [orderId]]]),
@@ -231,7 +254,12 @@ describe("OutdatedOrderSweeper", () => {
         [orderId, { participant: USER_A, deliveryAt: 5_000n }], // future
       ]),
     });
-    const sweeper = new OutdatedOrderSweeper(chain, makeConfig(), makeTracker([USER_A]), logger);
+    const sweeper = new OutdatedOrderSweeper(
+      chain,
+      makeConfig(),
+      makeTracker([USER_A]),
+      logger,
+    );
     const closed = await sweeper.runSweep();
     assert.equal(closed, 0);
     assert.equal(recorded.simulateCalls.length, 0);
@@ -240,9 +268,9 @@ describe("OutdatedOrderSweeper", () => {
 
   it("batches all expired orders for a user into a single multicall write", async () => {
     const { logger, calls } = makeRecordingLogger();
-    const id1 = "0x" + "11".repeat(32) as Hex;
-    const id2 = "0x" + "22".repeat(32) as Hex;
-    const id3 = "0x" + "33".repeat(32) as Hex;
+    const id1 = ("0x" + "11".repeat(32)) as Hex;
+    const id2 = ("0x" + "22".repeat(32)) as Hex;
+    const id3 = ("0x" + "33".repeat(32)) as Hex;
     const { chain, recorded } = makeChain({
       blockTimestamp: 10_000n,
       orderIdsByUser: new Map([[USER_A, [id1, id2, id3]]]),
@@ -253,7 +281,12 @@ describe("OutdatedOrderSweeper", () => {
       ]),
     });
 
-    const sweeper = new OutdatedOrderSweeper(chain, makeConfig(), makeTracker([USER_A]), logger);
+    const sweeper = new OutdatedOrderSweeper(
+      chain,
+      makeConfig(),
+      makeTracker([USER_A]),
+      logger,
+    );
     const closed = await sweeper.runSweep();
 
     assert.equal(closed, 2);
@@ -278,8 +311,8 @@ describe("OutdatedOrderSweeper", () => {
 
   it("aggregates expired orders across multiple tracked users into one tx", async () => {
     const { logger } = makeRecordingLogger();
-    const idA = "0x" + "aa".repeat(32) as Hex;
-    const idB = "0x" + "bb".repeat(32) as Hex;
+    const idA = ("0x" + "aa".repeat(32)) as Hex;
+    const idB = ("0x" + "bb".repeat(32)) as Hex;
     const { chain, recorded } = makeChain({
       blockTimestamp: 10_000n,
       orderIdsByUser: new Map([
@@ -299,7 +332,11 @@ describe("OutdatedOrderSweeper", () => {
     );
     const closed = await sweeper.runSweep();
     assert.equal(closed, 2);
-    assert.equal(recorded.writeCalls.length, 1, "one multicall write for cross-user batch");
+    assert.equal(
+      recorded.writeCalls.length,
+      1,
+      "one multicall write for cross-user batch",
+    );
     assert.equal(recorded.writeCalls[0]!.calldatas.length, 2);
   });
 
@@ -339,9 +376,9 @@ describe("OutdatedOrderSweeper", () => {
     // deliveryAt bumped. The sweeper must skip them silently and still
     // broadcast a write for the survivor (orderId3).
     const { logger, calls } = makeRecordingLogger();
-    const id1 = "0x" + "11".repeat(32) as Hex;
-    const id2 = "0x" + "22".repeat(32) as Hex;
-    const id3 = "0x" + "33".repeat(32) as Hex;
+    const id1 = ("0x" + "11".repeat(32)) as Hex;
+    const id2 = ("0x" + "22".repeat(32)) as Hex;
+    const id3 = ("0x" + "33".repeat(32)) as Hex;
     const { chain, recorded } = makeChain({
       blockTimestamp: 10_000n,
       orderIdsByUser: new Map([[USER_A, [id1, id2, id3]]]),
@@ -356,21 +393,28 @@ describe("OutdatedOrderSweeper", () => {
         return undefined;
       },
     });
-    const sweeper = new OutdatedOrderSweeper(chain, makeConfig(), makeTracker([USER_A]), logger);
+    const sweeper = new OutdatedOrderSweeper(
+      chain,
+      makeConfig(),
+      makeTracker([USER_A]),
+      logger,
+    );
     const closed = await sweeper.runSweep();
     assert.equal(closed, 1);
     assert.equal(recorded.writeCalls.length, 1);
     assert.equal(recorded.writeCalls[0]!.calldatas.length, 1);
     // Stale-state skips are debug — they're benign and shouldn't pollute INFO.
     assert.equal(
-      calls.filter((c) => c.level === "warn" && c.msg.includes("non-recoverable")).length,
+      calls.filter(
+        (c) => c.level === "warn" && c.msg.includes("non-recoverable"),
+      ).length,
       0,
     );
   });
 
   it("skips the write entirely on dry-run but still simulates", async () => {
     const { logger, calls } = makeRecordingLogger();
-    const id1 = "0x" + "11".repeat(32) as Hex;
+    const id1 = ("0x" + "11".repeat(32)) as Hex;
     const { chain, recorded } = makeChain({
       blockTimestamp: 10_000n,
       orderIdsByUser: new Map([[USER_A, [id1]]]),
@@ -378,18 +422,27 @@ describe("OutdatedOrderSweeper", () => {
     });
     const config = makeConfig();
     (config as { keeper: { dryRun: boolean } }).keeper.dryRun = true;
-    const sweeper = new OutdatedOrderSweeper(chain, config, makeTracker([USER_A]), logger);
+    const sweeper = new OutdatedOrderSweeper(
+      chain,
+      config,
+      makeTracker([USER_A]),
+      logger,
+    );
     const closed = await sweeper.runSweep();
     assert.equal(closed, 0);
     assert.equal(recorded.writeCalls.length, 0);
-    assert.equal(recorded.simulateCalls.length, 1, "simulate runs so dry-run still surfaces reverts");
+    assert.equal(
+      recorded.simulateCalls.length,
+      1,
+      "simulate runs so dry-run still surfaces reverts",
+    );
     assert.ok(calls.some((c) => c.msg.startsWith("[dryRun]")));
   });
 
   it("does not crash when one user's getOrderIds fails — continues with the next user", async () => {
     // Per-user RPC blips shouldn't drop the whole sweep tick.
     const { logger, calls } = makeRecordingLogger();
-    const idB = "0x" + "bb".repeat(32) as Hex;
+    const idB = ("0x" + "bb".repeat(32)) as Hex;
     const orderIdsByUser = new Map<Address, Hex[]>([[USER_B, [idB]]]);
     const orders = new Map<Hex, FakeOrder>([
       [idB, { participant: USER_B, deliveryAt: 1n }],
@@ -411,7 +464,11 @@ describe("OutdatedOrderSweeper", () => {
         if (user === USER_A) throw new Error("rpc 503");
         return orderIdsByUser.get(user) ?? [];
       },
-      multicall: async ({ contracts }: { contracts: Array<{ args: unknown[] }> }) => {
+      multicall: async ({
+        contracts,
+      }: {
+        contracts: Array<{ args: unknown[] }>;
+      }) => {
         recorded.multicallReadCalls++;
         return contracts.map((c) => {
           const order = orders.get(c.args[0] as Hex);
@@ -430,12 +487,19 @@ describe("OutdatedOrderSweeper", () => {
         recorded.simulateCalls.push(args[0] as Hex);
         return { request: {} };
       },
-      waitForTransactionReceipt: async () => ({ blockNumber: 1n, gasUsed: 0n, logs: [] }),
+      waitForTransactionReceipt: async () => ({
+        blockNumber: 1n,
+        gasUsed: 0n,
+        logs: [],
+      }),
     };
     const walletClient = {
       chain: null,
       writeContract: async ({ args }: { args: unknown[] }) => {
-        recorded.writeCalls.push({ functionName: "multicall", calldatas: args[0] as Hex[] });
+        recorded.writeCalls.push({
+          functionName: "multicall",
+          calldatas: args[0] as Hex[],
+        });
         return "0xabc" as Hex;
       },
     };
@@ -452,9 +516,15 @@ describe("OutdatedOrderSweeper", () => {
       logger,
     );
     const closed = await sweeper.runSweep();
-    assert.equal(closed, 1, "USER_B's order still gets closed despite USER_A's RPC failure");
+    assert.equal(
+      closed,
+      1,
+      "USER_B's order still gets closed despite USER_A's RPC failure",
+    );
     assert.ok(
-      calls.some((c) => c.level === "warn" && c.msg.includes("getOrderIds failed")),
+      calls.some(
+        (c) => c.level === "warn" && c.msg.includes("getOrderIds failed"),
+      ),
       "expected a warn log for the failed user",
     );
   });
@@ -470,10 +540,17 @@ describe("OutdatedOrderSweeper", () => {
       walletClient: {},
       account: { address: SIGNER },
     } as unknown as Chain;
-    const sweeper = new OutdatedOrderSweeper(chain, makeConfig(), makeTracker([USER_A]), logger);
+    const sweeper = new OutdatedOrderSweeper(
+      chain,
+      makeConfig(),
+      makeTracker([USER_A]),
+      logger,
+    );
     const closed = await sweeper.runSweep();
     assert.equal(closed, 0);
-    assert.ok(calls.some((c) => c.level === "warn" && c.msg.includes("getBlock")));
+    assert.ok(
+      calls.some((c) => c.level === "warn" && c.msg.includes("getBlock")),
+    );
   });
 
   it("coalesces overlapping sweeps — second concurrent runSweep is dropped", async () => {
@@ -481,7 +558,7 @@ describe("OutdatedOrderSweeper", () => {
     // slow RPCs. Overlapping sweeps would race on the same nonce, so the
     // sweeper must drop the redundant call.
     const { logger } = makeRecordingLogger();
-    const id1 = "0x" + "11".repeat(32) as Hex;
+    const id1 = ("0x" + "11".repeat(32)) as Hex;
     let releaseFirstSweep: () => void = () => undefined;
     const firstSweepBlocked = new Promise<void>((resolve) => {
       releaseFirstSweep = resolve;
@@ -499,15 +576,28 @@ describe("OutdatedOrderSweeper", () => {
       walletClient: {},
       account: { address: SIGNER },
     } as unknown as Chain;
-    const sweeper = new OutdatedOrderSweeper(chain, makeConfig(), makeTracker([USER_A]), logger);
+    const sweeper = new OutdatedOrderSweeper(
+      chain,
+      makeConfig(),
+      makeTracker([USER_A]),
+      logger,
+    );
 
     const first = sweeper.runSweep();
     const second = sweeper.runSweep(); // Should bail immediately.
     const secondResult = await second;
-    assert.equal(secondResult, 0, "concurrent sweep returns 0 without doing work");
+    assert.equal(
+      secondResult,
+      0,
+      "concurrent sweep returns 0 without doing work",
+    );
     releaseFirstSweep();
     await first;
-    assert.equal(getBlockCount, 1, "block timestamp read once — second sweep was dropped");
+    assert.equal(
+      getBlockCount,
+      1,
+      "block timestamp read once — second sweep was dropped",
+    );
   });
 
   it("stop() is idempotent and clears the interval", () => {
@@ -517,7 +607,12 @@ describe("OutdatedOrderSweeper", () => {
       orderIdsByUser: new Map(),
       orders: new Map(),
     });
-    const sweeper = new OutdatedOrderSweeper(chain, makeConfig(), makeTracker([]), logger);
+    const sweeper = new OutdatedOrderSweeper(
+      chain,
+      makeConfig(),
+      makeTracker([]),
+      logger,
+    );
     sweeper.stop(); // no-op pre-start
     sweeper.stop(); // no-op repeated
   });

@@ -9,7 +9,7 @@ import {
 } from "viem";
 import { withUnstickRetry } from "../tx/unstick.ts";
 import type pino from "pino";
-import { FuturesAbi } from "futures-marketplace/Futures.ts";
+import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
 import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";

@@ -8,9 +8,9 @@ import {
 import type pino from "pino";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
-import { CollateralVaultAbi as collateralVaultAbi } from "collateral-margin/CollateralVault.ts";
-import { HashPowerPerpsDEXAbi as perpsAbi } from "derivatives-marketplace/HashPowerPerpsDEX.ts";
-import { FuturesAbi as futuresAbi } from "futures-marketplace/Futures.ts";
+import { CollateralVaultAbi as collateralVaultAbi } from "collateral-margin-abi/CollateralVault.ts";
+import { HashPowerPerpsDEXAbi as perpsAbi } from "derivatives-marketplace-abi/HashPowerPerpsDEX.ts";
+import { FuturesAbi as futuresAbi } from "futures-marketplace-abi/Futures.ts";
 
 /**
  * Set of user addresses with collateral or open positions/orders that the

@@ -2,7 +2,7 @@ import { getAddress, pad, toHex, type Address, type Hex } from "viem";
 import type pino from "pino";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
-import { FuturesAbi } from "futures-marketplace/Futures.ts";
+import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
 import { sendLiquidate } from "../tx/liquidate.ts";
 import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
 import type {

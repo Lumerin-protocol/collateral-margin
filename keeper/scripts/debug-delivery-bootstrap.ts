@@ -10,7 +10,7 @@
  */
 import { createPublicClient, http, type Address, type Hex } from "viem";
 import { baseSepolia, base, hardhat } from "viem/chains";
-import { FuturesAbi } from "futures-marketplace/Futures.ts";
+import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
 
 const FUTURES = process.env.FUTURES_ADDRESS as Address;
 const NETWORK = process.env.NETWORK ?? "base-sepolia";
@@ -25,9 +25,7 @@ const chain = CHAINS[NETWORK as keyof typeof CHAINS];
 
 // Hard-coded list mirroring the production tracker.list() output.
 // Edit if you want to test different users.
-const USERS: Address[] = [
-  "0x1441Bc52156Cf18c12cde6A92aE6BDE8B7f775D4",
-];
+const USERS: Address[] = ["0x1441Bc52156Cf18c12cde6A92aE6BDE8B7f775D4"];
 
 const client = createPublicClient({ chain, transport: http(RPC_URL) });
 
@@ -81,7 +79,13 @@ const deliveryDurationDays = (await client.readContract({
   functionName: "deliveryDurationDays",
 })) as number;
 const window = BigInt(deliveryDurationDays) * 86_400n;
-console.log("deliveryDurationDays:", deliveryDurationDays, "→ window:", window, "s");
+console.log(
+  "deliveryDurationDays:",
+  deliveryDurationDays,
+  "→ window:",
+  window,
+  "s",
+);
 
 let live = 0;
 let pastDue = 0;
@@ -109,4 +113,6 @@ for (let i = 0; i < allIds.length; i++) {
     }`,
   );
 }
-console.log(`\nsummary: ${live} live, ${pastDue} past-due (settleable), ${expired} expired-window`);
+console.log(
+  `\nsummary: ${live} live, ${pastDue} past-due (settleable), ${expired} expired-window`,
+);

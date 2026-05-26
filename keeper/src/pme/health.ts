@@ -1,8 +1,8 @@
 import type { Address } from "viem";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
-import { CollateralVaultAbi } from "collateral-margin/CollateralVault.ts";
-import { PortfolioMarginEngineAbi } from "collateral-margin/PortfolioMarginEngine.ts";
+import { CollateralVaultAbi } from "collateral-margin-abi/CollateralVault.ts";
+import { PortfolioMarginEngineAbi } from "collateral-margin-abi/PortfolioMarginEngine.ts";
 
 /**
  * Snapshot of an account's portfolio-margin state at a single block.
@@ -94,7 +94,10 @@ export async function readAccountHealthBatch(
  * (warn / critical thresholds are configured as JS numbers in `Config`); the
  * MM predicate itself stays in BigInt land via `mmSurplus`.
  */
-export function computeUtilization(imRequired: bigint, balance: bigint): number {
+export function computeUtilization(
+  imRequired: bigint,
+  balance: bigint,
+): number {
   if (balance === 0n) {
     return imRequired === 0n ? 0 : Number.POSITIVE_INFINITY;
   }
