@@ -1,5 +1,5 @@
 import pino from "pino";
-import { CollateralVaultAbi } from "collateral-margin/CollateralVault.ts";
+import { CollateralVaultAbi } from "collateral-margin-abi/CollateralVault.ts";
 import { serializeError } from "../../market-maker/src/core/errSerializer.ts";
 import { loadConfig } from "./config.ts";
 import { createChain } from "./chain.ts";
@@ -186,7 +186,7 @@ async function main(): Promise<void> {
     // log-backfill pipeline, so it survives RPC providers that cap
     // `eth_getLogs` block ranges (Alchemy free tier = 10 blocks). Without
     // this hook a position created before keeper boot would only ever be
-    // settled if log backfill happened to find its `PositionCreated`
+    // settled if log backfill happened to find its `LotCreated`
     // event, which is unreliable on rate-limited RPCs.
     if (deliveryCoordinator !== undefined) {
       void deliveryCoordinator.indexUserPositions(user);

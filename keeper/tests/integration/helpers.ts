@@ -173,7 +173,7 @@ export const readPerpsPositionLiquidationBlock = (s: DeployedStack, u: Address) 
   earliestEventBlock(s, "perps", "PositionLiquidated", { user: u });
 
 export const readFuturesPositionLiquidationBlock = (s: DeployedStack, u: Address) =>
-  earliestEventBlock(s, "futures", "PositionLiquidated", { participant: u });
+  earliestEventBlock(s, "futures", "LotLiquidated", { participant: u });
 
 export const readPerpsOrderLiquidationBlock = (s: DeployedStack, u: Address) =>
   earliestEventBlock(s, "perps", "OrderLiquidated", { user: u });
@@ -182,19 +182,19 @@ export const readFuturesOrderLiquidationBlock = (s: DeployedStack, u: Address) =
   earliestEventBlock(s, "futures", "OrderLiquidated", { participant: u });
 
 /**
- * Earliest block at which `Futures.PositionDeliveryClosed(positionId)` was
+ * Earliest block at which `Futures.LotClosed(lotId)` was
  * emitted. Used by the delivery-coordinator e2e tests to confirm the keeper
  * actually sent `closeDelivery` for a specific position id.
  */
-export async function readPositionDeliveryClosedBlock(
+export async function readLotClosedBlock(
   stack: DeployedStack,
-  positionId: Hex,
+  lotId: Hex,
 ): Promise<bigint | null> {
   const logs = await stack.publicClient.getContractEvents({
     address: stack.addresses.futures,
     abi: stack.abis.futures,
-    eventName: "PositionDeliveryClosed",
-    args: { positionId },
+    eventName: "LotClosed",
+    args: { lotId },
     fromBlock: 0n,
   });
   let earliest: bigint | null = null;
@@ -208,7 +208,7 @@ export async function readPositionDeliveryClosedBlock(
 async function earliestEventBlock(
   stack: DeployedStack,
   venue: "perps" | "futures",
-  eventName: "PositionLiquidated" | "OrderLiquidated",
+  eventName: "PositionLiquidated" | "LotLiquidated" | "OrderLiquidated",
   args: Record<string, Address>,
 ): Promise<bigint | null> {
   const logs = await stack.publicClient.getContractEvents({

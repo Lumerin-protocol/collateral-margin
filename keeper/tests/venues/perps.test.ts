@@ -48,7 +48,11 @@ const silentLogger = {
 
 describe("perps venue: marketLabel", () => {
   it("always returns 'perps' regardless of marketId", () => {
-    const venue = new PerpsVenue(makeChainStub({}), makeConfigStub(), silentLogger);
+    const venue = new PerpsVenue(
+      makeChainStub({}),
+      makeConfigStub(),
+      silentLogger,
+    );
     assert.equal(venue.marketLabel(PERPS_MARKET_ID), "perps");
     // Even an unrelated marketId resolves to the single perps label.
     assert.equal(venue.marketLabel(pad("0xdead", { size: 32 })), "perps");
@@ -97,7 +101,7 @@ describe("perps venue: readPositions", () => {
     });
     const venue = new PerpsVenue(chain, makeConfigStub(), silentLogger);
     const positions = await venue.readPositions(USER);
-    assert.equal(positions.length, 1);
+    assert.equal(positions.length, 0);
   });
 
   it("computes unrealizedLoss=0 and notional=marketPrice*qty for a profitable long", async () => {
@@ -105,7 +109,10 @@ describe("perps venue: readPositions", () => {
     const entryPrice = 100n;
     const marketPrice = 150n; // up → long is in profit, no loss
     const chain = makeChainStub({
-      multicall: () => [{ netQuantity: qty, aggregatedEntryPrice: entryPrice }, marketPrice],
+      multicall: () => [
+        { netQuantity: qty, aggregatedEntryPrice: entryPrice },
+        marketPrice,
+      ],
     });
     const venue = new PerpsVenue(chain, makeConfigStub(), silentLogger);
     const [pos] = await venue.readPositions(USER);
@@ -119,7 +126,10 @@ describe("perps venue: readPositions", () => {
     const entryPrice = 200n;
     const marketPrice = 150n; // -50 per contract × 3 contracts = 150 loss
     const chain = makeChainStub({
-      multicall: () => [{ netQuantity: qty, aggregatedEntryPrice: entryPrice }, marketPrice],
+      multicall: () => [
+        { netQuantity: qty, aggregatedEntryPrice: entryPrice },
+        marketPrice,
+      ],
     });
     const venue = new PerpsVenue(chain, makeConfigStub(), silentLogger);
     const [pos] = await venue.readPositions(USER);
@@ -133,7 +143,10 @@ describe("perps venue: readPositions", () => {
     const entryPrice = 100n;
     const marketPrice = 130n; // +30 against the short × 4 = 120 loss
     const chain = makeChainStub({
-      multicall: () => [{ netQuantity: qty, aggregatedEntryPrice: entryPrice }, marketPrice],
+      multicall: () => [
+        { netQuantity: qty, aggregatedEntryPrice: entryPrice },
+        marketPrice,
+      ],
     });
     const venue = new PerpsVenue(chain, makeConfigStub(), silentLogger);
     const [pos] = await venue.readPositions(USER);
@@ -144,7 +157,10 @@ describe("perps venue: readPositions", () => {
 
   it("synthesises a deterministic positionId from the user address (bytes32(user))", async () => {
     const chain = makeChainStub({
-      multicall: () => [{ netQuantity: 1n * QTY_SCALE, aggregatedEntryPrice: 100n }, 100n],
+      multicall: () => [
+        { netQuantity: 1n * QTY_SCALE, aggregatedEntryPrice: 100n },
+        100n,
+      ],
     });
     const venue = new PerpsVenue(chain, makeConfigStub(), silentLogger);
     const [pos] = await venue.readPositions(USER);

@@ -6,7 +6,7 @@ import {
   type Hex,
 } from "viem";
 import type pino from "pino";
-import { FuturesAbi } from "futures-marketplace/Futures.ts";
+import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
 import { withUnstickRetry } from "../tx/unstick.ts";
 import { formatGasCost } from "../tx/gasCost.ts";
 import type { Chain } from "../chain.ts";
@@ -111,7 +111,10 @@ export class OutdatedOrderSweeper {
 
       const expired = await this.discoverExpired(users, blockTimestamp);
       if (expired.length === 0) {
-        this.logger.debug({ tracked: users.length }, "sweep clean — no expired orders");
+        this.logger.debug(
+          { tracked: users.length },
+          "sweep clean — no expired orders",
+        );
         return 0;
       }
 
@@ -172,7 +175,9 @@ export class OutdatedOrderSweeper {
 
   private async readBlockTimestamp(): Promise<bigint | undefined> {
     try {
-      const block = await this.chain.publicClient.getBlock({ blockTag: "latest" });
+      const block = await this.chain.publicClient.getBlock({
+        blockTag: "latest",
+      });
       return block.timestamp;
     } catch (err) {
       this.logger.warn({ err }, "getBlock(latest) failed — skipping sweep");
@@ -257,7 +262,9 @@ export class OutdatedOrderSweeper {
    * caught and logged so the next sweep retries.
    */
   private async closeBatch(batch: readonly ExpiredOrder[]): Promise<number> {
-    type SimParams = Parameters<typeof this.chain.publicClient.simulateContract>[0];
+    type SimParams = Parameters<
+      typeof this.chain.publicClient.simulateContract
+    >[0];
 
     const simResults = await Promise.allSettled(
       batch.map((entry) =>
@@ -311,7 +318,9 @@ export class OutdatedOrderSweeper {
       }),
     );
 
-    type WriteParams = Parameters<typeof this.chain.walletClient.writeContract>[0];
+    type WriteParams = Parameters<
+      typeof this.chain.walletClient.writeContract
+    >[0];
     let hash: Hex;
     try {
       // Same wallet that liquidates / settles — if a previous run left a

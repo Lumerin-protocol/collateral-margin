@@ -71,25 +71,25 @@ function makeConfig(overrides: Partial<Config["delivery"]> = {}): Config {
   } as Config;
 }
 
-interface PositionCreatedLog {
+interface LotCreatedLog {
   args: {
-    positionId: Hex;
+    lotId: Hex;
     seller: Address;
     buyer: Address;
     deliveryAt: bigint;
   };
 }
 
-interface PositionClosedLog {
-  args: { positionId: Hex };
+interface LotClosedLog {
+  args: { lotId: Hex };
 }
 
-function positionCreatedLog(positionId: Hex, deliveryAt: bigint): PositionCreatedLog {
-  return { args: { positionId, seller: SELLER, buyer: BUYER, deliveryAt } };
+function lotCreatedLog(lotId: Hex, deliveryAt: bigint): LotCreatedLog {
+  return { args: { lotId, seller: SELLER, buyer: BUYER, deliveryAt } };
 }
 
-function positionClosedLog(positionId: Hex): PositionClosedLog {
-  return { args: { positionId } };
+function lotClosedLog(lotId: Hex): LotClosedLog {
+  return { args: { lotId } };
 }
 
 interface ChainStubOptions {
@@ -103,8 +103,8 @@ interface ChainStubOptions {
   receipt?: TransactionReceipt;
   /** Captures live event subscriptions so a test can flush manual logs into them. */
   watchers?: {
-    positionCreated?: (logs: readonly PositionCreatedLog[]) => void;
-    positionClosed?: (logs: readonly PositionClosedLog[]) => void;
+    lotCreated?: (logs: readonly LotCreatedLog[]) => void;
+    lotClosed?: (logs: readonly LotClosedLog[]) => void;
   };
   /**
    * Historical logs returned by `getContractEvents`, keyed by event name.
@@ -112,8 +112,8 @@ interface ChainStubOptions {
    * covers the whole window, so a per-chunk dispatcher is overkill here.
    */
   history?: {
-    PositionCreated?: PositionCreatedLog[];
-    PositionClosed?: PositionClosedLog[];
+    LotCreated?: LotCreatedLog[];
+    LotClosed?: LotClosedLog[];
   };
   /**
    * View-based discovery fixtures: per-user `getPositionIds` results and
@@ -213,8 +213,8 @@ function makeChain(opts: ChainStubOptions = {}): Chain & {
         maxPriorityFeePerGas: 100_000_000n,
       }),
       getContractEvents: async ({ eventName }: { eventName: string }) => {
-        if (eventName === "PositionCreated") return opts.history?.PositionCreated ?? [];
-        if (eventName === "PositionClosed") return opts.history?.PositionClosed ?? [];
+        if (eventName === "LotCreated") return opts.history?.LotCreated ?? [];
+        if (eventName === "LotClosed") return opts.history?.LotClosed ?? [];
         return [];
       },
       watchContractEvent: ({
@@ -225,10 +225,10 @@ function makeChain(opts: ChainStubOptions = {}): Chain & {
         onLogs: (logs: readonly Log[]) => void;
       }) => {
         if (opts.watchers !== undefined) {
-          if (eventName === "PositionCreated") {
-            opts.watchers.positionCreated = (logs) => onLogs(logs as unknown as readonly Log[]);
-          } else if (eventName === "PositionClosed") {
-            opts.watchers.positionClosed = (logs) => onLogs(logs as unknown as readonly Log[]);
+          if (eventName === "LotCreated") {
+            opts.watchers.lotCreated = (logs) => onLogs(logs as unknown as readonly Log[]);
+          } else if (eventName === "LotClosed") {
+            opts.watchers.lotClosed = (logs) => onLogs(logs as unknown as readonly Log[]);
           }
         }
         return () => undefined;
@@ -306,31 +306,31 @@ describe("DeliveryCoordinator: revert classification", () => {
 });
 
 describe("DeliveryCoordinator: live event handling", () => {
-  it("indexes positions on PositionCreated and removes them on PositionClosed", async () => {
+  it("indexes positions on LotCreated and removes them on LotClosed", async () => {
     const watchers: ChainStubOptions["watchers"] = {};
     const chain = makeChain({ watchers });
     const coordinator = new DeliveryCoordinator(chain, makeConfig(), silentLogger);
     await coordinator.start();
 
     const future = BigInt(Math.floor(Date.now() / 1000)) + 365n * 86_400n;
-    watchers.positionCreated?.([positionCreatedLog(POSITION_A, future)]);
+    watchers.lotCreated?.([lotCreatedLog(POSITION_A, future)]);
     assert.equal(coordinator.size(), 1);
     assert.ok(coordinator.has(POSITION_A));
 
-    watchers.positionClosed?.([positionClosedLog(POSITION_A)]);
+    watchers.lotClosed?.([lotClosedLog(POSITION_A)]);
     assert.equal(coordinator.size(), 0);
     coordinator.stop();
   });
 
-  it("dedupes duplicate PositionCreated for the same id (live + backfill overlap)", async () => {
+  it("dedupes duplicate LotCreated for the same id (live + backfill overlap)", async () => {
     const watchers: ChainStubOptions["watchers"] = {};
     const chain = makeChain({ watchers });
     const coordinator = new DeliveryCoordinator(chain, makeConfig(), silentLogger);
     await coordinator.start();
 
     const future = BigInt(Math.floor(Date.now() / 1000)) + 365n * 86_400n;
-    watchers.positionCreated?.([positionCreatedLog(POSITION_A, future)]);
-    watchers.positionCreated?.([positionCreatedLog(POSITION_A, future)]);
+    watchers.lotCreated?.([lotCreatedLog(POSITION_A, future)]);
+    watchers.lotCreated?.([lotCreatedLog(POSITION_A, future)]);
     assert.equal(coordinator.size(), 1);
     coordinator.stop();
   });
@@ -689,20 +689,20 @@ describe("DeliveryCoordinator: settleBatch()", () => {
 });
 
 describe("DeliveryCoordinator: backfill", () => {
-  it("seeds the index from historical PositionCreated and respects subsequent PositionClosed", async () => {
+  it("seeds the index from historical LotCreated and respects subsequent LotClosed", async () => {
     const future = BigInt(Math.floor(Date.now() / 1000)) + 365n * 86_400n;
     const chain = makeChain({
       blockNumber: 1000n,
       simulate: () => ({ request: { ok: true } }),
       writeHash: "0xfeed",
       history: {
-        PositionCreated: [
-          positionCreatedLog(POSITION_A, future),
-          positionCreatedLog(POSITION_B, future + 86_400n),
-          positionCreatedLog(POSITION_C, future + 2n * 86_400n),
+        LotCreated: [
+          lotCreatedLog(POSITION_A, future),
+          lotCreatedLog(POSITION_B, future + 86_400n),
+          lotCreatedLog(POSITION_C, future + 2n * 86_400n),
         ],
         // C was already closed historically — backfill should not leave it scheduled.
-        PositionClosed: [positionClosedLog(POSITION_C)],
+        LotClosed: [lotClosedLog(POSITION_C)],
       },
     });
     const coordinator = new DeliveryCoordinator(chain, makeConfig(), silentLogger);
@@ -728,7 +728,7 @@ describe("DeliveryCoordinator: backfill", () => {
       },
       writeHash: "0xfeed",
       history: {
-        PositionCreated: [positionCreatedLog(POSITION_A, past)],
+        LotCreated: [lotCreatedLog(POSITION_A, past)],
       },
     });
     const coordinator = new DeliveryCoordinator(chain, makeConfig(), silentLogger);
@@ -754,7 +754,7 @@ describe("DeliveryCoordinator: backfill", () => {
       writeHash: "0xfeed",
       deliveryDurationDays: 7,
       history: {
-        PositionCreated: [positionCreatedLog(POSITION_A, longAgo)],
+        LotCreated: [lotCreatedLog(POSITION_A, longAgo)],
       },
     });
     const coordinator = new DeliveryCoordinator(chain, makeConfig(), silentLogger);

@@ -17,7 +17,10 @@ interface FakeReads {
   failNextAnswerReadCount?: number;
 }
 
-function makeChain(reads: FakeReads): { chain: Chain; calls: { decimals: number; latest: number } } {
+function makeChain(reads: FakeReads): {
+  chain: Chain;
+  calls: { decimals: number; latest: number };
+} {
   const calls = { decimals: 0, latest: 0 };
   const decimals = reads.decimals ?? 8;
   const chain = {
@@ -34,7 +37,8 @@ function makeChain(reads: FakeReads): { chain: Chain; calls: { decimals: number;
         if (functionName === "latestRoundData") {
           calls.latest++;
           if ((reads.failNextAnswerReadCount ?? 0) > 0) {
-            reads.failNextAnswerReadCount = (reads.failNextAnswerReadCount ?? 0) - 1;
+            reads.failNextAnswerReadCount =
+              (reads.failNextAnswerReadCount ?? 0) - 1;
             throw new Error("latestRoundData rpc failed");
           }
           const i = Math.min(calls.latest - 1, reads.answers.length - 1);
@@ -62,7 +66,10 @@ describe("EthUsdFeed", () => {
 
   it("populates current() and updatedAt() after a successful refresh", async () => {
     const before = Date.now();
-    const { chain, calls } = makeChain({ answers: [3000_00000000n], decimals: 8 });
+    const { chain, calls } = makeChain({
+      answers: [3000_00000000n],
+      decimals: 8,
+    });
     const feed = new EthUsdFeed(chain, FEED_ADDR, SILENT, 60_000);
     await feed.refresh();
     assert.equal(feed.current(), 3000_00000000n);
@@ -73,11 +80,17 @@ describe("EthUsdFeed", () => {
   });
 
   it("reads decimals only once and reuses it across refreshes", async () => {
-    const { chain, calls } = makeChain({ answers: [2500_00000000n, 2600_00000000n] });
+    const { chain, calls } = makeChain({
+      answers: [2500_00000000n, 2600_00000000n],
+    });
     const feed = new EthUsdFeed(chain, FEED_ADDR, SILENT, 60_000);
     await feed.refresh();
     await feed.refresh();
-    assert.equal(calls.decimals, 1, "decimals are immutable on Chainlink — read once");
+    assert.equal(
+      calls.decimals,
+      1,
+      "decimals are immutable on Chainlink — read once",
+    );
     assert.equal(calls.latest, 2);
     feed.stop();
   });
@@ -87,19 +100,26 @@ describe("EthUsdFeed", () => {
     const feed = new EthUsdFeed(chain, FEED_ADDR, SILENT, 60_000);
     await feed.refresh();
     await feed.refresh();
-    assert.equal(feed.current(), 3000_00000000n, "non-positive answer should NOT clobber the price");
+    assert.equal(
+      feed.current(),
+      3000_00000000n,
+      "non-positive answer should NOT clobber the price",
+    );
     feed.stop();
   });
 
   it("keeps the previous price when the RPC throws — feed is never fatal for logging", async () => {
-    const { chain } = makeChain({ answers: [3000_00000000n], failNextAnswerReadCount: 0 });
+    const { chain } = makeChain({
+      answers: [3000_00000000n],
+      failNextAnswerReadCount: 0,
+    });
     const feed = new EthUsdFeed(chain, FEED_ADDR, SILENT, 60_000);
     await feed.refresh();
-    // Next refresh fails, but `current()` should still report the prior price.
     chain.publicClient.readContract = async ({ functionName }) => {
-      if (functionName === "decimals") return 8;
+      if (functionName === "decimals") return 8 as any;
       throw new Error("rpc down");
     };
+    // Next refresh fails, but `current()` should still report the prior price.
     await feed.refresh();
     assert.equal(feed.current(), 3000_00000000n);
     feed.stop();
@@ -149,13 +169,19 @@ describe("EthUsdFeed", () => {
       await feed.refresh();
       const usd = feed.weiToUsd(10n ** 9n);
       assert.ok(usd !== undefined);
-      assert.ok((usd as number) > 0, "1 gwei equivalent should not round down to zero");
+      assert.ok(
+        (usd as number) > 0,
+        "1 gwei equivalent should not round down to zero",
+      );
       feed.stop();
     });
 
     it("handles non-standard oracle decimals (e.g. 18)", async () => {
       // ETH/USD = $3000 with 18 decimals → raw answer 3000e18.
-      const { chain } = makeChain({ answers: [3000n * 10n ** 18n], decimals: 18 });
+      const { chain } = makeChain({
+        answers: [3000n * 10n ** 18n],
+        decimals: 18,
+      });
       const feed = new EthUsdFeed(chain, FEED_ADDR, SILENT, 60_000);
       await feed.refresh();
       assert.equal(feed.weiToUsd(10n ** 18n), 3000);

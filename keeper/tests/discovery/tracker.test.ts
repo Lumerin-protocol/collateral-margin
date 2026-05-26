@@ -180,7 +180,7 @@ describe("ParticipantTracker: backfill", () => {
           [scriptKey(config.futures.address, "OrderCreated")]: [
             { args: { participant: userAt(6) } },
           ],
-          [scriptKey(config.futures.address, "PositionCreated")]: [
+          [scriptKey(config.futures.address, "LotCreated")]: [
             { args: { seller: userAt(7), buyer: userAt(8) } },
           ],
         },

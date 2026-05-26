@@ -11,7 +11,7 @@ import {
 import type pino from "pino";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
-import { HashPowerPerpsDEXAbi } from "derivatives-marketplace/HashPowerPerpsDEX.ts";
+import { HashPowerPerpsDEXAbi } from "derivatives-marketplace-abi/HashPowerPerpsDEX.ts";
 import { sendLiquidate } from "../tx/liquidate.ts";
 import { formatGasCost } from "../tx/gasCost.ts";
 import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
@@ -37,7 +37,12 @@ export class PerpsVenue implements Venue {
   private readonly logger: pino.Logger;
   private readonly ethUsdFeed: EthUsdFeed | undefined;
 
-  constructor(chain: Chain, config: Config, logger: pino.Logger, ethUsdFeed?: EthUsdFeed) {
+  constructor(
+    chain: Chain,
+    config: Config,
+    logger: pino.Logger,
+    ethUsdFeed?: EthUsdFeed,
+  ) {
     this.chain = chain;
     this.config = config;
     this.logger = logger.child({ venue: "perps" });
@@ -94,7 +99,14 @@ export class PerpsVenue implements Venue {
     const notional = (marketPrice * absQty) / QUANTITY_SCALE;
 
     this.logger.debug(
-      { user, isLong, qty: position.netQuantity, marketPrice, unrealizedLoss, notional },
+      {
+        user,
+        isLong,
+        qty: position.netQuantity,
+        marketPrice,
+        unrealizedLoss,
+        notional,
+      },
       "perps position read",
     );
 
@@ -129,7 +141,10 @@ export class PerpsVenue implements Venue {
    *     empty-revert sub-call (typically OOG) — we let that bubble up so
    *     the executor re-queues.
    */
-  async liquidateOrders(user: Address, ids?: readonly Hex[]): Promise<LiquidateOrdersOutcome> {
+  async liquidateOrders(
+    user: Address,
+    ids?: readonly Hex[],
+  ): Promise<LiquidateOrdersOutcome> {
     let targetIds = ids;
     if (targetIds === undefined) {
       const fetched = (await this.chain.publicClient.readContract({
@@ -166,7 +181,9 @@ export class PerpsVenue implements Venue {
       args: [calls],
       account: this.chain.account,
     });
-    const successes = (sim.result as readonly [readonly boolean[], readonly Hex[]])[0];
+    const successes = (
+      sim.result as readonly [readonly boolean[], readonly Hex[]]
+    )[0];
     if (successes[0] === false) {
       this.logger.debug(
         { user, ordersTargeted: targetIds.length },
@@ -191,13 +208,22 @@ export class PerpsVenue implements Venue {
     const feeEarned = sumOrderLiquidatedFees(receipt);
     const ordersClosed = countSuccesses(successes);
     this.logger.info(
-      { user, hash, ordersClosed, feeEarned, ...formatGasCost(receipt, this.ethUsdFeed) },
+      {
+        user,
+        hash,
+        ordersClosed,
+        feeEarned,
+        ...formatGasCost(receipt, this.ethUsdFeed),
+      },
       "perps batch liquidate confirmed",
     );
     return { feeEarned };
   }
 
-  async liquidatePosition(user: Address, _id: Hex): Promise<LiquidatePositionOutcome> {
+  async liquidatePosition(
+    user: Address,
+    _id: Hex,
+  ): Promise<LiquidatePositionOutcome> {
     const result = await sendLiquidate({
       chain: this.chain,
       config: this.config,
@@ -217,7 +243,9 @@ export class PerpsVenue implements Venue {
       ethUsdFeed: this.ethUsdFeed,
     });
 
-    return "skipped" in result ? { skipped: result.skipped } : { feeEarned: result.feeEarned };
+    return "skipped" in result
+      ? { skipped: result.skipped }
+      : { feeEarned: result.feeEarned };
   }
 }
 

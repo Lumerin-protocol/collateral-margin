@@ -1,0 +1,432 @@
+name: Deploy Keeper
+
+on:
+  push:
+    branches:
+      - dev
+      - stg
+      - main
+    paths:
+      - "keeper/**"
+      - ".github/workflows/deploy-keeper.yml"
+
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Which venue keeper to deploy"
+        required: true
+        type: choice
+        options:
+          - both
+          - futures
+          - perps
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - stg
+          - main
+
+permissions:
+  id-token: write
+  contents: write
+  packages: write
+
+env:
+  GHCR_REGISTRY: ghcr.io
+  GHCR_IMAGE: ghcr.io/lumerin-protocol/collateral-margin-keeper
+
+jobs:
+  # ── Build (shared across both targets) ─────────────────────────────────
+  build:
+    name: 🔨 Build
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.gen_tag.outputs.version }}
+      tag: ${{ steps.gen_tag.outputs.tag_name }}
+      environment: ${{ steps.gen_tag.outputs.environment }}
+      is_cicd_branch: ${{ steps.gen_tag.outputs.is_cicd_branch }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Generate version tag
+        id: gen_tag
+        uses: ./.github/actions/gen-tag
+        with:
+          component: keeper
+          major_version: "1"
+          environment_override: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || '' }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Docker tags
+        id: docker_tags
+        run: |
+          TAGS="${{ env.GHCR_IMAGE }}:${{ steps.gen_tag.outputs.version }}
+          ${{ env.GHCR_IMAGE }}:${{ steps.gen_tag.outputs.environment }}-latest"
+
+          # Add 'latest' tag for main branch
+          if [ "${{ steps.gen_tag.outputs.environment }}" == "main" ]; then
+            TAGS="${TAGS}
+          ${{ env.GHCR_IMAGE }}:latest"
+          fi
+
+          echo "tags<<EOF" >> $GITHUB_OUTPUT
+          echo "$TAGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./keeper
+          push: ${{ steps.gen_tag.outputs.is_cicd_branch != 'true' }}
+          load: ${{ steps.gen_tag.outputs.is_cicd_branch == 'true' }}
+          tags: ${{ steps.docker_tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.repositoryUrl }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.gen_tag.outputs.version }}
+
+      - name: CI/CD test summary
+        if: steps.gen_tag.outputs.is_cicd_branch == 'true'
+        run: |
+          echo "## 🔧 CI/CD Test Build Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode:** Test only (no deployment)" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.gen_tag.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+
+  # ── Deploy: Futures Keeper ──────────────────────────────────────────
+  deploy-futures:
+    name: 🚀 Deploy Futures Keeper
+    runs-on: ubuntu-latest
+    needs: build
+    if: |
+      needs.build.outputs.is_cicd_branch != 'true' &&
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.target == 'both' || github.event.inputs.target == 'futures')
+    environment: ${{ needs.build.outputs.environment }}
+    steps:
+      - name: Environment config
+        id: cfg
+        run: |
+          ENV="${{ needs.build.outputs.environment }}"
+          case $ENV in
+            dev)
+              echo "aws_region=us-east-1" >> $GITHUB_OUTPUT
+              echo "ecs_cluster=ecs-collateral-margin-dev" >> $GITHUB_OUTPUT
+              echo "ecs_service=svc-keeper-futures-dev" >> $GITHUB_OUTPUT
+              echo "task_family=tsk-keeper-futures" >> $GITHUB_OUTPUT
+              ;;
+            stg)
+              echo "aws_region=us-east-1" >> $GITHUB_OUTPUT
+              echo "ecs_cluster=ecs-collateral-margin-stg" >> $GITHUB_OUTPUT
+              echo "ecs_service=svc-keeper-futures-stg" >> $GITHUB_OUTPUT
+              echo "task_family=tsk-keeper-futures" >> $GITHUB_OUTPUT
+              ;;
+            main)
+              echo "aws_region=us-east-1" >> $GITHUB_OUTPUT
+              echo "ecs_cluster=ecs-collateral-margin-lmn" >> $GITHUB_OUTPUT
+              echo "ecs_service=svc-keeper-futures-lmn" >> $GITHUB_OUTPUT
+              echo "task_family=tsk-keeper-futures" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ needs.build.outputs.environment == 'dev' && secrets.AWS_ROLE_ARN_DEV || needs.build.outputs.environment == 'stg' && secrets.AWS_ROLE_ARN_STG || secrets.AWS_ROLE_ARN_LMN }}
+          aws-region: ${{ steps.cfg.outputs.aws_region }}
+          role-session-name: GitHubActions-KeeperFutures-${{ github.run_id }}
+
+      - name: Deploy to ECS
+        env:
+          KEEPER_DRY_RUN: ${{ vars.KEEPER_FUTURES_DRY_RUN || 'false' }}
+          KEEPER_MIN_PROFIT_MARGIN: ${{ vars.KEEPER_FUTURES_MIN_PROFIT_MARGIN || '0' }}
+          FUTURES_ADDRESS: ${{ vars.FUTURES_ADDRESS }}
+          DELIVERY_KEEPER_ENABLED: ${{ vars.KEEPER_FUTURES_DELIVERY_ENABLED || 'false' }}
+        run: |
+          CLUSTER="${{ steps.cfg.outputs.ecs_cluster }}"
+          SERVICE="${{ steps.cfg.outputs.ecs_service }}"
+          TASK_FAMILY="${{ steps.cfg.outputs.task_family }}"
+          IMAGE="${{ env.GHCR_IMAGE }}:${{ needs.build.outputs.version }}"
+          REGION="${{ steps.cfg.outputs.aws_region }}"
+
+          echo "🚀 Deploying Futures Keeper to ${{ needs.build.outputs.environment }}"
+          echo "   Cluster: ${CLUSTER}"
+          echo "   Service: ${SERVICE}"
+          echo "   Image:   ${IMAGE}"
+
+          aws ecs describe-task-definition \
+            --task-definition ${TASK_FAMILY} \
+            --region ${REGION} \
+            --query 'taskDefinition' > task-def.json
+
+          jq --arg IMAGE "${IMAGE}" \
+              '.containerDefinitions[0].image = $IMAGE |
+              del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
+            task-def.json > new-task-def.json
+
+          jq -n '[
+            { name: "KEEPER_DRY_RUN", value: env.KEEPER_DRY_RUN },
+            { name: "KEEPER_MIN_PROFIT_MARGIN", value: env.KEEPER_MIN_PROFIT_MARGIN },
+            { name: "FUTURES_ADDRESS", value: env.FUTURES_ADDRESS },
+            { name: "DELIVERY_KEEPER_ENABLED", value: env.DELIVERY_KEEPER_ENABLED }
+          ]' > env-overrides.json
+
+          jq --slurpfile overrides env-overrides.json '
+            .containerDefinitions[0].environment as $existing |
+            ($overrides[0] | map({(.name): .}) | add) as $override_map |
+            .containerDefinitions[0].environment = (
+              [$existing[] | if $override_map[.name] then .value = $override_map[.name].value else . end] +
+              [$overrides[0][] | select(.name as $n | [$existing[].name] | index($n) | not)]
+            )
+          ' new-task-def.json > final-task-def.json
+          mv final-task-def.json new-task-def.json
+
+          NEW_TASK_DEF=$(aws ecs register-task-definition \
+            --cli-input-json file://new-task-def.json \
+            --region ${REGION} \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+
+          echo "✅ Registered: ${NEW_TASK_DEF}"
+
+          aws ecs update-service \
+            --cluster ${CLUSTER} \
+            --service ${SERVICE} \
+            --task-definition ${NEW_TASK_DEF} \
+            --region ${REGION} \
+            --force-new-deployment
+
+          echo "✅ Deployment triggered"
+
+  # ── Deploy: Perps Keeper ────────────────────────────────────────────
+  deploy-perps:
+    name: 🚀 Deploy Perps Keeper
+    runs-on: ubuntu-latest
+    needs: build
+    if: |
+      needs.build.outputs.is_cicd_branch != 'true' &&
+      (github.event_name != 'workflow_dispatch' || github.event.inputs.target == 'both' || github.event.inputs.target == 'perps')
+    environment: ${{ needs.build.outputs.environment }}
+    steps:
+      - name: Environment config
+        id: cfg
+        run: |
+          ENV="${{ needs.build.outputs.environment }}"
+          case $ENV in
+            dev)
+              echo "aws_region=us-east-1" >> $GITHUB_OUTPUT
+              echo "ecs_cluster=ecs-collateral-margin-dev" >> $GITHUB_OUTPUT
+              echo "ecs_service=svc-keeper-perps-dev" >> $GITHUB_OUTPUT
+              echo "task_family=tsk-keeper-perps" >> $GITHUB_OUTPUT
+              ;;
+            stg)
+              echo "aws_region=us-east-1" >> $GITHUB_OUTPUT
+              echo "ecs_cluster=ecs-collateral-margin-stg" >> $GITHUB_OUTPUT
+              echo "ecs_service=svc-keeper-perps-stg" >> $GITHUB_OUTPUT
+              echo "task_family=tsk-keeper-perps" >> $GITHUB_OUTPUT
+              ;;
+            main)
+              echo "aws_region=us-east-1" >> $GITHUB_OUTPUT
+              echo "ecs_cluster=ecs-collateral-margin-lmn" >> $GITHUB_OUTPUT
+              echo "ecs_service=svc-keeper-perps-lmn" >> $GITHUB_OUTPUT
+              echo "task_family=tsk-keeper-perps" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ needs.build.outputs.environment == 'dev' && secrets.AWS_ROLE_ARN_DEV || needs.build.outputs.environment == 'stg' && secrets.AWS_ROLE_ARN_STG || secrets.AWS_ROLE_ARN_LMN }}
+          aws-region: ${{ steps.cfg.outputs.aws_region }}
+          role-session-name: GitHubActions-KeeperPerps-${{ github.run_id }}
+
+      - name: Deploy to ECS
+        env:
+          KEEPER_DRY_RUN: ${{ vars.KEEPER_PERPS_DRY_RUN || 'false' }}
+          KEEPER_MIN_PROFIT_MARGIN: ${{ vars.KEEPER_PERPS_MIN_PROFIT_MARGIN || '0' }}
+          PERPS_ADDRESS: ${{ vars.PERPS_ADDRESS }}
+        run: |
+          CLUSTER="${{ steps.cfg.outputs.ecs_cluster }}"
+          SERVICE="${{ steps.cfg.outputs.ecs_service }}"
+          TASK_FAMILY="${{ steps.cfg.outputs.task_family }}"
+          IMAGE="${{ env.GHCR_IMAGE }}:${{ needs.build.outputs.version }}"
+          REGION="${{ steps.cfg.outputs.aws_region }}"
+
+          echo "🚀 Deploying Perps Keeper to ${{ needs.build.outputs.environment }}"
+          echo "   Cluster: ${CLUSTER}"
+          echo "   Service: ${SERVICE}"
+          echo "   Image:   ${IMAGE}"
+
+          aws ecs describe-task-definition \
+            --task-definition ${TASK_FAMILY} \
+            --region ${REGION} \
+            --query 'taskDefinition' > task-def.json
+
+          jq --arg IMAGE "${IMAGE}" \
+              '.containerDefinitions[0].image = $IMAGE |
+              del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)' \
+            task-def.json > new-task-def.json
+
+          jq -n '[
+            { name: "KEEPER_DRY_RUN", value: env.KEEPER_DRY_RUN },
+            { name: "KEEPER_MIN_PROFIT_MARGIN", value: env.KEEPER_MIN_PROFIT_MARGIN },
+            { name: "PERPS_ADDRESS", value: env.PERPS_ADDRESS }
+          ]' > env-overrides.json
+
+          jq --slurpfile overrides env-overrides.json '
+            .containerDefinitions[0].environment as $existing |
+            ($overrides[0] | map({(.name): .}) | add) as $override_map |
+            .containerDefinitions[0].environment = (
+              [$existing[] | if $override_map[.name] then .value = $override_map[.name].value else . end] +
+              [$overrides[0][] | select(.name as $n | [$existing[].name] | index($n) | not)]
+            )
+          ' new-task-def.json > final-task-def.json
+          mv final-task-def.json new-task-def.json
+
+          NEW_TASK_DEF=$(aws ecs register-task-definition \
+            --cli-input-json file://new-task-def.json \
+            --region ${REGION} \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+
+          echo "✅ Registered: ${NEW_TASK_DEF}"
+
+          aws ecs update-service \
+            --cluster ${CLUSTER} \
+            --service ${SERVICE} \
+            --task-definition ${NEW_TASK_DEF} \
+            --region ${REGION} \
+            --force-new-deployment
+
+          echo "✅ Deployment triggered"
+
+  # ── Verify (futures) ─────────────────────────────────────────────────
+  verify-futures:
+    name: 🔍 Verify Futures
+    runs-on: ubuntu-latest
+    needs: [build, deploy-futures]
+    if: |
+      always() &&
+      needs.build.outputs.is_cicd_branch != 'true' &&
+      needs.deploy-futures.result == 'success'
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ needs.build.outputs.environment == 'dev' && secrets.AWS_ROLE_ARN_DEV || needs.build.outputs.environment == 'stg' && secrets.AWS_ROLE_ARN_STG || secrets.AWS_ROLE_ARN_LMN }}
+          aws-region: us-east-1
+          role-session-name: GitHubActions-KeeperFutures-Verify-${{ github.run_id }}
+
+      - name: Wait for service to stabilize
+        run: |
+          ENV="${{ needs.build.outputs.environment }}"
+          case $ENV in
+            dev)   CLUSTER="ecs-collateral-margin-dev";  SERVICE="svc-keeper-futures-dev" ;;
+            stg)   CLUSTER="ecs-collateral-margin-stg";  SERVICE="svc-keeper-futures-stg" ;;
+            main)  CLUSTER="ecs-collateral-margin-lmn";  SERVICE="svc-keeper-futures-lmn" ;;
+          esac
+          aws ecs wait services-stable \
+            --cluster ${CLUSTER} \
+            --services ${SERVICE} \
+            --region us-east-1
+          echo "✅ Futures keeper stable"
+
+  # ── Verify (perps) ───────────────────────────────────────────────────
+  verify-perps:
+    name: 🔍 Verify Perps
+    runs-on: ubuntu-latest
+    needs: [build, deploy-perps]
+    if: |
+      always() &&
+      needs.build.outputs.is_cicd_branch != 'true' &&
+      needs.deploy-perps.result == 'success'
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ needs.build.outputs.environment == 'dev' && secrets.AWS_ROLE_ARN_DEV || needs.build.outputs.environment == 'stg' && secrets.AWS_ROLE_ARN_STG || secrets.AWS_ROLE_ARN_LMN }}
+          aws-region: us-east-1
+          role-session-name: GitHubActions-KeeperPerps-Verify-${{ github.run_id }}
+
+      - name: Wait for service to stabilize
+        run: |
+          ENV="${{ needs.build.outputs.environment }}"
+          case $ENV in
+            dev)   CLUSTER="ecs-collateral-margin-dev";  SERVICE="svc-keeper-perps-dev" ;;
+            stg)   CLUSTER="ecs-collateral-margin-stg";  SERVICE="svc-keeper-perps-stg" ;;
+            main)  CLUSTER="ecs-collateral-margin-lmn";  SERVICE="svc-keeper-perps-lmn" ;;
+          esac
+          aws ecs wait services-stable \
+            --cluster ${CLUSTER} \
+            --services ${SERVICE} \
+            --region us-east-1
+          echo "✅ Perps keeper stable"
+
+  # ── Tag + notify ─────────────────────────────────────────────────────
+  cleanup:
+    name: 🧹 Tag & Notify
+    runs-on: ubuntu-latest
+    needs: [build, deploy-futures, deploy-perps, verify-futures, verify-perps]
+    if: always() && needs.build.outputs.is_cicd_branch != 'true'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        if: needs.verify-futures.result == 'success' || needs.verify-perps.result == 'success'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push tag
+        if: needs.verify-futures.result == 'success' || needs.verify-perps.result == 'success'
+        run: |
+          TAG_NAME="${{ needs.build.outputs.tag }}"
+          echo "🏷️ Creating tag: $TAG_NAME"
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "⚠️ Tag already exists, skipping"
+          else
+            git tag -a "$TAG_NAME" -m "Release ${{ needs.build.outputs.version }}"
+            git push origin "$TAG_NAME"
+            echo "✅ Tag pushed"
+          fi
+
+      - name: Deployment summary
+        run: |
+          echo "## 🎉 Keeper Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ needs.build.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ needs.build.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.GHCR_IMAGE }}:${{ needs.build.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.verify-futures.result }}" == "success" ]; then
+            echo "✅ Futures keeper deployed and stable" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Futures keeper: ${{ needs.verify-futures.result }}" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ needs.verify-perps.result }}" == "success" ]; then
+            echo "✅ Perps keeper deployed and stable" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Perps keeper: ${{ needs.verify-perps.result }}" >> $GITHUB_STEP_SUMMARY
+          fi

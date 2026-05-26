@@ -1,10 +1,10 @@
 import type { Address, Hex } from "viem";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
-import { CollateralVaultAbi } from "collateral-margin/CollateralVault.ts";
-import { PortfolioMarginEngineAbi } from "collateral-margin/PortfolioMarginEngine.ts";
-import { HashPowerPerpsDEXAbi } from "derivatives-marketplace/HashPowerPerpsDEX.ts";
-import { FuturesAbi } from "futures-marketplace/Futures.ts";
+import { CollateralVaultAbi } from "collateral-margin-abi/CollateralVault.ts";
+import { PortfolioMarginEngineAbi } from "collateral-margin-abi/PortfolioMarginEngine.ts";
+import { HashPowerPerpsDEXAbi } from "derivatives-marketplace-abi/HashPowerPerpsDEX.ts";
+import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
 import type { AccountSnapshot, MMParams } from "./types.ts";
 
 /**
@@ -13,7 +13,10 @@ import type { AccountSnapshot, MMParams } from "./types.ts";
  * of the process — there's no periodic re-read; an admin `setShocks` requires
  * a keeper restart to pick up.
  */
-export async function readMMParams(chain: Chain, config: Config): Promise<MMParams> {
+export async function readMMParams(
+  chain: Chain,
+  config: Config,
+): Promise<MMParams> {
   const reads = await chain.publicClient.multicall({
     contracts: [
       {
