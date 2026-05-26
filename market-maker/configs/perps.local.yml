@@ -33,14 +33,14 @@ venue:
 
 pricing:
   strategy: effective-spread
-  minSpreadBps: 20      # wider in dev so test fills are obvious
+  minSpreadBps: 20 # wider in dev so test fills are obvious
   volatilityMultiplier: 2.0
   inventorySkewGamma: 0.5
   maxSkewTicks: 20
 
 sizing:
   strategy: linear
-  baseQuantity: "100000"   # venue-native units (hashrate base)
+  baseQuantity: "100000" # venue-native units (hashrate base)
   numLevelsPerSide: 3
 
 risk:
@@ -80,3 +80,5 @@ oracle:
 
 health:
   port: ${MAKER_HEALTH_PORT:-3001}
+
+multicallBatchSize: 10

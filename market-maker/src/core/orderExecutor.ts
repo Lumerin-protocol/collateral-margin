@@ -1,5 +1,10 @@
 import type pino from "pino";
-import type { InstrumentAdapter, OrderIntent, OwnOrder, Side } from "./adapter.ts";
+import type {
+  InstrumentAdapter,
+  OrderIntent,
+  OwnOrder,
+  Side,
+} from "./adapter.ts";
 import type { Quoter } from "./quoter.ts";
 import type { BookTracker } from "./bookTracker.ts";
 import type { GasTracker } from "./gasTracker.ts";
@@ -59,7 +64,10 @@ export class OrderExecutor {
     this.gas = gas;
     this.risk = risk;
     this.oracle = oracle;
-    this.logger = logger.child({ component: "executor", instrument: instrument.id });
+    this.logger = logger.child({
+      component: "executor",
+      instrument: instrument.id,
+    });
   }
 
   async reconcile(desired: OrderIntent[]): Promise<void> {
@@ -94,7 +102,10 @@ export class OrderExecutor {
 
     // Pre-trade engine gate: ask whether the new orders' total IM still fits
     // the wallet's portfolio IM budget. If not, only cancel; don't add risk.
-    const placeAllowed = await this.risk.canPlaceOrders(ordersToPlace, this.instrument);
+    const placeAllowed = await this.risk.canPlaceOrders(
+      ordersToPlace,
+      this.instrument,
+    );
     const places = placeAllowed ? ordersToPlace : [];
     if (!placeAllowed) {
       this.logger.warn(
@@ -107,47 +118,25 @@ export class OrderExecutor {
       return;
     }
 
-    const calls: `0x${string}`[] = [];
-    for (const order of ordersToCancel) {
-      calls.push(this.instrument.encodeCancel({ orderId: order.orderId }));
-    }
-    for (const intent of places) {
-      calls.push(this.instrument.encodeCreate(intent));
+    // Delegate full lifecycle to the adapter: encoding, batching, tx chunking,
+    // nonce sequencing, gas optimisation. The executor no longer leaks multicall
+    // details — it just says what to do and gets back what happened.
+    const result = await this.instrument.executeOrders({
+      cancels: ordersToCancel.map((o) => ({ orderId: o.orderId })),
+      creates: places,
+      maxFeePerGas: this.gas.cappedGasPrice(),
+      dryRun: this.cfg.dryRun,
+    });
+
+    // Record gas cost from successful tx chunks.
+    for (const receipt of result.receipts) {
+      this.risk.recordGasCost(this.computeTxGasCost(receipt));
     }
 
-    if (this.cfg.dryRun) {
-      this.logger.info(
-        { cancels: ordersToCancel.length, places: places.length },
-        "DRY RUN: would send multicall batch",
-      );
-      return;
-    }
-
-    const maxFeePerGas = this.gas.cappedGasPrice();
-    try {
-      const hash = await this.instrument.venue.multicall(calls, { maxFeePerGas });
-      const receipt = await this.instrument.venue.publicClient.waitForTransactionReceipt({ hash });
-      const gasCost = this.computeTxGasCost(receipt);
-      this.risk.recordGasCost(gasCost);
-
-      this.stats.ordersCancelled += ordersToCancel.length;
-      this.stats.ordersPlaced += places.length;
-
-      this.logger.info(
-        {
-          cancels: ordersToCancel.length,
-          places: places.length,
-          gas: receipt.gasUsed.toString(),
-        },
-        "multicall batch executed",
-      );
-    } catch (err) {
-      this.logger.error(
-        { cancels: ordersToCancel.length, places: places.length, err },
-        "multicall batch failed",
-      );
-      throw err;
-    }
+    // Stats count intended orders; partial failure undercounts but metrics
+    // remain directionally correct (next reconciliation retries the remainder).
+    this.stats.ordersCancelled += ordersToCancel.length;
+    this.stats.ordersPlaced += places.length;
 
     this.lastRequoteAt = Date.now();
     this.lastQuoteMidPrice = this.oracle.currentPrice;
@@ -159,32 +148,25 @@ export class OrderExecutor {
     if (orders.length === 0) return;
 
     this.logger.warn({ count: orders.length }, "cancelling all orders");
-    const calls = orders.map((o) => this.instrument.encodeCancel({ orderId: o.orderId }));
 
-    if (this.cfg.dryRun) {
-      this.logger.info({ count: orders.length }, "DRY RUN: would cancel all orders");
-      return;
+    const result = await this.instrument.executeOrders({
+      cancels: orders.map((o) => ({ orderId: o.orderId })),
+      creates: [],
+      maxFeePerGas: this.gas.cappedGasPrice(),
+      dryRun: this.cfg.dryRun,
+    });
+
+    // Record gas cost from successful tx chunks.
+    for (const receipt of result.receipts) {
+      this.risk.recordGasCost(this.computeTxGasCost(receipt));
     }
 
-    const maxFeePerGas = this.gas.cappedGasPrice();
-    try {
-      const hash = await this.instrument.venue.multicall(calls, { maxFeePerGas });
-      const receipt = await this.instrument.venue.publicClient.waitForTransactionReceipt({ hash });
-      const gasCost = this.computeTxGasCost(receipt);
-      this.risk.recordGasCost(gasCost);
-      this.stats.ordersCancelled += orders.length;
-      this.logger.info(
-        { count: orders.length, gas: receipt.gasUsed.toString() },
-        "all orders cancelled",
-      );
-    } catch (err) {
-      this.logger.error({ count: orders.length, err }, "cancel-all multicall failed");
-      throw err;
-    }
+    this.stats.ordersCancelled += orders.length;
   }
 
   private shouldRequote(desired: OrderIntent[]): boolean {
-    if (Date.now() - this.lastRequoteAt < this.effectiveCooldownMs()) return false;
+    if (Date.now() - this.lastRequoteAt < this.effectiveCooldownMs())
+      return false;
 
     const expectedCount = desired.length;
     if (this.book.ownOrders.size < expectedCount) return true;
@@ -202,11 +184,15 @@ export class OrderExecutor {
   }
 
   private effectiveCooldownMs(): number {
-    return this.risk.throttled ? this.cfg.requoteCooldownMs * 3 : this.cfg.requoteCooldownMs;
+    return this.risk.throttled
+      ? this.cfg.requoteCooldownMs * 3
+      : this.cfg.requoteCooldownMs;
   }
 
   private effectiveRequoteThreshold(): number {
-    return this.risk.throttled ? this.cfg.requoteThresholdTicks * 2 : this.cfg.requoteThresholdTicks;
+    return this.risk.throttled
+      ? this.cfg.requoteThresholdTicks * 2
+      : this.cfg.requoteThresholdTicks;
   }
 
   /**
@@ -240,9 +226,11 @@ export class OrderExecutor {
     let worstDesiredAsk: bigint | undefined;
     for (const i of desired) {
       if (i.side === "buy") {
-        if (worstDesiredBid === undefined || i.price < worstDesiredBid) worstDesiredBid = i.price;
+        if (worstDesiredBid === undefined || i.price < worstDesiredBid)
+          worstDesiredBid = i.price;
       } else {
-        if (worstDesiredAsk === undefined || i.price > worstDesiredAsk) worstDesiredAsk = i.price;
+        if (worstDesiredAsk === undefined || i.price > worstDesiredAsk)
+          worstDesiredAsk = i.price;
       }
     }
     const stale: OwnOrder[] = [];
@@ -297,9 +285,18 @@ export class OrderExecutor {
     return m;
   }
 
-  private computeTxGasCost(receipt: { gasUsed: bigint; effectiveGasPrice: bigint }): bigint {
+  /**
+   * Compute USD-denominated gas cost from a receipt.
+   */
+  private computeTxGasCost(receipt: {
+    gasUsed: bigint;
+    effectiveGasPrice: bigint;
+  }): bigint {
     if (this.gas.ethPriceUsd === 0n) return 0n;
-    return (receipt.gasUsed * receipt.effectiveGasPrice * this.gas.ethPriceUsd) / 10n ** 18n;
+    return (
+      (receipt.gasUsed * receipt.effectiveGasPrice * this.gas.ethPriceUsd) /
+      10n ** 18n
+    );
   }
 }
 

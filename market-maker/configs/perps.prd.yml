@@ -42,14 +42,14 @@ pricing:
 
 sizing:
   strategy: linear
-  baseQuantity: "10000000"            # venue-native units (hashrate base)
+  baseQuantity: "10000000" # venue-native units (hashrate base)
   numLevelsPerSide: 5
 
 risk:
   maxPositionSize: 1000
-  maxUtilizationPct: 75               # tighter than dev/stg
-  minCollateralBalance: 100           # operational floor
-  maxDailyLossUsd: 1000               # daily loss circuit-breaker
+  maxUtilizationPct: 75 # tighter than dev/stg
+  minCollateralBalance: 100 # operational floor
+  maxDailyLossUsd: 1000 # daily loss circuit-breaker
   maxGasBudgetPerHourUsd: 50
   maxGasBudgetPerDayUsd: 500
   gasSpikeThresholdPct: 200
@@ -82,3 +82,5 @@ oracle:
 
 health:
   port: ${MAKER_HEALTH_PORT:-3001}
+
+multicallBatchSize: 10

@@ -15,7 +15,10 @@ import { CollateralVaultAbi } from "collateral-margin-contracts/abi/CollateralVa
 import { PortfolioMarginEngineAbi } from "collateral-margin-contracts/abi/PortfolioMarginEngine.ts";
 import { Multicall3Abi } from "perps-contracts/abi/Multicall3.ts";
 import { depositToVault } from "../../core/vaultDeposit.ts";
-import { RawOracleReader, chainlinkAggregatorAbi } from "../../core/rawOracle.ts";
+import {
+  RawOracleReader,
+  chainlinkAggregatorAbi,
+} from "../../core/rawOracle.ts";
 import { attachTenderlyUrl } from "../../core/tenderly.ts";
 import { PerpsInstrumentAdapter } from "./instrument.ts";
 import { PerpsVenueEvents } from "./events.ts";
@@ -68,8 +71,11 @@ export class PerpsVenueAdapter implements VenueAdapter {
     this.address = opts.address;
     this.logger = opts.logger.child({ component: "perps-venue" });
 
-    const mc3 = opts.multicall3Address ?? (this.chain.contracts?.multicall3?.address as `0x${string}` | undefined);
-    if (!mc3) throw new Error(`chain ${this.chain.name} has no multicall3 address`);
+    const mc3 =
+      opts.multicall3Address ??
+      (this.chain.contracts?.multicall3?.address as `0x${string}` | undefined);
+    if (!mc3)
+      throw new Error(`chain ${this.chain.name} has no multicall3 address`);
     this.multicall3Address = mc3;
 
     this.events = new PerpsVenueEvents(this.publicClient, this.address);
@@ -88,19 +94,27 @@ export class PerpsVenueAdapter implements VenueAdapter {
           abi: HashPowerPerpsDEXAbi,
           functionName: "priceOracle",
         });
-        const [oracleDecimals, tokenDecimals] = await this.publicClient.multicall({
-          allowFailure: false,
-          contracts: [
-            { address: oracle, abi: chainlinkAggregatorAbi, functionName: "decimals" },
-            { address: token, abi: erc20Abi, functionName: "decimals" },
-          ],
-        });
+        const [oracleDecimals, tokenDecimals] =
+          await this.publicClient.multicall({
+            allowFailure: false,
+            contracts: [
+              {
+                address: oracle,
+                abi: chainlinkAggregatorAbi,
+                functionName: "decimals",
+              },
+              { address: token, abi: erc20Abi, functionName: "decimals" },
+            ],
+          });
         if (tokenDecimals > oracleDecimals) {
           throw new Error(
             `perps: tokenDecimals (${tokenDecimals}) > oracleDecimals (${oracleDecimals})`,
           );
         }
-        return { oracle, divisor: 10n ** BigInt(oracleDecimals - tokenDecimals) };
+        return {
+          oracle,
+          divisor: 10n ** BigInt(oracleDecimals - tokenDecimals),
+        };
       },
     });
   }
@@ -112,7 +126,10 @@ export class PerpsVenueAdapter implements VenueAdapter {
     return this.instrumentSingleton;
   }
 
-  async multicall(calls: `0x${string}`[], opts: { maxFeePerGas?: bigint } = {}): Promise<`0x${string}`> {
+  async multicall(
+    calls: `0x${string}`[],
+    opts: { maxFeePerGas?: bigint } = {},
+  ): Promise<`0x${string}`> {
     try {
       return await this.wallet.walletClient.writeContract({
         address: this.address,
@@ -141,8 +158,16 @@ export class PerpsVenueAdapter implements VenueAdapter {
 
   // ── Internal helpers used by the collateral account & instrument ─────────
 
-  async resolveAddresses(): Promise<{ vault: `0x${string}`; engine: `0x${string}`; token: `0x${string}` }> {
-    if (this.vaultAddressCache && this.engineAddressCache && this.collateralTokenCache) {
+  async resolveAddresses(): Promise<{
+    vault: `0x${string}`;
+    engine: `0x${string}`;
+    token: `0x${string}`;
+  }> {
+    if (
+      this.vaultAddressCache &&
+      this.engineAddressCache &&
+      this.collateralTokenCache
+    ) {
       return {
         vault: this.vaultAddressCache,
         engine: this.engineAddressCache,
@@ -152,9 +177,21 @@ export class PerpsVenueAdapter implements VenueAdapter {
     const [vault, engine, token] = await this.publicClient.multicall({
       allowFailure: false,
       contracts: [
-        { address: this.address, abi: HashPowerPerpsDEXAbi, functionName: "vault" },
-        { address: this.address, abi: HashPowerPerpsDEXAbi, functionName: "portfolioMargin" },
-        { address: this.address, abi: HashPowerPerpsDEXAbi, functionName: "collateralToken" },
+        {
+          address: this.address,
+          abi: HashPowerPerpsDEXAbi,
+          functionName: "vault",
+        },
+        {
+          address: this.address,
+          abi: HashPowerPerpsDEXAbi,
+          functionName: "portfolioMargin",
+        },
+        {
+          address: this.address,
+          abi: HashPowerPerpsDEXAbi,
+          functionName: "collateralToken",
+        },
       ],
     });
     this.vaultAddressCache = vault;
@@ -165,6 +202,10 @@ export class PerpsVenueAdapter implements VenueAdapter {
 
   async getMulticall3Address(): Promise<`0x${string}`> {
     return this.multicall3Address;
+  }
+
+  getLogger(): pino.Logger {
+    return this.logger;
   }
 
   /**
@@ -221,14 +262,54 @@ class PerpsCollateralAccount implements CollateralAccount {
     ] = await this.venue.publicClient.multicall({
       allowFailure: false,
       contracts: [
-        { address: vault, abi: CollateralVaultAbi, functionName: "balanceOf", args: [owner] },
-        { address: engine, abi: PortfolioMarginEngineAbi, functionName: "computePortfolioIM", args: [owner] },
-        { address: engine, abi: PortfolioMarginEngineAbi, functionName: "computePortfolioMM", args: [owner] },
-        { address: this.venue.address, abi: HashPowerPerpsDEXAbi, functionName: "getOrderMargin", args: [owner] },
-        { address: this.venue.address, abi: HashPowerPerpsDEXAbi, functionName: "getUnrealizedPnl", args: [owner] },
-        { address: this.venue.address, abi: HashPowerPerpsDEXAbi, functionName: "getPendingFunding", args: [owner] },
-        { address: token, abi: erc20Abi, functionName: "balanceOf", args: [owner] },
-        { address: mc3, abi: Multicall3Abi, functionName: "getEthBalance", args: [owner] },
+        {
+          address: vault,
+          abi: CollateralVaultAbi,
+          functionName: "balanceOf",
+          args: [owner],
+        },
+        {
+          address: engine,
+          abi: PortfolioMarginEngineAbi,
+          functionName: "computePortfolioIM",
+          args: [owner],
+        },
+        {
+          address: engine,
+          abi: PortfolioMarginEngineAbi,
+          functionName: "computePortfolioMM",
+          args: [owner],
+        },
+        {
+          address: this.venue.address,
+          abi: HashPowerPerpsDEXAbi,
+          functionName: "getOrderMargin",
+          args: [owner],
+        },
+        {
+          address: this.venue.address,
+          abi: HashPowerPerpsDEXAbi,
+          functionName: "getUnrealizedPnl",
+          args: [owner],
+        },
+        {
+          address: this.venue.address,
+          abi: HashPowerPerpsDEXAbi,
+          functionName: "getPendingFunding",
+          args: [owner],
+        },
+        {
+          address: token,
+          abi: erc20Abi,
+          functionName: "balanceOf",
+          args: [owner],
+        },
+        {
+          address: mc3,
+          abi: Multicall3Abi,
+          functionName: "getEthBalance",
+          args: [owner],
+        },
       ],
     });
 

@@ -10,7 +10,9 @@ import type {
 
 const noop = () => {};
 function makeLogger(): never {
-  return { child: () => ({ debug: noop, info: noop, warn: noop, error: noop }) } as never;
+  return {
+    child: () => ({ debug: noop, info: noop, warn: noop, error: noop }),
+  } as never;
 }
 
 function makeInstrument(prices: bigint[]): InstrumentAdapter {
@@ -33,6 +35,7 @@ function makeInstrument(prices: bigint[]): InstrumentAdapter {
     getContext: async () => ({}),
     encodeCreate: () => "0x",
     encodeCancel: () => "0x",
+    executeOrders: async () => ({ receipts: [], errors: [] }),
     estimateOrderMargin: () => 0n,
     estimateCreateGas: async () => 0n,
   };
@@ -69,7 +72,10 @@ describe("OracleTracker", () => {
   });
 
   it("updates price from instrument", async () => {
-    const tracker = new OracleTracker(makeInstrument([100_000_000n]), makeLogger());
+    const tracker = new OracleTracker(
+      makeInstrument([100_000_000n]),
+      makeLogger(),
+    );
     await tracker.update();
     assert.equal(tracker.currentPrice, 100_000_000n);
   });

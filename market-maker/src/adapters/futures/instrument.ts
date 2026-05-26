@@ -4,6 +4,8 @@ import type {
   BookSource,
   CancelIntent,
   DepthLevel,
+  ExecuteOrdersIntent,
+  ExecuteOrdersResult,
   InstrumentAdapter,
   InstrumentContext,
   MatchingMode,
@@ -16,6 +18,13 @@ import type { FuturesVenueAdapter } from "./venue.ts";
 import { FuturesOwnOrders } from "./ownOrders.ts";
 
 const FUTURES_INSTRUMENT_ID = "futures";
+
+/** Maximum closeOrder calls per cancellation batch. */
+const CANCEL_BATCH_SIZE = 20;
+/** Maximum orders per createOrders call. */
+const CREATE_BATCH_SIZE = 10;
+/** Maximum encoded calls per multicall write tx (conservative for Base 30M gas limit). */
+const WRITE_BATCH_SIZE = 50;
 
 export class FuturesInstrumentAdapter implements InstrumentAdapter {
   readonly id = FUTURES_INSTRUMENT_ID;
@@ -113,6 +122,136 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
       abi: FuturesAbi,
       functionName: "closeOrder",
       args: [intent.orderId],
+    });
+  }
+
+  /**
+   * Execute cancels then creates on-chain. Owns the full lifecycle:
+   * encoding → batching → tx chunking → broadcast → receipt gathering.
+   *
+   * Cancels (individual closeOrder calls, max 20 per batch) are placed
+   * before creates (createOrders calls, max 10 per batch) so margin is
+   * freed before new risk is added.
+   */
+  async executeOrders(
+    intent: ExecuteOrdersIntent,
+  ): Promise<ExecuteOrdersResult> {
+    return this.executeOrdersImpl(intent, this.venue.getLogger());
+  }
+
+  // ── Private implementation ──────────────────────────────────────────
+
+  /**
+   * Shared implementation — the inner `logger` param makes this testable
+   * without coupling to the full venue adapter.
+   */
+  private async executeOrdersImpl(
+    intent: ExecuteOrdersIntent,
+    logger: pino.Logger,
+  ): Promise<ExecuteOrdersResult> {
+    // 1. Build the ordered call list: cancels first, then creates.
+    const calls = this.buildCallList(intent);
+    if (calls.length === 0) {
+      return { receipts: [], errors: [] };
+    }
+
+    if (intent.dryRun) {
+      const totalBatches = Math.ceil(calls.length / WRITE_BATCH_SIZE);
+      logger.info(
+        {
+          cancels: intent.cancels.length,
+          creates: intent.creates.length,
+          calls: calls.length,
+          batches: totalBatches,
+        },
+        "DRY RUN: would send multicall batches",
+      );
+      return { receipts: [], errors: [] };
+    }
+
+    // 2. Chunk into tx-sized groups and broadcast sequentially.
+    const receipts: { gasUsed: bigint; effectiveGasPrice: bigint }[] = [];
+    const errors: Error[] = [];
+    const totalBatches = Math.ceil(calls.length / WRITE_BATCH_SIZE);
+
+    for (let offset = 0; offset < calls.length; offset += WRITE_BATCH_SIZE) {
+      const chunk = calls.slice(offset, offset + WRITE_BATCH_SIZE);
+      const batchNum = Math.floor(offset / WRITE_BATCH_SIZE) + 1;
+
+      try {
+        const hash = await this.venue.multicall(chunk, {
+          maxFeePerGas: intent.maxFeePerGas,
+        });
+        const receipt = await this.venue.publicClient.waitForTransactionReceipt(
+          { hash },
+        );
+        receipts.push({
+          gasUsed: receipt.gasUsed,
+          effectiveGasPrice: receipt.effectiveGasPrice,
+        });
+        logger.info(
+          {
+            calls: chunk.length,
+            batch: `${batchNum}/${totalBatches}`,
+            gas: receipt.gasUsed.toString(),
+          },
+          "futures multicall chunk executed",
+        );
+      } catch (err) {
+        const wrapped = err instanceof Error ? err : new Error(String(err));
+        errors.push(wrapped);
+        logger.error(
+          {
+            err: wrapped,
+            calls: chunk.length,
+            batch: `${batchNum}/${totalBatches}`,
+          },
+          "futures multicall chunk failed — continuing with next chunk",
+        );
+      }
+    }
+
+    return { receipts, errors };
+  }
+
+  /** Build the ordered call list: cancels (individual closeOrder) then creates (createOrders). */
+  private buildCallList(intent: ExecuteOrdersIntent): `0x${string}`[] {
+    const calls: `0x${string}`[] = [];
+
+    // Cancels: chunk by CANCEL_BATCH_SIZE, each = one closeOrder call.
+    for (let i = 0; i < intent.cancels.length; i += CANCEL_BATCH_SIZE) {
+      const batch = intent.cancels.slice(i, i + CANCEL_BATCH_SIZE);
+      for (const c of batch) {
+        calls.push(this.encodeCancel(c));
+      }
+    }
+
+    // Creates: chunk by CREATE_BATCH_SIZE, each chunk = one createOrders call.
+    for (let i = 0; i < intent.creates.length; i += CREATE_BATCH_SIZE) {
+      const batch = intent.creates.slice(i, i + CREATE_BATCH_SIZE);
+      calls.push(this.encodeCreateOrders(batch));
+    }
+
+    return calls;
+  }
+
+  /** Encode a batch of creates via the `createOrders` contract function. */
+  private encodeCreateOrders(intents: OrderIntent[]): `0x${string}` {
+    if (!this.deliveryDateCache) {
+      throw new Error("Delivery data cache not filled");
+    }
+    const _deliveryDateCache = this.deliveryDateCache;
+    return encodeFunctionData({
+      abi: FuturesAbi,
+      functionName: "createOrders",
+      args: [
+        intents.map((i) => ({
+          pricePerDay: i.price,
+          deliveryDate: _deliveryDateCache,
+          destURL: "",
+          qty: i.side === "buy" ? Number(i.size) : -Number(i.size),
+        })),
+      ],
     });
   }
 

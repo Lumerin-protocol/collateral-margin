@@ -1,8 +1,11 @@
 import { encodeFunctionData } from "viem";
+import type pino from "pino";
 import type {
   BookSource,
   CancelIntent,
   DepthLevel,
+  ExecuteOrdersIntent,
+  ExecuteOrdersResult,
   InstrumentAdapter,
   InstrumentContext,
   MatchingMode,
@@ -79,6 +82,99 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
       functionName: "cancelOrder",
       args: [intent.orderId],
     });
+  }
+
+  /**
+   * Execute cancels then creates on-chain. Perps uses individual
+   * cancelOrder / createOrder calls (no batch functions on the contract).
+   */
+  async executeOrders(
+    intent: ExecuteOrdersIntent,
+  ): Promise<ExecuteOrdersResult> {
+    return this.executeOrdersImpl(intent, this.venue.getLogger());
+  }
+
+  // ── Private implementation ──────────────────────────────────────────
+
+  /** Max encoded calls per multicall write tx (conservative for Base 30M gas limit). */
+  private static readonly WRITE_BATCH_SIZE = 30;
+
+  private async executeOrdersImpl(
+    intent: ExecuteOrdersIntent,
+    logger: pino.Logger,
+  ): Promise<ExecuteOrdersResult> {
+    // 1. Build the ordered call list: cancels first, then creates.
+    const calls: `0x${string}`[] = [];
+    for (const c of intent.cancels) {
+      calls.push(this.encodeCancel(c));
+    }
+    for (const c of intent.creates) {
+      calls.push(this.encodeCreate(c));
+    }
+
+    if (calls.length === 0) {
+      return { receipts: [], errors: [] };
+    }
+
+    // 2. Chunk into tx-sized groups and broadcast sequentially.
+    const max = PerpsInstrumentAdapter.WRITE_BATCH_SIZE;
+
+    if (intent.dryRun) {
+      const totalBatches = Math.ceil(calls.length / max);
+      logger.info(
+        {
+          cancels: intent.cancels.length,
+          creates: intent.creates.length,
+          calls: calls.length,
+          batches: totalBatches,
+        },
+        "DRY RUN: would send multicall batches",
+      );
+      return { receipts: [], errors: [] };
+    }
+
+    const receipts: { gasUsed: bigint; effectiveGasPrice: bigint }[] = [];
+    const errors: Error[] = [];
+    const totalBatches = Math.ceil(calls.length / max);
+
+    for (let offset = 0; offset < calls.length; offset += max) {
+      const chunk = calls.slice(offset, offset + max);
+      const batchNum = Math.floor(offset / max) + 1;
+
+      try {
+        const hash = await this.venue.multicall(chunk, {
+          maxFeePerGas: intent.maxFeePerGas,
+        });
+        const receipt = await this.venue.publicClient.waitForTransactionReceipt(
+          { hash },
+        );
+        receipts.push({
+          gasUsed: receipt.gasUsed,
+          effectiveGasPrice: receipt.effectiveGasPrice,
+        });
+        logger.info(
+          {
+            calls: chunk.length,
+            batch: `${batchNum}/${totalBatches}`,
+            gas: receipt.gasUsed.toString(),
+          },
+          "perps multicall chunk executed",
+        );
+      } catch (err) {
+        const wrapped = err instanceof Error ? err : new Error(String(err));
+        errors.push(wrapped);
+        logger.error(
+          {
+            err: wrapped,
+            calls: chunk.length,
+            batch: `${batchNum}/${totalBatches}`,
+          },
+          "perps multicall chunk failed — continuing with next chunk",
+        );
+      }
+    }
+
+    return { receipts, errors };
   }
 
   /**
