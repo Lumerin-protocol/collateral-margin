@@ -265,6 +265,7 @@ jobs:
 
           jq --arg IMAGE "${IMAGE}" '
             .containerDefinitions[0].image = $IMAGE |
+            del(.containerDefinitions[0].command, .containerDefinitions[0].entryPoint) |
             del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
                 .compatibilities, .registeredAt, .registeredBy)
           ' task-def.json > new-task-def.json
@@ -317,7 +318,7 @@ jobs:
 
           jq --slurpfile env env-block.json '
             .containerDefinitions[0].environment = $env[0] |
-            del(.containerDefinitions[0].secrets)
+            del(.containerDefinitions[0].secrets, .containerDefinitions[0].command, .containerDefinitions[0].entryPoint)
           ' new-task-def.json > final-task-def.json
 
           NEW_TASK_DEF=$(aws ecs register-task-definition \
