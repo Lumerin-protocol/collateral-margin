@@ -29,49 +29,37 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout collateral-margin
+        uses: actions/checkout@v6
+        with:
+          path: collateral-margin
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          package_json_file: keeper/package.json
+          package_json_file: collateral-margin/keeper/package.json
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: "24"
           cache: "pnpm"
-          cache-dependency-path: keeper/pnpm-lock.yaml
+          cache-dependency-path: collateral-margin/keeper/pnpm-lock.yaml
 
-      - name: Install dependencies
-        working-directory: ./keeper
+      - name: Install keeper dependencies
+        working-directory: ./collateral-margin/keeper
         run: pnpm install --frozen-lockfile
 
       - name: TypeCheck
-        working-directory: ./keeper
+        working-directory: ./collateral-margin/keeper
         run: pnpm typecheck
 
       - name: Unit tests
-        working-directory: ./keeper
+        working-directory: ./collateral-margin/keeper
         run: pnpm test
 
-      - name: Checkout perps
-        uses: actions/checkout@v6
-        with:
-          repository: Lumerin-protocol/derivatives-marketplace
-          ref: dev
-          path: perps
-
-      - name: Checkout futures-marketplace
-        uses: actions/checkout@v6
-        with:
-          repository: Lumerin-protocol/futures-marketplace
-          ref: dev
-          path: futures-marketplace
-
       - name: Install contracts dependencies
-        working-directory: ./contracts
+        working-directory: ./collateral-margin/contracts
         run: pnpm install --frozen-lockfile
 
       - name: Install perps contracts dependencies
@@ -82,9 +70,10 @@ jobs:
         working-directory: ./futures-marketplace/contracts
         run: pnpm install --frozen-lockfile
 
+      - name: Compile siblings
+        working-directory: ./collateral-margin/keeper
+        run: pnpm pretest:integration
+
       - name: Integration tests
-        working-directory: ./keeper
+        working-directory: ./collateral-margin/keeper
         run: pnpm test:integration
-        env:
-          PERPS_REPO: ${{ github.workspace }}/perps/contracts
-          FUTURES_REPO: ${{ github.workspace }}/futures-marketplace/contracts
