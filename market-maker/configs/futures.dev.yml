@@ -88,4 +88,7 @@ oracle:
 health:
   port: ${MAKER_HEALTH_PORT:-3001}
 
-multicallBatchSize: 10
+readBatchSize: 3
+# Per-operation batch sizes for writes (futures: closeOrder limit / createOrders limit).
+cancelBatchSize: 20
+createBatchSize: 10

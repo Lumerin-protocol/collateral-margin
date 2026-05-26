@@ -54,7 +54,20 @@ export interface RunnerOpts {
  *     successful tick.
  */
 export async function runMakerLoop(opts: RunnerOpts): Promise<void> {
-  const { pollIntervalMs, instrument, oracle, gas, book, inventory, collateral, risk, quoter, executor, health, logger } = opts;
+  const {
+    pollIntervalMs,
+    instrument,
+    oracle,
+    gas,
+    book,
+    inventory,
+    collateral,
+    risk,
+    quoter,
+    executor,
+    health,
+    logger,
+  } = opts;
   const cancelOrdersOnShutdown = opts.cancelOrdersOnShutdown ?? true;
   const mmAddress = instrument.venue.wallet.account.address;
 
@@ -93,8 +106,14 @@ export async function runMakerLoop(opts: RunnerOpts): Promise<void> {
     } catch (err) {
       health.status = "init-error";
       health.lastError = toErrorInfo(err);
-      const delay = Math.min(BASE_ERROR_DELAY_MS * 2 ** (attempt - 1), MAX_ERROR_DELAY_MS);
-      logger.warn({ err, attempt, retryInMs: delay }, "initialization failed, retrying");
+      const delay = Math.min(
+        BASE_ERROR_DELAY_MS * 2 ** (attempt - 1),
+        MAX_ERROR_DELAY_MS,
+      );
+      logger.warn(
+        { err, attempt, retryInMs: delay },
+        "initialization failed, retrying",
+      );
       await sleep(delay);
     }
   }
@@ -113,7 +132,9 @@ export async function runMakerLoop(opts: RunnerOpts): Promise<void> {
         logger.error({ err }, "failed to cancel orders during shutdown");
       }
     } else {
-      logger.info("cancelOrdersOnShutdown=false; leaving resting orders on the book");
+      logger.info(
+        "cancelOrdersOnShutdown=false; leaving resting orders on the book",
+      );
     }
     book.stop();
     await health.stop();
@@ -153,7 +174,7 @@ export async function runMakerLoop(opts: RunnerOpts): Promise<void> {
           vaultBalance: collateral.vaultBalance.toString(),
           orders: book.ownOrders.size,
         },
-        "tick",
+        "main loop tick",
       );
 
       const ok = risk.check();
@@ -185,7 +206,10 @@ export async function runMakerLoop(opts: RunnerOpts): Promise<void> {
     health.lastTickAt = Date.now();
     const delay =
       consecutiveErrors > 0
-        ? Math.min(BASE_ERROR_DELAY_MS * 2 ** consecutiveErrors, MAX_ERROR_DELAY_MS)
+        ? Math.min(
+            BASE_ERROR_DELAY_MS * 2 ** consecutiveErrors,
+            MAX_ERROR_DELAY_MS,
+          )
         : pollIntervalMs;
     await sleep(delay);
   }

@@ -41,7 +41,7 @@ pricing:
 
 sizing:
   strategy: linear
-  baseQuantity: "1000000"            # venue-native units (hashrate base)
+  baseQuantity: "1000000" # venue-native units (hashrate base)
   numLevelsPerSide: 5
 
 risk:
@@ -81,3 +81,8 @@ oracle:
 
 health:
   port: ${MAKER_HEALTH_PORT:-3001}
+
+readBatchSize: 10
+# Per-operation batch sizes for writes.
+cancelBatchSize: 30
+createBatchSize: 30

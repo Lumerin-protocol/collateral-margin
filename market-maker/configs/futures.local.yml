@@ -75,4 +75,7 @@ oracle:
 health:
   port: 3001
 
-multicallBatchSize: 10
+readBatchSize: 10
+# Per-operation batch sizes for writes.
+cancelBatchSize: 20
+createBatchSize: 10

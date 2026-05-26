@@ -30,6 +30,27 @@ export interface CancelIntent {
   orderId: `0x${string}`;
 }
 
+/**
+ * Batch of cancellations and creations the adapter should execute on-chain.
+ * Cancels always process before creates within each tx.
+ */
+export interface ExecuteOrdersIntent {
+  cancels: CancelIntent[];
+  creates: OrderIntent[];
+  /** Gas price cap. If not set, the wallet estimates from the network. */
+  maxFeePerGas?: bigint;
+  /** If true, log what would be done but don't broadcast txs. */
+  dryRun?: boolean;
+}
+
+/** Result from {@link InstrumentAdapter.executeOrders}. */
+export interface ExecuteOrdersResult {
+  /** Receipts from successful tx chunks (for gas tracking). */
+  receipts: { gasUsed: bigint; effectiveGasPrice: bigint }[];
+  /** Non-fatal errors from failed tx chunks. */
+  errors: Error[];
+}
+
 // ─── Resting state types ────────────────────────────────────────────────────
 
 /** An order resting on the venue owned by the MM. */
@@ -250,6 +271,18 @@ export interface InstrumentAdapter {
 
   encodeCreate(intent: OrderIntent): `0x${string}`;
   encodeCancel(intent: CancelIntent): `0x${string}`;
+
+  /**
+   * Execute a batch of order cancellations and creations on-chain.
+   *
+   * The adapter owns the full lifecycle: encoding, batching, tx chunking,
+   * nonce sequencing, and gas optimisation. The caller receives receipts
+   * for gas tracking and any non-fatal errors from failed tx chunks.
+   *
+   * Cancels are always processed before creates within each tx to free
+   * margin before adding new risk.
+   */
+  executeOrders(intent: ExecuteOrdersIntent): Promise<ExecuteOrdersResult>;
 
   /**
    * Estimate the additional Initial Margin a new order would add to the

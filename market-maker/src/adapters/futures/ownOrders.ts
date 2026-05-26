@@ -33,16 +33,16 @@ export class FuturesOwnOrders implements OwnOrderSource {
 
   private readonly venue: FuturesVenueAdapter;
   private readonly logger: pino.Logger;
-  private readonly multicallBatchSize: number;
+  private readonly readBatchSize: number;
 
   constructor(
     venue: FuturesVenueAdapter,
     logger: pino.Logger,
-    multicallBatchSize: number,
+    readBatchSize: number,
   ) {
     this.venue = venue;
     this.logger = logger.child({ component: "futures-own-orders" });
-    this.multicallBatchSize = multicallBatchSize;
+    this.readBatchSize = readBatchSize;
   }
 
   async list(): Promise<OwnOrder[]> {
@@ -89,7 +89,7 @@ export class FuturesOwnOrders implements OwnOrderSource {
     }));
 
     // Chunk to stay under RPC payload / timeout limits.
-    const batchSize = this.multicallBatchSize;
+    const batchSize = this.readBatchSize;
     const allOrders: unknown[] = [];
     for (let i = 0; i < allCalls.length; i += batchSize) {
       const chunk = allCalls.slice(i, i + batchSize);

@@ -8,7 +8,12 @@ export interface CreateFuturesVenueOpts {
   wallet: WalletContext;
   address: `0x${string}`;
   multicall3Address?: `0x${string}`;
-  multicallBatchSize?: number;
+  /** Max calls per Multicall3 read batch. Default 100. */
+  readBatchSize: number;
+  /** Max closeOrder calls per cancellation batch. Default 20. */
+  cancelBatchSize: number;
+  /** Max orders per createOrders call. Default 10. */
+  createBatchSize: number;
   logger: pino.Logger;
 }
 
