@@ -26,6 +26,14 @@ futures_mm_service = {
   task_ram        = 512
 }
 
+keeper_service = {
+  create          = false
+  task_worker_qty = 1
+  cnt_port        = 3000
+  task_cpu        = 256
+  task_ram        = 512
+}
+
 ########################################
 # Account metadata
 ########################################
