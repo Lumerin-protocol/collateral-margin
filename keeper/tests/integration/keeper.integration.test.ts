@@ -36,7 +36,7 @@ import {
   readFuturesPositionLiquidationBlock,
   readPerpsOrderLiquidationBlock,
   readFuturesOrderLiquidationBlock,
-  readPositionDeliveryClosedBlock,
+  readLotClosedBlock,
   readPerpsPosition,
   expectPerpsClosed,
   expectFuturesClosed,
@@ -400,7 +400,7 @@ describe("Cross-venue coordination", () => {
       const perpsBlock = await readPerpsPositionLiquidationBlock(ctx, alice);
       const futuresBlock = await readFuturesPositionLiquidationBlock(ctx, alice);
       assert.ok(perpsBlock !== null, "expected a perps PositionLiquidated event");
-      assert.ok(futuresBlock !== null, "expected a futures PositionLiquidated event");
+      assert.ok(futuresBlock !== null, "expected a futures LotLiquidated event");
       assert.ok(
         perpsBlock < futuresBlock,
         `expected perps liquidated before futures, got perps=${perpsBlock} futures=${futuresBlock}`,
@@ -431,7 +431,7 @@ describe("Cross-venue coordination", () => {
       const perpsBlock = await readPerpsPositionLiquidationBlock(ctx, alice);
       const futuresBlock = await readFuturesPositionLiquidationBlock(ctx, alice);
       assert.ok(perpsBlock !== null, "expected a perps PositionLiquidated event");
-      assert.ok(futuresBlock !== null, "expected a futures PositionLiquidated event");
+      assert.ok(futuresBlock !== null, "expected a futures LotLiquidated event");
       assert.ok(
         futuresBlock < perpsBlock,
         `expected futures liquidated before perps, got perps=${perpsBlock} futures=${futuresBlock}`,
@@ -488,7 +488,7 @@ describe("Cross-venue coordination", () => {
       assert.ok(perpsOrderBlock !== null, "expected a perps OrderLiquidated event");
       assert.ok(futuresOrderBlock !== null, "expected a futures OrderLiquidated event");
       assert.ok(perpsPositionBlock !== null, "expected a perps PositionLiquidated event");
-      assert.ok(futuresPositionBlock !== null, "expected a futures PositionLiquidated event");
+      assert.ok(futuresPositionBlock !== null, "expected a futures LotLiquidated event");
 
       const latestOrderBlock = max(perpsOrderBlock, futuresOrderBlock);
       const earliestPositionBlock = min(perpsPositionBlock, futuresPositionBlock);
@@ -626,8 +626,8 @@ describe("DeliveryCoordinator (live RPC)", () => {
       // We then fast-forward the chain past `deliveryAt` and trigger one
       // sweep. The contract's `_closeAndCashSettleDelivery` cash-settles
       // the entire window at the current market price (positionElapsedTime
-      // = 0 → no contract-price portion), and emits `PositionDeliveryClosed`
-      // followed by `PositionClosed`.
+      // = 0 → no contract-price portion), and emits `LotClosed`
+      // followed by `LotClosed`.
       const ctx = await loadFixture(futuresLongCrashFixture, testClient);
       keeper = buildKeeper(ctx, {
         liquidatorPrivateKey: HARDHAT_PRIVATE_KEYS[4], // validator
@@ -668,22 +668,22 @@ describe("DeliveryCoordinator (live RPC)", () => {
       await keeper.delivery.sweep();
 
       // End state: every position is gone from chain storage, each emitted
-      // a `PositionDeliveryClosed` event from the keeper's signer, and the
+      // a `LotClosed` event from the keeper's signer, and the
       // index dropped all of them.
       await expectFuturesClosed(ctx, alice);
       const settledBlocks: bigint[] = [];
       for (const id of positionsBefore) {
-        const settledBlock = await readPositionDeliveryClosedBlock(ctx, id);
+        const settledBlock = await readLotClosedBlock(ctx, id);
         assert.ok(
           settledBlock !== null,
-          `expected a PositionDeliveryClosed event for position ${id}`,
+          `expected a LotClosed event for position ${id}`,
         );
         settledBlocks.push(settledBlock);
         assert.equal(keeper.delivery.has(id), false, `settled position ${id} is dropped`);
       }
       // Batching invariant: all 12 settlements ride a single
       // `Futures.multicall(bytes[])` transaction, so every
-      // `PositionDeliveryClosed` event lands in the same block. Without
+      // `LotClosed` event lands in the same block. Without
       // batching they would have been N separate txs across N blocks
       // (plus a `replacement transaction underpriced` race in production
       // when two of them collided on the same nonce). This assertion
@@ -714,7 +714,7 @@ describe("DeliveryCoordinator (live RPC)", () => {
       const ctx = await loadFixture(futuresLongCrashFixture, testClient);
 
       // Move time past deliveryAt *before* the keeper boots, so the live
-      // subscription would miss the (long-past) PositionCreated event.
+      // subscription would miss the (long-past) LotCreated event.
       const deliveryAt = ctx.config.futuresFirstDeliveryDate;
       await testClient.setNextBlockTimestamp({ timestamp: deliveryAt + 120n });
       await testClient.mine({ blocks: 1 });
@@ -740,7 +740,7 @@ describe("DeliveryCoordinator (live RPC)", () => {
       await expectFuturesClosed(ctx, alice);
       for (const id of positionsBefore) {
         assert.ok(
-          (await readPositionDeliveryClosedBlock(ctx, id)) !== null,
+          (await readLotClosedBlock(ctx, id)) !== null,
           `missed delivery for ${id} should be settled by backfill sweep`,
         );
       }
@@ -785,7 +785,7 @@ describe("DeliveryCoordinator (live RPC)", () => {
       await expectFuturesClosed(ctx, alice);
       for (const id of positionsBefore) {
         assert.ok(
-          (await readPositionDeliveryClosedBlock(ctx, id)) !== null,
+          (await readLotClosedBlock(ctx, id)) !== null,
           `position ${id} should be settled via view-based bootstrap`,
         );
         assert.equal(keeper.delivery.has(id), false);
@@ -838,7 +838,7 @@ describe("DeliveryCoordinator (live RPC)", () => {
       await expectFuturesClosed(ctx, alice);
       for (const id of positionsBefore) {
         assert.ok(
-          (await readPositionDeliveryClosedBlock(ctx, id)) !== null,
+          (await readLotClosedBlock(ctx, id)) !== null,
           `manually-seeded position ${id} should be settled`,
         );
       }
@@ -876,7 +876,7 @@ describe("DeliveryCoordinator (live RPC)", () => {
       assert.ok(positionsBefore.length > 0, "fixture should have created positions");
       for (const id of positionsBefore) {
         assert.equal(
-          await readPositionDeliveryClosedBlock(ctx, id),
+          await readLotClosedBlock(ctx, id),
           null,
           `position ${id} must not be settled by a misconfigured keeper`,
         );

@@ -50,6 +50,8 @@ export interface Wallet {
 export interface DeployedStack {
   publicClient: PublicClient;
   testClient: TestClient;
+  /** The shared HTTP transport — reused by every test keeper to avoid socket listener accumulation. */
+  transport: ReturnType<typeof http>;
   rpcUrl: string;
   accounts: {
     owner: Wallet;
@@ -97,7 +99,7 @@ export interface DeployedStack {
     perpsLiquidationFee: bigint;
     perpsTakerFeeBps: bigint;
     perpsMakerFeeBps: bigint;
-    futuresOrderFee: bigint;
+    futuresTakerFee: bigint;
     futuresLiquidationFee: bigint;
     futuresDeliveryDurationDays: number;
     futuresFirstDeliveryDate: bigint;
@@ -119,7 +121,7 @@ const MIN_PRICE_INCREMENT = parseUnits("0.01", TOKEN_DECIMALS);
 const PERPS_LIQUIDATION_FEE = parseUnits("1", TOKEN_DECIMALS);
 const PERPS_TAKER_FEE_BPS = 5n;
 const PERPS_MAKER_FEE_BPS = 0n;
-const FUTURES_ORDER_FEE = parseUnits("1", TOKEN_DECIMALS);
+const FUTURES_TAKER_FEE = parseUnits("1", TOKEN_DECIMALS);
 const FUTURES_LIQUIDATION_FEE = parseUnits("1", TOKEN_DECIMALS);
 const FUTURES_LIQUIDATION_MARGIN_PCT = 20;
 const FUTURES_DELIVERY_DURATION_DAYS = 7;
@@ -140,7 +142,11 @@ const APPROVE_MAX = (1n << 256n) - 1n;
 export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
   const transport = http(rpcUrl, { timeout: 30_000 });
   const publicClient = createPublicClient({ chain: hardhat, transport });
-  const testClient = createTestClient({ chain: hardhat, mode: "hardhat", transport })
+  const testClient = createTestClient({
+    chain: hardhat,
+    mode: "hardhat",
+    transport,
+  })
     .extend(publicActions)
     .extend(walletActions);
 
@@ -163,7 +169,12 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
   // ── Infrastructure: Multicall3 ────────────────────────────────────────
   // Deployed first because `buildKeeper` reads its address into the chain
   // config — keeper components must see it before they make any read call.
-  const multicall3 = await deploy(publicClient, owner.client, artifacts.multicall3(), []);
+  const multicall3 = await deploy(
+    publicClient,
+    owner.client,
+    artifacts.multicall3(),
+    [],
+  );
 
   // ── Tokens & oracles ──────────────────────────────────────────────────
   const usdcArt = artifacts.usdc();
@@ -194,7 +205,9 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
 
   // ── Perps (UUPS proxy) ────────────────────────────────────────────────
   const perpsArt = artifacts.perps();
-  const perpsImpl = await deploy(publicClient, owner.client, perpsArt, [MIN_PRICE_INCREMENT]);
+  const perpsImpl = await deploy(publicClient, owner.client, perpsArt, [
+    MIN_PRICE_INCREMENT,
+  ]);
   const perps = await deployProxy(
     publicClient,
     owner.client,
@@ -206,7 +219,9 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
 
   // ── Futures (UUPS proxy, takes vault in constructor) ──────────────────
   const futuresArt = artifacts.futures();
-  const futuresImpl = await deploy(publicClient, owner.client, futuresArt, [vault]);
+  const futuresImpl = await deploy(publicClient, owner.client, futuresArt, [
+    vault,
+  ]);
   const latestBlock = await publicClient.getBlock();
   const firstDeliveryDate =
     latestBlock.timestamp + BigInt(FUTURES_DELIVERY_DURATION_DAYS * 24 * 3600);
@@ -232,47 +247,103 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
   // ── PME (UUPS proxy) ──────────────────────────────────────────────────
   const pmeArt = artifacts.pme();
   const pmeImpl = await deploy(publicClient, owner.client, pmeArt, []);
-  const pme = await deployProxy(publicClient, owner.client, pmeImpl, pmeArt.abi, "initialize", [
-    vault,
-  ]);
+  const pme = await deployProxy(
+    publicClient,
+    owner.client,
+    pmeImpl,
+    pmeArt.abi,
+    "initialize",
+    [vault],
+  );
 
   // ── Wire PME ↔ venues ↔ vault ─────────────────────────────────────────
   // PME -> learn about each venue so portfolio MM math includes both legs.
   await write(publicClient, owner.client, pme, pmeArt.abi, "setPerps", [perps]);
-  await write(publicClient, owner.client, pme, pmeArt.abi, "setFutures", [futures]);
+  await write(publicClient, owner.client, pme, pmeArt.abi, "setFutures", [
+    futures,
+  ]);
 
   // Vault -> point at the single margin engine + authorize each venue.
-  await write(publicClient, owner.client, vault, vaultArt.abi, "setMarginEngine", [pme]);
-  await write(publicClient, owner.client, vault, vaultArt.abi, "setAuthorizedCaller", [
-    perps,
-    true,
-  ]);
-  await write(publicClient, owner.client, vault, vaultArt.abi, "setAuthorizedCaller", [
-    futures,
-    true,
-  ]);
+  await write(
+    publicClient,
+    owner.client,
+    vault,
+    vaultArt.abi,
+    "setMarginEngine",
+    [pme],
+  );
+  await write(
+    publicClient,
+    owner.client,
+    vault,
+    vaultArt.abi,
+    "setAuthorizedCaller",
+    [perps, true],
+  );
+  await write(
+    publicClient,
+    owner.client,
+    vault,
+    vaultArt.abi,
+    "setAuthorizedCaller",
+    [futures, true],
+  );
 
   // Perps -> PME + fee config.
-  await write(publicClient, owner.client, perps, perpsArt.abi, "setPortfolioMargin", [pme]);
+  await write(
+    publicClient,
+    owner.client,
+    perps,
+    perpsArt.abi,
+    "setPortfolioMargin",
+    [pme],
+  );
   await write(publicClient, owner.client, perps, perpsArt.abi, "setMatchFee", [
     Number(PERPS_TAKER_FEE_BPS),
     Number(PERPS_MAKER_FEE_BPS),
   ]);
-  await write(publicClient, owner.client, perps, perpsArt.abi, "setLiquidationFee", [
-    PERPS_LIQUIDATION_FEE,
-  ]);
+  await write(
+    publicClient,
+    owner.client,
+    perps,
+    perpsArt.abi,
+    "setLiquidationFee",
+    [PERPS_LIQUIDATION_FEE],
+  );
 
   // Futures -> PME + fees + validator URL.
-  await write(publicClient, owner.client, futures, futuresArt.abi, "setMarginEngine", [pme]);
-  await write(publicClient, owner.client, futures, futuresArt.abi, "setOrderFee", [
-    FUTURES_ORDER_FEE,
-  ]);
-  await write(publicClient, owner.client, futures, futuresArt.abi, "setLiquidationFee", [
-    FUTURES_LIQUIDATION_FEE,
-  ]);
-  await write(publicClient, owner.client, futures, futuresArt.abi, "setValidatorURL", [
-    "//keeper-test-validator",
-  ]);
+  await write(
+    publicClient,
+    owner.client,
+    futures,
+    futuresArt.abi,
+    "setMarginEngine",
+    [pme],
+  );
+  await write(
+    publicClient,
+    owner.client,
+    futures,
+    futuresArt.abi,
+    "setTakerFee",
+    [FUTURES_TAKER_FEE],
+  );
+  await write(
+    publicClient,
+    owner.client,
+    futures,
+    futuresArt.abi,
+    "setLiquidationFee",
+    [FUTURES_LIQUIDATION_FEE],
+  );
+  await write(
+    publicClient,
+    owner.client,
+    futures,
+    futuresArt.abi,
+    "setValidatorURL",
+    ["//keeper-test-validator"],
+  );
 
   // ── Fund & approve test wallets ───────────────────────────────────────
   for (const w of [alice, bob, liquidator, validator, dave]) {
@@ -282,17 +353,26 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     ]);
   }
   for (const w of [owner, alice, bob, liquidator, validator, dave]) {
-    await write(publicClient, w.client, usdc, usdcArt.abi, "approve", [vault, APPROVE_MAX]);
+    await write(publicClient, w.client, usdc, usdcArt.abi, "approve", [
+      vault,
+      APPROVE_MAX,
+    ]);
   }
 
   // ── Seed insurance fund (owner-funded) ────────────────────────────────
-  await write(publicClient, owner.client, vault, vaultArt.abi, "depositInsuranceFund", [
-    INSURANCE_FUND,
-  ]);
+  await write(
+    publicClient,
+    owner.client,
+    vault,
+    vaultArt.abi,
+    "depositInsuranceFund",
+    [INSURANCE_FUND],
+  );
 
   return {
     publicClient,
     testClient,
+    transport,
     rpcUrl,
     accounts: { owner, alice, bob, liquidator, validator, dave },
     addresses: {
@@ -324,7 +404,7 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
       perpsLiquidationFee: PERPS_LIQUIDATION_FEE,
       perpsTakerFeeBps: PERPS_TAKER_FEE_BPS,
       perpsMakerFeeBps: PERPS_MAKER_FEE_BPS,
-      futuresOrderFee: FUTURES_ORDER_FEE,
+      futuresTakerFee: FUTURES_TAKER_FEE,
       futuresLiquidationFee: FUTURES_LIQUIDATION_FEE,
       futuresDeliveryDurationDays: FUTURES_DELIVERY_DURATION_DAYS,
       futuresFirstDeliveryDate: firstDeliveryDate,

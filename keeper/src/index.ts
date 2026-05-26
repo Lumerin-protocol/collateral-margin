@@ -186,7 +186,7 @@ async function main(): Promise<void> {
     // log-backfill pipeline, so it survives RPC providers that cap
     // `eth_getLogs` block ranges (Alchemy free tier = 10 blocks). Without
     // this hook a position created before keeper boot would only ever be
-    // settled if log backfill happened to find its `PositionCreated`
+    // settled if log backfill happened to find its `LotCreated`
     // event, which is unreliable on rate-limited RPCs.
     if (deliveryCoordinator !== undefined) {
       void deliveryCoordinator.indexUserPositions(user);

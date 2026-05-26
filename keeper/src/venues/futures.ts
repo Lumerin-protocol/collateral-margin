@@ -32,7 +32,12 @@ export class FuturesVenue implements Venue {
   private readonly ethUsdFeed: EthUsdFeed | undefined;
   private deliveryDurationDays: bigint | undefined;
 
-  constructor(chain: Chain, config: Config, logger: pino.Logger, ethUsdFeed?: EthUsdFeed) {
+  constructor(
+    chain: Chain,
+    config: Config,
+    logger: pino.Logger,
+    ethUsdFeed?: EthUsdFeed,
+  ) {
     this.chain = chain;
     this.config = config;
     this.logger = logger.child({ venue: "futures" });
@@ -113,7 +118,9 @@ export class FuturesVenue implements Venue {
       // Each position is a single contract; PnL accrues per day across the
       // full delivery window (matches `getFuturesUnrealizedPnl` on-chain).
       const isBuyer = getAddress(pos.buyer) === userAddr;
-      const entryPricePerDay = isBuyer ? pos.buyPricePerDay : pos.sellPricePerDay;
+      const entryPricePerDay = isBuyer
+        ? pos.buyPricePerDay
+        : pos.sellPricePerDay;
       const priceDiffPerDay = isBuyer
         ? marketPrice - entryPricePerDay // long: lose when market drops
         : entryPricePerDay - marketPrice; // short: lose when market rises
@@ -130,7 +137,10 @@ export class FuturesVenue implements Venue {
     });
   }
 
-  async liquidateOrders(user: Address, _ids?: readonly Hex[]): Promise<LiquidateOrdersOutcome> {
+  async liquidateOrders(
+    user: Address,
+    _ids?: readonly Hex[],
+  ): Promise<LiquidateOrdersOutcome> {
     // Futures sweeps FIFO until the participant is healthy — no calldata id
     // list needed. We deliberately ignore `ids` rather than asserting on it
     // so the venue surface stays uniform across perps/futures.
@@ -146,10 +156,15 @@ export class FuturesVenue implements Venue {
       ethUsdFeed: this.ethUsdFeed,
     });
 
-    return "skipped" in result ? { skipped: "notLiquidatable" } : { feeEarned: result.feeEarned };
+    return "skipped" in result
+      ? { skipped: "notLiquidatable" }
+      : { feeEarned: result.feeEarned };
   }
 
-  async liquidatePosition(user: Address, id: Hex): Promise<LiquidatePositionOutcome> {
+  async liquidatePosition(
+    user: Address,
+    id: Hex,
+  ): Promise<LiquidatePositionOutcome> {
     const result = await sendLiquidate({
       chain: this.chain,
       config: this.config,
@@ -158,7 +173,7 @@ export class FuturesVenue implements Venue {
       abi: FuturesAbi,
       functionName: "liquidatePosition",
       args: [user, id],
-      feeEventName: "PositionLiquidated",
+      feeEventName: "LotLiquidated",
       mapSkip: (errorName) => {
         if (errorName === "OrdersStillOpen") return "ordersStillOpen";
         return "notLiquidatable";
@@ -166,7 +181,9 @@ export class FuturesVenue implements Venue {
       ethUsdFeed: this.ethUsdFeed,
     });
 
-    return "skipped" in result ? { skipped: result.skipped } : { feeEarned: result.feeEarned };
+    return "skipped" in result
+      ? { skipped: result.skipped }
+      : { feeEarned: result.feeEarned };
   }
 
   /**
@@ -175,7 +192,8 @@ export class FuturesVenue implements Venue {
    * arithmetic stays in bigint land.
    */
   private async getDeliveryDurationDays(): Promise<bigint> {
-    if (this.deliveryDurationDays !== undefined) return this.deliveryDurationDays;
+    if (this.deliveryDurationDays !== undefined)
+      return this.deliveryDurationDays;
     const days = (await this.chain.publicClient.readContract({
       address: this.config.futures.address,
       abi: FuturesAbi,

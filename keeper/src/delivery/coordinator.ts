@@ -33,9 +33,9 @@ import { formatGasCost } from "../tx/gasCost.ts";
  *
  * Hot path is event-driven:
  *
- *   PositionCreated  ─▶  schedule one-shot timer at deliveryAt + settleDelay
- *   PositionClosed   ─▶  cancel the timer + drop from index
- *   timer fires      ─▶  settle(positionId)
+ *   LotCreated  ─▶  schedule one-shot timer at deliveryAt + settleDelay
+ *   LotClosed   ─▶  cancel the timer + drop from index
+ *   timer fires      ─▶  settle(lotId)
  *
  * Cold-start safety net (two redundant paths — either alone is sufficient):
  *
@@ -51,7 +51,7 @@ import { formatGasCost } from "../tx/gasCost.ts";
  *                                is wired automatically in `index.ts` from
  *                                `tracker.onAdded` and once at boot from
  *                                `tracker.list()`.
- *   backfill(fromBlock)       ─▶ replay PositionCreated/PositionClosed in
+ *   backfill(fromBlock)       ─▶ replay LotCreated/LotClosed in
  *                                chunks. Discovers positions even for
  *                                participants the tracker doesn't know
  *                                about, but breaks on rate-limited
@@ -65,13 +65,13 @@ import { formatGasCost } from "../tx/gasCost.ts";
  *                                and oracle-staleness retries.
  *
  * Single source of truth for "is this position alive": the contract emits
- * `PositionClosed` at the end of every `_removePosition`, including the
+ * `LotClosed` at the end of every `_removePosition`, including the
  * cash-settlement path inside `closeDelivery` itself. The module never has
  * to track its own settled-set across restarts — once settled, the contract
  * removes the position and `getPositionById(id).seller == 0` permanently.
  */
 export class DeliveryCoordinator {
-  /** Active positions known to the module: positionId → metadata. */
+  /** Active positions known to the module: lotId → metadata. */
   private readonly tracked = new Map<Hex, TrackedPosition>();
   /** One-shot timers keyed by positionId. Cleared on settle / close / stop. */
   private readonly timers = new Map<Hex, NodeJS.Timeout>();
@@ -122,7 +122,7 @@ export class DeliveryCoordinator {
   }
 
   /**
-   * Subscribes to `PositionCreated` / `PositionClosed`, primes the duration
+   * Subscribes to `LotCreated` / `LotClosed`, primes the duration
    * cache, and starts the periodic safety-net sweep. Idempotent.
    *
    * Backfill is the caller's responsibility (via `backfill(fromBlock)`) so
@@ -140,7 +140,10 @@ export class DeliveryCoordinator {
     })) as number;
     this.deliveryDurationSeconds = BigInt(days) * 86_400n;
     this.logger.info(
-      { deliveryDurationDays: days, blameSeller: this.config.delivery.blameSeller },
+      {
+        deliveryDurationDays: days,
+        blameSeller: this.config.delivery.blameSeller,
+      },
       "delivery coordinator starting",
     );
 
@@ -163,14 +166,14 @@ export class DeliveryCoordinator {
       this.chain.publicClient.watchContractEvent({
         address: this.config.futures.address,
         abi: FuturesAbi,
-        eventName: "PositionCreated",
-        onLogs: (logs) => this.onPositionCreated(logs),
+        eventName: "LotCreated",
+        onLogs: (logs) => this.onLotCreated(logs),
       }),
       this.chain.publicClient.watchContractEvent({
         address: this.config.futures.address,
         abi: FuturesAbi,
-        eventName: "PositionClosed",
-        onLogs: (logs) => this.onPositionClosed(logs),
+        eventName: "LotClosed",
+        onLogs: (logs) => this.onLotClosed(logs),
       }),
     );
 
@@ -195,7 +198,10 @@ export class DeliveryCoordinator {
       try {
         u();
       } catch (err) {
-        this.logger.warn({ err }, "delivery: unwatcher threw — continuing shutdown");
+        this.logger.warn(
+          { err },
+          "delivery: unwatcher threw — continuing shutdown",
+        );
       }
     }
     this.unwatchers = [];
@@ -240,7 +246,7 @@ export class DeliveryCoordinator {
   }
 
   /**
-   * Replay `PositionCreated` and `PositionClosed` in `[fromBlock, head]` so
+   * Replay `LotCreated` and `LotClosed` in `[fromBlock, head]` so
    * the in-memory index reflects every position the contract still considers
    * active. Closed positions cancel their `created` entry as the same scan
    * runs in chronological order — no second pass needed.
@@ -251,7 +257,9 @@ export class DeliveryCoordinator {
    */
   async backfill(fromBlock: bigint, chunkSize: bigint): Promise<void> {
     if (chunkSize <= 0n) {
-      throw new Error(`delivery backfill chunkSize must be positive, got ${chunkSize}`);
+      throw new Error(
+        `delivery backfill chunkSize must be positive, got ${chunkSize}`,
+      );
     }
     const head = await this.chain.publicClient.getBlockNumber();
     if (fromBlock > head) {
@@ -282,20 +290,20 @@ export class DeliveryCoordinator {
           this.chain.publicClient.getContractEvents({
             address: this.config.futures.address,
             abi: FuturesAbi,
-            eventName: "PositionCreated",
+            eventName: "LotCreated",
             fromBlock: start,
             toBlock: end,
           }),
           this.chain.publicClient.getContractEvents({
             address: this.config.futures.address,
             abi: FuturesAbi,
-            eventName: "PositionClosed",
+            eventName: "LotClosed",
             fromBlock: start,
             toBlock: end,
           }),
         ]);
-        this.onPositionCreated(created as unknown as readonly Log[]);
-        this.onPositionClosed(closed as unknown as readonly Log[]);
+        this.onLotCreated(created as unknown as readonly Log[]);
+        this.onLotClosed(closed as unknown as readonly Log[]);
       } catch (err) {
         chunkErrors++;
         this.logger.error(
@@ -423,7 +431,8 @@ export class DeliveryCoordinator {
   private findEarliestDeliveryAt(): bigint | undefined {
     let earliest: bigint | undefined;
     for (const pos of this.tracked.values()) {
-      if (earliest === undefined || pos.deliveryAt < earliest) earliest = pos.deliveryAt;
+      if (earliest === undefined || pos.deliveryAt < earliest)
+        earliest = pos.deliveryAt;
     }
     return earliest;
   }
@@ -489,7 +498,11 @@ export class DeliveryCoordinator {
     let added = 0;
     for (let i = 0; i < ids.length; i++) {
       const id = ids[i] as Hex;
-      const pos = positions[i] as { seller: Address; buyer: Address; deliveryAt: bigint };
+      const pos = positions[i] as {
+        seller: Address;
+        buyer: Address;
+        deliveryAt: bigint;
+      };
       // `_removePosition` deletes the slot — `seller == 0` means already
       // closed/settled. Skip without touching state.
       if (pos.seller === zeroAddress) continue;
@@ -659,7 +672,9 @@ export class DeliveryCoordinator {
   private async attemptBatch(positionIds: readonly Hex[]): Promise<void> {
     const blameSeller = this.config.delivery.blameSeller;
 
-    type SimParams = Parameters<typeof this.chain.publicClient.simulateContract>[0];
+    type SimParams = Parameters<
+      typeof this.chain.publicClient.simulateContract
+    >[0];
     const simResults = await Promise.allSettled(
       positionIds.map((id) =>
         this.chain.publicClient.simulateContract({
@@ -683,7 +698,10 @@ export class DeliveryCoordinator {
       const decoded = decodeRecoverableRevert(r.reason);
       if (decoded !== undefined) {
         this.logRecoverableRevert(decoded, id, blameSeller);
-        if (decoded === "PositionNotExists" || decoded === "PositionDeliveryExpired") {
+        if (
+          decoded === "PositionNotExists" ||
+          decoded === "PositionDeliveryExpired"
+        ) {
           this.tracked.delete(id);
           const t = this.timers.get(id);
           if (t !== undefined) {
@@ -742,7 +760,9 @@ export class DeliveryCoordinator {
     }
     if (calldatas.length === 0) return;
 
-    type WriteParams = Parameters<typeof this.chain.walletClient.writeContract>[0];
+    type WriteParams = Parameters<
+      typeof this.chain.walletClient.writeContract
+    >[0];
     let hash: Hex;
     try {
       // `withUnstickRetry` is the auto-recovery for the most common
@@ -823,8 +843,12 @@ export class DeliveryCoordinator {
     const blameSeller = this.config.delivery.blameSeller;
     const args = [positionId, blameSeller] as const;
 
-    type SimParams = Parameters<typeof this.chain.publicClient.simulateContract>[0];
-    type SimReturn = Awaited<ReturnType<typeof this.chain.publicClient.simulateContract>>;
+    type SimParams = Parameters<
+      typeof this.chain.publicClient.simulateContract
+    >[0];
+    type SimReturn = Awaited<
+      ReturnType<typeof this.chain.publicClient.simulateContract>
+    >;
     let request: SimReturn["request"];
     try {
       const sim = (await this.chain.publicClient.simulateContract({
@@ -841,7 +865,10 @@ export class DeliveryCoordinator {
         this.logRecoverableRevert(decoded, positionId, blameSeller);
         // PositionNotExists / PositionDeliveryExpired → contract no longer
         // accepts settlement. Drop from the index so we don't keep retrying.
-        if (decoded === "PositionNotExists" || decoded === "PositionDeliveryExpired") {
+        if (
+          decoded === "PositionNotExists" ||
+          decoded === "PositionDeliveryExpired"
+        ) {
           this.tracked.delete(positionId);
           const t = this.timers.get(positionId);
           if (t !== undefined) {
@@ -855,13 +882,20 @@ export class DeliveryCoordinator {
     }
 
     if (this.config.keeper.dryRun) {
-      this.logger.info({ positionId, blameSeller }, "[dryRun] would call closeDelivery");
+      this.logger.info(
+        { positionId, blameSeller },
+        "[dryRun] would call closeDelivery",
+      );
       this.tracked.delete(positionId);
       return;
     }
 
-    type WriteParams = Parameters<typeof this.chain.walletClient.writeContract>[0];
-    const hash = await this.chain.walletClient.writeContract(request as unknown as WriteParams);
+    type WriteParams = Parameters<
+      typeof this.chain.walletClient.writeContract
+    >[0];
+    const hash = await this.chain.walletClient.writeContract(
+      request as unknown as WriteParams,
+    );
     const receipt = await this.chain.publicClient.waitForTransactionReceipt({
       hash,
       confirmations: this.config.coordinator.confirmationBlocks,
@@ -889,9 +923,9 @@ export class DeliveryCoordinator {
   // same handler is fed both `watchContractEvent` callbacks and historical
   // `getContractEvents` results, so a future ABI rename surfaces here once.
 
-  private onPositionCreated(logs: readonly Log[]): void {
+  private onLotCreated(logs: readonly Log[]): void {
     type Args = {
-      positionId?: Hex;
+      lotId?: Hex;
       seller?: Address;
       buyer?: Address;
       deliveryAt?: bigint;
@@ -901,24 +935,24 @@ export class DeliveryCoordinator {
       const args = (raw as unknown as { args?: Args }).args;
       if (
         args === undefined ||
-        args.positionId === undefined ||
+        args.lotId === undefined ||
         args.deliveryAt === undefined ||
         args.seller === undefined ||
         args.buyer === undefined
       ) {
         continue;
       }
-      const positionId = args.positionId;
+      const lotId = args.lotId;
       // Backfill can replay an event we already indexed (live watcher
-      // overlap). De-dupe on positionId so we don't double-schedule.
-      if (this.tracked.has(positionId)) continue;
+      // overlap). De-dupe on lotId so we don't double-schedule.
+      if (this.tracked.has(lotId)) continue;
       const tracked: TrackedPosition = {
-        positionId,
+        positionId: lotId,
         deliveryAt: args.deliveryAt,
         seller: args.seller,
         buyer: args.buyer,
       };
-      this.tracked.set(positionId, tracked);
+      this.tracked.set(lotId, tracked);
       this.scheduleTimer(tracked);
       added++;
       // INFO per *new* position so the operator sees live activity in
@@ -928,7 +962,7 @@ export class DeliveryCoordinator {
       // the dedupe `continue` above and stay silent.
       this.logger.info(
         {
-          positionId,
+          lotId,
           seller: args.seller,
           buyer: args.buyer,
           deliveryAt: args.deliveryAt.toString(),
@@ -940,17 +974,17 @@ export class DeliveryCoordinator {
     if (added === 0) return;
   }
 
-  private onPositionClosed(logs: readonly Log[]): void {
-    type Args = { positionId?: Hex };
+  private onLotClosed(logs: readonly Log[]): void {
+    type Args = { lotId?: Hex };
     for (const raw of logs) {
       const args = (raw as unknown as { args?: Args }).args;
-      if (args?.positionId === undefined) continue;
-      const positionId = args.positionId;
-      this.tracked.delete(positionId);
-      const t = this.timers.get(positionId);
+      if (args?.lotId === undefined) continue;
+      const lotId = args.lotId;
+      this.tracked.delete(lotId);
+      const t = this.timers.get(lotId);
       if (t !== undefined) {
         clearTimeout(t);
-        this.timers.delete(positionId);
+        this.timers.delete(lotId);
       }
     }
   }
@@ -991,7 +1025,10 @@ export class DeliveryCoordinator {
       );
       return;
     }
-    if (revert === "OnlyValidatorOrPositionParticipant" || revert === "PositionDeliveryExpired") {
+    if (
+      revert === "OnlyValidatorOrPositionParticipant" ||
+      revert === "PositionDeliveryExpired"
+    ) {
       const key = `${revert}:${positionId}`;
       if (this.warned.has(key)) {
         this.logger.debug(
@@ -1033,7 +1070,8 @@ export class DeliveryCoordinator {
     const existing = this.timers.get(pos.positionId);
     if (existing !== undefined) clearTimeout(existing);
 
-    const targetMs = Number(pos.deliveryAt) * 1000 + this.config.delivery.settleDelayMs;
+    const targetMs =
+      Number(pos.deliveryAt) * 1000 + this.config.delivery.settleDelayMs;
     const delayMs = Math.max(0, targetMs - Date.now());
     if (delayMs > MAX_TIMEOUT_MS) {
       // Out of `setTimeout`'s safe range — let the sweep handle it.
@@ -1046,7 +1084,10 @@ export class DeliveryCoordinator {
     // instead of N serial single-id txs racing for the next nonce.
     const timer = setTimeout(() => {
       void this.sweep().catch((err) => {
-        this.logger.error({ err, positionId: pos.positionId }, "delivery: timer-fired sweep threw");
+        this.logger.error(
+          { err, positionId: pos.positionId },
+          "delivery: timer-fired sweep threw",
+        );
       });
     }, delayMs);
     // Don't keep the event loop alive solely for delivery timers — the
@@ -1122,9 +1163,10 @@ function decodeRecoverableRevert(err: unknown): RecoverableRevert | undefined {
  */
 function isTransientTxError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
-  const haystack = `${err.message ?? ""} ${(err as { details?: string }).details ?? ""} ${
-    (err as { shortMessage?: string }).shortMessage ?? ""
-  }`.toLowerCase();
+  const haystack =
+    `${err.message ?? ""} ${(err as { details?: string }).details ?? ""} ${
+      (err as { shortMessage?: string }).shortMessage ?? ""
+    }`.toLowerCase();
   return (
     haystack.includes("replacement transaction underpriced") ||
     haystack.includes("transaction underpriced") ||

@@ -194,7 +194,7 @@ export interface Config {
     /**
      * Cadence of the periodic safety-net sweep over tracked positions. Picks
      * up anything the per-position timers missed (process restarts, missed
-     * `PositionCreated` events, clock skew). Live timers are the hot path.
+     * `LotCreated` events, clock skew). Live timers are the hot path.
      */
     sweepIntervalMs: number;
     /**

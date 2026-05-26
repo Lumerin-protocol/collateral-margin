@@ -1,11 +1,12 @@
 import pino from "pino";
+import pretty from "pino-pretty";
 import {
   createPublicClient,
   createWalletClient,
-  http,
   type Account,
   type Address,
   type PublicClient,
+  type Transport,
   type WalletClient,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -97,38 +98,52 @@ export interface BuildKeeperOverrides {
 
 const LIQUIDATOR_PK = HARDHAT_PRIVATE_KEYS[3];
 
-export function buildKeeper(stack: DeployedStack, overrides: BuildKeeperOverrides = {}): KeeperHarness {
+export function buildKeeper(
+  stack: DeployedStack,
+  overrides: BuildKeeperOverrides = {},
+  logger?: pino.Logger,
+): KeeperHarness {
   const config = buildConfig(stack, overrides);
+  // Reuse the stack's publicClient so every keeper shares ONE transport —
+  // creating a new http() transport per keeper accumulates socket listeners
+  // (undici unpipe events) and triggers MaxListenersExceededWarning in CI.
   const chain = buildChain(
-    stack.rpcUrl,
+    stack.transport,
     overrides.liquidatorPrivateKey ?? LIQUIDATOR_PK,
     stack.addresses.multicall3,
   );
 
-  const logger = pino({
-    level: overrides.logLevel ?? "warn",
-    // The default JSON output makes test failures unreadable when tests
-    // are timing-sensitive. `transport: pino-pretty` would be ideal but
-    // requires the worker thread bootstrap — fine for dev but flaky in CI.
-    // We just turn off the noisy hostname/pid/time fields instead.
-    base: undefined,
-    timestamp: false,
-  });
+  const log =
+    logger ??
+    pino(pretty({ sync: true, colorize: true, minimumLevel: "fatal" }));
 
   const venues: Venue[] = [
-    new PerpsVenue(chain, config, logger),
-    new FuturesVenue(chain, config, logger),
+    new PerpsVenue(chain, config, log),
+    new FuturesVenue(chain, config, log),
   ];
 
-  const notifier = new Notifier(config, logger);
-  const tracker = new ParticipantTracker(chain, config, logger);
+  const notifier = new Notifier(config, log);
+  const tracker = new ParticipantTracker(chain, config, log);
   const queue = new CoordinatorQueue();
-  const planner = new Planner(chain, config, venues, logger);
-  const executor = new CoordinatorExecutor(config, queue, planner, logger);
-  const scheduler = new Scheduler(chain, config, tracker, queue, executor, notifier, logger);
+  const planner = new Planner(chain, config, venues, log);
+  const executor = new CoordinatorExecutor(config, queue, planner, log);
+  const scheduler = new Scheduler(
+    chain,
+    config,
+    tracker,
+    queue,
+    executor,
+    notifier,
+    log,
+  );
   // tokenDecimals flows from the deploy stack so the PriceFeed rescales
   // the BTC/USDC answer to the same units used by the venue contracts.
-  const priceFeed = new PriceFeed(chain, config, logger, stack.config.tokenDecimals);
+  const priceFeed = new PriceFeed(
+    chain,
+    config,
+    log,
+    stack.config.tokenDecimals,
+  );
   const predictor = new PredictiveCoordinator(
     chain,
     config,
@@ -136,7 +151,7 @@ export function buildKeeper(stack: DeployedStack, overrides: BuildKeeperOverride
     queue,
     executor,
     priceFeed,
-    logger,
+    log,
     notifier,
   );
 
@@ -147,9 +162,10 @@ export function buildKeeper(stack: DeployedStack, overrides: BuildKeeperOverride
   // Optional delivery coordinator — opt-in per test. Built but not started;
   // start() below boots it after the live tracker is up so it sees the same
   // event ordering production does.
-  const delivery = overrides.delivery === true
-    ? new DeliveryCoordinator(chain, config, logger)
-    : undefined;
+  const delivery =
+    overrides.delivery === true
+      ? new DeliveryCoordinator(chain, config, log)
+      : undefined;
 
   let started = false;
   return {
@@ -188,7 +204,10 @@ export function buildKeeper(stack: DeployedStack, overrides: BuildKeeperOverride
   };
 }
 
-function buildConfig(stack: DeployedStack, overrides: BuildKeeperOverrides): Config {
+function buildConfig(
+  stack: DeployedStack,
+  overrides: BuildKeeperOverrides,
+): Config {
   return {
     chain: {
       network: "hardhat",
@@ -268,11 +287,10 @@ function buildConfig(stack: DeployedStack, overrides: BuildKeeperOverrides): Con
  *      uses it for batched reads, so it's a hard requirement.
  */
 function buildChain(
-  rpcUrl: string,
+  transport: Transport,
   privateKey: `0x${string}`,
   multicall3Address: `0x${string}`,
 ): Chain {
-  const transport = http(rpcUrl);
   const account: Account = privateKeyToAccount(privateKey);
   const chainWithMulticall = {
     ...hardhat,
@@ -281,6 +299,9 @@ function buildChain(
       multicall3: { address: multicall3Address },
     },
   };
+  // Derive a new publicClient from the same transport so watchContractEvent
+  // polling reuses the stack's shared connection pool. The multicall3 config
+  // is patched onto the chain definition; the transport is inherited.
   const publicClient: PublicClient = createPublicClient({
     chain: chainWithMulticall,
     transport,

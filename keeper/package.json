@@ -16,7 +16,7 @@
     "test:watch": "pnpm node --test --watch --test-concurrency=1 'tests/**/*.test.ts'",
     "pretest:integration": "pnpm node ./scripts/compile-siblings.ts",
     "test:integration": "pnpm node --test --test-force-exit --test-concurrency=1 'tests/integration/**/*.test.ts'",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsgo --noEmit",
     "docker": "docker build -t collateral-margin-keeper ."
   },
   "dependencies": {

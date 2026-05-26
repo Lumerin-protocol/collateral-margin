@@ -1,4 +1,10 @@
-import { getAddress, type Address, type Hex, type Log, zeroAddress } from "viem";
+import {
+  getAddress,
+  type Address,
+  type Hex,
+  type Log,
+  zeroAddress,
+} from "viem";
 import type pino from "pino";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
@@ -12,7 +18,7 @@ import { FuturesAbi as futuresAbi } from "futures-marketplace/Futures.ts";
  *
  *   - Vault Deposited / Withdrawn / Transfer  → adds users on first deposit
  *   - Perps OrderCreated / OrderMatched / PositionLiquidated
- *   - Futures OrderCreated / PositionCreated / PositionLiquidated
+ *   - Futures OrderCreated / LotCreated / LotLiquidated
  *
  * On startup, `backfill(fromBlock)` scans the same six events historically
  * via `getLogs` so the cold-start window doesn't miss participants who
@@ -58,7 +64,10 @@ export class ParticipantTracker {
       this.logger.info("discoveryMode=webhook — RPC subscriptions disabled");
       return;
     }
-    this.logger.info({ mode: this.config.chain.discoveryMode }, "starting RPC event subscriptions");
+    this.logger.info(
+      { mode: this.config.chain.discoveryMode },
+      "starting RPC event subscriptions",
+    );
 
     // Each `watchContractEvent` returns an unwatcher fn; we call them all on
     // stop(). Vault Transfer covers both `from` and `to` so we don't need to
@@ -97,8 +106,8 @@ export class ParticipantTracker {
       this.chain.publicClient.watchContractEvent({
         address: this.config.futures.address,
         abi: futuresAbi,
-        eventName: "PositionCreated",
-        onLogs: (logs) => this.onFuturesPositionCreated(logs),
+        eventName: "LotCreated",
+        onLogs: (logs) => this.onFuturesLotCreated(logs),
       }),
     );
   }
@@ -125,7 +134,7 @@ export class ParticipantTracker {
    * dedupes on checksum.
    *
    * Futures has no `getUsersWithPositions` view on-chain, so historical
-   * `OrderCreated` / `PositionCreated` logs are the only source of cold-
+   * `OrderCreated` / `LotCreated` logs are the only source of cold-
    * start participants. Perps has the view but we use logs uniformly so a
    * single backfill mechanism covers both venues (and the vault).
    *
@@ -236,16 +245,16 @@ export class ParticipantTracker {
         },
       },
       {
-        label: "futures.PositionCreated",
+        label: "futures.LotCreated",
         run: async (from, to) => {
           const logs = await this.chain.publicClient.getContractEvents({
             address: this.config.futures.address,
             abi: futuresAbi,
-            eventName: "PositionCreated",
+            eventName: "LotCreated",
             fromBlock: from,
             toBlock: to,
           });
-          this.onFuturesPositionCreated(logs as unknown as readonly Log[]);
+          this.onFuturesLotCreated(logs as unknown as readonly Log[]);
         },
       },
     ];
@@ -253,7 +262,8 @@ export class ParticipantTracker {
     for (const source of sources) {
       let chunkErrors = 0;
       for (let start = fromBlock; start <= head; start += chunkSize) {
-        const end = start + chunkSize - 1n > head ? head : start + chunkSize - 1n;
+        const end =
+          start + chunkSize - 1n > head ? head : start + chunkSize - 1n;
         try {
           await source.run(start, end);
         } catch (err) {
@@ -292,7 +302,10 @@ export class ParticipantTracker {
     const checksummed = getAddress(user);
     if (this.users.has(checksummed)) return false;
     this.users.add(checksummed);
-    this.logger.debug({ user: checksummed, total: this.users.size }, "tracker.add");
+    this.logger.debug(
+      { user: checksummed, total: this.users.size },
+      "tracker.add",
+    );
     for (const l of this.addedListeners) {
       try {
         l(checksummed);
@@ -340,7 +353,7 @@ export class ParticipantTracker {
    * Subscribe to "user state may have changed" events. Fires for the same
    * triggers `onAdded` does, plus any time a tracked user's state could
    * have shifted (vault transfer in/out, perps OrderCreated/Matched,
-   * futures OrderCreated/PositionCreated).
+   * futures OrderCreated/LotCreated).
    *
    * The predictive layer uses this to invalidate and rebuild a user's
    * cached MM snapshot. Listeners must tolerate being called for users
@@ -409,7 +422,8 @@ export class ParticipantTracker {
     for (const raw of logs) {
       const args = (raw as unknown as { args?: Args }).args;
       if (args === undefined) continue;
-      if (args.from !== undefined && args.from !== zeroAddress) this.touch(args.from);
+      if (args.from !== undefined && args.from !== zeroAddress)
+        this.touch(args.from);
       if (args.to !== undefined && args.to !== zeroAddress) this.touch(args.to);
     }
   }
@@ -420,7 +434,12 @@ export class ParticipantTracker {
    * NOTE: the perps event field is `participant`, not `user`.
    */
   private onPerpsOrderCreated(logs: readonly Log[]): void {
-    type Args = { orderId?: Hex; participant?: Address; price?: bigint; quantity?: bigint };
+    type Args = {
+      orderId?: Hex;
+      participant?: Address;
+      price?: bigint;
+      quantity?: bigint;
+    };
     for (const raw of logs) {
       const args = (raw as unknown as { args?: Args }).args;
       if (args?.participant !== undefined) this.touch(args.participant);
@@ -455,11 +474,11 @@ export class ParticipantTracker {
   }
 
   /**
-   * `PositionCreated(bytes32 indexed positionId, address indexed seller,
-   *                  address indexed buyer, uint256 sellPricePerDay, ...)`.
+   * `LotCreated(bytes32 indexed lotId, address indexed seller,
+   *            address indexed buyer, uint256 pricePerDay, uint256 deliveryAt, ...)`.
    */
-  private onFuturesPositionCreated(logs: readonly Log[]): void {
-    type Args = { positionId?: Hex; seller?: Address; buyer?: Address };
+  private onFuturesLotCreated(logs: readonly Log[]): void {
+    type Args = { lotId?: Hex; seller?: Address; buyer?: Address };
     for (const raw of logs) {
       const args = (raw as unknown as { args?: Args }).args;
       if (args === undefined) continue;
