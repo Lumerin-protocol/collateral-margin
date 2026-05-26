@@ -22,8 +22,7 @@
     "timing",
     "health",
     "readBatchSize",
-    "cancelBatchSize",
-    "createBatchSize"
+    "writeBatchSize"
   ],
   "properties": {
     "nodeEnv": {
@@ -901,7 +900,7 @@
       "description": "Maximum number of contract calls bundled into a single Multicall3 read. Calls are chunked transparently; lower values reduce RPC timeouts.",
       "default": 10
     },
-    "cancelBatchSize": {
+    "writeBatchSize": {
       "anyOf": [
         {
           "minimum": 1,
@@ -913,23 +912,8 @@
           "description": "Environment variable interpolation (resolved at startup)"
         }
       ],
-      "description": "Maximum cancelOrder calls per cancellation batch. Perps has no batch cancel — each cancel is one call.",
-      "default": 30
-    },
-    "createBatchSize": {
-      "anyOf": [
-        {
-          "minimum": 1,
-          "type": "number"
-        },
-        {
-          "type": "string",
-          "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
-          "description": "Environment variable interpolation (resolved at startup)"
-        }
-      ],
-      "description": "Maximum createOrder calls per creation batch. Perps has no batch create — each create is one call.",
-      "default": 30
+      "description": "Maximum qty per write batch. The adapter groups cancels into chunks of this size before sending.",
+      "default": 20
     }
   }
 }

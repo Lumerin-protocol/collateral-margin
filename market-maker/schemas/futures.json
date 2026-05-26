@@ -22,8 +22,7 @@
     "timing",
     "health",
     "readBatchSize",
-    "cancelBatchSize",
-    "createBatchSize"
+    "writeBatchSize"
   ],
   "properties": {
     "nodeEnv": {
@@ -924,7 +923,7 @@
       "description": "Maximum number of contract calls bundled into a single Multicall3 read. Calls are chunked transparently; lower values reduce RPC timeouts on busy providers at the cost of more round-trips.",
       "default": 10
     },
-    "cancelBatchSize": {
+    "writeBatchSize": {
       "anyOf": [
         {
           "minimum": 1,
@@ -936,23 +935,8 @@
           "description": "Environment variable interpolation (resolved at startup)"
         }
       ],
-      "description": "Maximum closeOrder calls per cancellation batch. The adapter groups cancels into chunks of this size before sending.",
+      "description": "Maximum qty per write batch. The adapter groups cancels into chunks of this size before sending.",
       "default": 20
-    },
-    "createBatchSize": {
-      "anyOf": [
-        {
-          "minimum": 1,
-          "type": "number"
-        },
-        {
-          "type": "string",
-          "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
-          "description": "Environment variable interpolation (resolved at startup)"
-        }
-      ],
-      "description": "Maximum orders per createOrders call. The adapter packs creates into batches of this size.",
-      "default": 10
     }
   }
 }
