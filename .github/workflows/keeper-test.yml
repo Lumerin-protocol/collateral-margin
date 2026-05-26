@@ -74,6 +74,7 @@ jobs:
         with:
           repository: Lumerin-protocol/futures-marketplace
           ref: dev
+          path: futures-marketplace
 
       - name: List folders
         working-directory: ../../
