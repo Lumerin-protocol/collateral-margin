@@ -1,9 +1,9 @@
 ################################################################################
 # GITHUB ACTIONS IAM ROLE AND POLICIES
 ################################################################################
-# Bare-minimum IAM for the deploy-col-mar-mm.yml workflow:
+# Bare-minimum IAM for deploy-col-mar-mm.yml and deploy-keeper.yml:
 #   - register new ECS task definitions
-#   - update both perps + futures services to point at the new revisions
+#   - update ECS services to point at the new revisions
 #   - PassRole the existing bedrock-foundation-role into ECS tasks
 #
 # All runtime config (env vars, secrets, contract addresses, RPC keys) is
@@ -145,6 +145,66 @@ resource "aws_iam_role_policy" "github_ecs_update_futures_mm" {
         ]
         Resource = [
           aws_ecs_service.futures_mm_use1[count.index].id
+        ]
+      },
+      {
+        Sid    = "TaskDefinitionOperations"
+        Effect = "Allow"
+        Action = [
+          "ecs:DescribeTaskDefinition",
+          "ecs:RegisterTaskDefinition"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "PassRoleToECS"
+        Effect = "Allow"
+        Action = "iam:PassRole"
+        Resource = [
+          var.ecs_task_role_arn,
+          local.titanio_role_arn
+        ]
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "ecs-tasks.amazonaws.com"
+          }
+        }
+      },
+      {
+        Sid    = "ReadECSCluster"
+        Effect = "Allow"
+        Action = [
+          "ecs:ListServices",
+          "ecs:DescribeClusters"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+################################################################################
+# ECS UPDATE POLICY - Unified margin keeper service
+################################################################################
+
+resource "aws_iam_role_policy" "github_ecs_update_keeper" {
+  count    = var.create_core && var.keeper_service.create ? 1 : 0
+  provider = aws.use1
+  name     = "ecs-update-${local.shortname}-keeper"
+  role     = aws_iam_role.github_actions_collateral_margin[count.index].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "UpdateKeeperECSService"
+        Effect = "Allow"
+        Action = [
+          "ecs:UpdateService",
+          "ecs:DescribeServices"
+        ]
+        Resource = [
+          aws_ecs_service.keeper_use1[count.index].id
         ]
       },
       {

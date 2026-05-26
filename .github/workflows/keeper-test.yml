@@ -22,63 +22,60 @@ defaults:
   run:
     shell: bash
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout collateral-margin
-        uses: actions/checkout@v6
-        with:
-          path: collateral-margin
+        uses: actions/checkout@v4
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
-          package_json_file: collateral-margin/keeper/package.json
+          package_json_file: keeper/package.json
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: "pnpm"
-          cache-dependency-path: collateral-margin/keeper/pnpm-lock.yaml
+          cache-dependency-path: keeper/pnpm-lock.yaml
 
       - name: Install keeper dependencies
-        working-directory: collateral-margin/keeper
+        working-directory: ./keeper
         run: pnpm install --frozen-lockfile
 
       - name: TypeCheck
-        working-directory: collateral-margin/keeper
+        working-directory: ./keeper
         run: pnpm typecheck
 
       - name: Unit tests
-        working-directory: collateral-margin/keeper
+        working-directory: ./keeper
         run: pnpm test
 
       - name: Install contracts dependencies
-        working-directory: collateral-margin/contracts
+        working-directory: ./contracts
         run: pnpm install --frozen-lockfile
 
-      - name: Checkout perps
-        uses: actions/checkout@v6
+      - name: Checkout derivatives-marketplace (perps contracts)
+        uses: actions/checkout@v4
         with:
           repository: Lumerin-protocol/derivatives-marketplace
           ref: dev
           path: perps
 
       - name: Checkout futures-marketplace
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           repository: Lumerin-protocol/futures-marketplace
           ref: dev
           path: futures-marketplace
-
-      - name: List folders
-        working-directory: ../../
-        run: find . -maxdepth 5 -type d | sort
 
       - name: Install perps contracts dependencies
         working-directory: perps/contracts
@@ -88,10 +85,9 @@ jobs:
         working-directory: futures-marketplace/contracts
         run: pnpm install --frozen-lockfile
 
-      - name: Compile siblings
-        working-directory: collateral-margin/keeper
-        run: pnpm pretest:integration
-
       - name: Integration tests
-        working-directory: collateral-margin/keeper
+        working-directory: ./keeper
+        env:
+          PERPS_REPO: ${{ github.workspace }}/perps/contracts
+          FUTURES_REPO: ${{ github.workspace }}/futures-marketplace/contracts
         run: pnpm test:integration

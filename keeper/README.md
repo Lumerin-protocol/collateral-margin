@@ -178,25 +178,29 @@ pre-cutover validation step: point dry-run at the production RPC for a few
 hours and grep the logs for `[dryRun] would send liquidate tx` to confirm
 the keeper would have triggered exactly when the legacy systems did.
 
-## Cutover plan
+## AWS deployment
 
-This package replaces both `futures-marketplace/margin-call/` (Lambda) and
-`perps/keeper/` (single-venue keeper). The contracts in Phase 0 added
-permissionless `liquidate*` entry points alongside the legacy paths so
-cutover is staged:
+Infrastructure: `.bedrock/.terragrunt/06_col_mar_keeper_svc.tf` (single ECS service
+`svc-col-mar-keeper-{dev|stg|lmn}` on `ecs-derivatives-marketplace-*`, health at
+`https://keeper.{env}.hashpower.exchange/health`).
 
-1. **Deploy** with `DRY_RUN=true` against production RPC. Verify alert
-   webhook + healthcheck. Compare planned actions against the live Lambda /
-   keeper logs for at least one liquidation cycle.
-2. **Promote**: flip `DRY_RUN=false`. Leave the legacy systems running for a
-   day as a fallback — the contracts dedupe (you cannot liquidate the same
-   underwater account twice).
-3. **Decommission** the legacy `margin-call` Lambda and `perps/keeper`
-   service. Re-balance alert routing to point only at this keeper.
-4. **Cleanup** (separate PR): the futures contract's `marginCall` (validator-
-   only) entry point was preserved during Phase 0b for backward
-   compatibility. Once this keeper owns production traffic, that path can be
-   removed in a follow-up upgrade — see the plan's Phase 4.
+CI/CD: `.github/workflows/deploy-keeper.yml` — see the workflow header for required
+GitHub Environment variables and secrets (`LIQUIDATOR_PRIVATE_KEY`, `VAULT_ADDRESS`,
+`PME_ADDRESS`, oracle feeds, etc.).
+
+## Cutover runbook
+
+Replaces `derivatives-marketplace` `svc-perps-keeper-*` (no futures liquidation
+lambda in current bedrock).
+
+1. **derivatives-marketplace:** `perpskeeper_service.create = false` in bedrock
+   tfvars → `terragrunt apply` (removes legacy keeper ECS + `keeper.*` DNS).
+2. **collateral-margin:** `keeper_service.create = true` (dev) → `terragrunt apply`.
+3. **GitHub `dev` environment:** add keeper vars/secrets (copy liquidator key from
+   `perps-keeper-secrets-v3-dev` in AWS SM). Set `DRY_RUN=true` initially.
+4. **Merge / push** `dev` → `deploy-keeper` rolls the image and scales the service.
+5. Verify `/health`, logs, dry-run liquidation lines; then `DRY_RUN=false`.
+6. Repeat for stg/main (`keeper_service.create = true` + populate GH environments).
 
 ## Test surface
 

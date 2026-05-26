@@ -28,6 +28,15 @@ futures_mm_service = {
   task_ram        = 512
 }
 
+# Unified liquidation keeper (replaces derivatives svc-perps-keeper-dev).
+keeper_service = {
+  create          = true
+  task_worker_qty = 1
+  cnt_port        = 3000
+  task_cpu        = 256
+  task_ram        = 512
+}
+
 ########################################
 # Account metadata
 ########################################

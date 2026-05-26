@@ -63,6 +63,32 @@ variable "futures_mm_service" {
 }
 
 ################################################################################
+# UNIFIED MARGIN KEEPER - SCAFFOLDING ONLY
+################################################################################
+# Single ECS service for coordinated perps + futures liquidation (replaces
+# derivatives-marketplace svc-perps-keeper-*). Runtime config is owned by
+# deploy-keeper.yml via GitHub Variables / Secrets.
+################################################################################
+
+variable "keeper_service" {
+  description = "Unified collateral-margin keeper ECS service scaffolding"
+  type = object({
+    create          = bool
+    task_worker_qty = number
+    cnt_port        = number
+    task_cpu        = number
+    task_ram        = number
+  })
+  default = {
+    create          = false
+    task_worker_qty = 1
+    cnt_port        = 3000
+    task_cpu        = 256
+    task_ram        = 512
+  }
+}
+
+################################################################################
 # Common Account Variables
 ################################################################################
 variable "account_shortname" { description = "Code describing customer and lifecycle. E.g., titanio-dev, titanio-stg, titanio-lmn" }
