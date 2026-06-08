@@ -18,6 +18,13 @@ import {IPoints} from "./interfaces/IPoints.sol";
 ///           - self-match exclusion (`maker == taker` mints nothing),
 ///           - per-side minimum fee threshold (dust trades earn nothing),
 ///           - the positive-fees invariant enforced by the venue config.
+///
+///         OPERATIONAL ORDERING — wind down before `finalize()`: once the POINTS token is
+///         `finalize()`d, `mint` reverts permanently. Each venue's `onFill` / `onLiquidation`
+///         routes through this hook into `points.mint`, so the hook MUST be unplugged from
+///         every venue (`setHook(address(0))` on perps and futures) BEFORE calling
+///         `Points.finalize()`. Finalizing while a venue still points here would make every
+///         fill and liquidation revert into the hook on each `mint`.
 contract PointsHook is IPointsHook, AccessControl {
     /// @notice Granted only to the venue contracts allowed to drive accrual.
     bytes32 public constant HOOK_CALLER_ROLE = keccak256("HOOK_CALLER_ROLE");

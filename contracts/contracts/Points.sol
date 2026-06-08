@@ -123,6 +123,10 @@ contract Points is IERC20, IERC20Metadata, IPoints, AccessControl {
     // ── Lifecycle ────────────────────────────────────────────────────────────
 
     /// @notice Permanently freeze minting and open redemption. Admin-only, one-way.
+    /// @dev OPERATIONAL ORDERING: unplug the hook from every venue first
+    ///      (`setHook(address(0))` on perps and futures). After finalize, `mint` reverts
+    ///      forever, so any venue still routing fills/liquidations through `PointsHook` →
+    ///      `mint` would revert on every trade and liquidation. Unplug, then finalize.
     function finalize() external onlyRole(DEFAULT_ADMIN_ROLE) notFinalized {
         finalized = true;
         emit Finalized();
