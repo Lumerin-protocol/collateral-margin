@@ -1,0 +1,86 @@
+# Use subgraph.template.yaml to add changes to the subgraph.yaml file.
+# Variables are substituted via envsubst from environment variables.
+#
+# Hard precondition (design §7): the POINTS token, PointsHook and PointsRedeemer
+# must all be deployed on the SAME network with finalized addresses. A single
+# subgraph cannot index across networks.
+specVersion: 1.3.0
+indexerHints:
+  prune: auto
+schema:
+  file: ./schema.graphql
+dataSources:
+  # ── Canonical mirror: HP balances from Transfer (mint/burn) ───────────────
+  - kind: ethereum
+    name: Points
+    network: "${NETWORK}"
+    source:
+      address: "${POINTS_ADDRESS}"
+      startBlock: ${POINTS_START_BLOCK}
+      abi: Points
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - PointsProgram
+        - UserPoints
+      abis:
+        - name: Points
+          file: ../contracts/abi/Points.json
+      eventHandlers:
+        - event: Transfer(indexed address,indexed address,uint256)
+          handler: handleTransfer
+        - event: Finalized()
+          handler: handleFinalized
+      file: ./src/points.ts
+
+  # ── Category breakdown: maker / taker / keeper from the hook ───────────────
+  - kind: ethereum
+    name: PointsHook
+    network: "${NETWORK}"
+    source:
+      address: "${HOOK_ADDRESS}"
+      startBlock: ${HOOK_START_BLOCK}
+      abi: PointsHook
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - PointsProgram
+        - UserPoints
+        - PointsMint
+      abis:
+        - name: PointsHook
+          file: ../contracts/abi/PointsHook.json
+      eventHandlers:
+        - event: FillPointsMinted(indexed address,uint256,bool)
+          handler: handleFillPointsMinted
+        - event: KeeperPointsMinted(indexed address,uint256)
+          handler: handleKeeperPointsMinted
+      file: ./src/points.ts
+
+  # ── Redemption: POINTS → GOV swaps ────────────────────────────────────────
+  - kind: ethereum
+    name: PointsRedeemer
+    network: "${NETWORK}"
+    source:
+      address: "${REDEEMER_ADDRESS}"
+      startBlock: ${REDEEMER_START_BLOCK}
+      abi: PointsRedeemer
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - PointsProgram
+        - UserPoints
+        - PointsRedemption
+      abis:
+        - name: PointsRedeemer
+          file: ../contracts/abi/PointsRedeemer.json
+      eventHandlers:
+        - event: Swapped(indexed address,uint256,uint256,uint256,uint256)
+          handler: handleSwapped
+      file: ./src/points.ts

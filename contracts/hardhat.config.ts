@@ -14,6 +14,11 @@ export default defineConfig({
       "ICollateralVault",
       "PortfolioMarginEngine",
       "IPortfolioMarginEngine",
+      "Points",
+      "IPoints",
+      "PointsHook",
+      "IPointsHook",
+      "PointsRedeemer",
     ],
   },
   paths: {
