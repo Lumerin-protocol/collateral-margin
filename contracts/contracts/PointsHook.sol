@@ -53,8 +53,6 @@ contract PointsHook is IPointsHook, AccessControl {
     event WeightsSet(uint256 wMaker, uint256 wTaker);
     event KeeperPointsSet(uint256 keeperPoints);
     event MinFeeSet(uint256 minFee);
-    event FillPointsMinted(address indexed account, uint256 amount, bool isMaker);
-    event KeeperPointsMinted(address indexed liquidator, uint256 amount);
 
     /// @param _points     The POINTS token (this hook must be set as its `minter`).
     /// @param admin        Receives `DEFAULT_ADMIN_ROLE` (parameter tuning + role grants).
@@ -90,12 +88,12 @@ contract PointsHook is IPointsHook, AccessControl {
         // Self-match exclusion: a wallet trading with itself earns nothing.
         if (maker == taker) return;
 
-        // Taker side.
+        // Taker side. The mint emits POINTS `Transfer(0x0 -> taker)`, which the
+        // leaderboard subgraph indexes — no separate accrual event is needed.
         if (takerFee >= minFee) {
             uint256 amount = (notional * wTaker) / WEIGHT_SCALE;
             if (amount > 0) {
                 points.mint(taker, amount);
-                emit FillPointsMinted(taker, amount, false);
             }
         }
 
@@ -105,7 +103,6 @@ contract PointsHook is IPointsHook, AccessControl {
             uint256 amount = (notional * wMaker) / WEIGHT_SCALE;
             if (amount > 0) {
                 points.mint(maker, amount);
-                emit FillPointsMinted(maker, amount, true);
             }
         }
     }
@@ -119,7 +116,6 @@ contract PointsHook is IPointsHook, AccessControl {
         uint256 amount = keeperPoints;
         if (amount > 0) {
             points.mint(liquidator, amount);
-            emit KeeperPointsMinted(liquidator, amount);
         }
     }
 

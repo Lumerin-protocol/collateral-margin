@@ -99,7 +99,7 @@ function burn(address from, uint256 amount) external onlyRole(BURNER_ROLE) { /* 
 
 - **Non-upgradeable, plain deploy.** Holds `MINTER_ROLE` on `POINTS`. Contains all the points math and weight parameters. Not a fund-holding contract.
 - Implements `IPointsHook` with two entry points called by the venues:
-  - `onFill(maker, taker, notional, makerFee, takerFee)` — called by perps `_executeMatch` and futures lot creation. Skips entirely on a self-match (`maker == taker`); otherwise mints `notional * w_taker / WEIGHT_SCALE` to the taker when `takerFee >= minFee`, and `notional * w_maker / WEIGHT_SCALE` to the maker when `makerFee > 0 && makerFee >= minFee` (a maker rebate earns nothing). Emits `FillPointsMinted(account, amount, isMaker)` per side. Note: one perps `createOrder` can walk the book and match against N resting maker orders in a single transaction, producing N `onFill` calls — so minting is O(matched levels) per taker transaction.
+  - `onFill(maker, taker, notional, makerFee, takerFee)` — called by perps `_executeMatch` and futures lot creation. Skips entirely on a self-match (`maker == taker`); otherwise mints `notional * w_taker / WEIGHT_SCALE` to the taker when `takerFee >= minFee`, and `notional * w_maker / WEIGHT_SCALE` to the maker when `makerFee > 0 && makerFee >= minFee` (a maker rebate earns nothing). Each side mints via `points.mint`, which emits the POINTS `Transfer(0x0 -> account)` the leaderboard subgraph indexes; the hook emits no separate accrual event. Note: one perps `createOrder` can walk the book and match against N resting maker orders in a single transaction, producing N `onFill` calls — so minting is O(matched levels) per taker transaction.
   - `onLiquidation(liquidator, fee)` — called by perps `liquidatePosition` and futures `liquidatePosition` / `liquidateOrder`. Mints flat keeper points to the liquidator.
 - **Caller authorization**: the hook checks that the caller holds a `HOOK_CALLER_ROLE`, granted only to the two venue contracts, so arbitrary addresses cannot mint points by calling the hook directly.
 - **Retuning**: changing `w_maker`, `w_taker`, or the keeper rate is done by deploying a new `PointsHook` and calling `setHook()` on each venue. No proxy is required because the hook is designed to be **replaced**, not upgraded.
@@ -122,19 +122,33 @@ interface IPointsHook {
 
 Venue changes are deliberately minimal and live in the venue repos, not here:
 
-- Each venue stores a `hook` address with a `setHook(address)` owner setter.
-- Each venue adds call sites that invoke the hook with failure isolation:
+- Each venue stores an `IPointsHook hook` address (appended at the end of storage for upgrade
+  safety) with a `setHook(address)` owner setter that emits `HookUpdated`.
+- Each venue adds call sites that invoke the hook directly, skipping when it is unset:
 
 ```solidity
-if (hook != address(0)) {
-    try IPointsHook(hook).onFill(maker, taker, notional, makerFee, takerFee) {}
-    catch {}
+if (address(hook) != address(0)) {
+    hook.onFill(maker, taker, notional, makerFee, takerFee);
 }
 ```
 
-- The `try/catch` is the **failure isolation**: a bug or revert in the points hook must never block a fill, a liquidation, or any trading-critical path, and must never let points logic DoS the matching engine.
+- **No `try/catch` isolation.** An earlier draft wrapped the call so a points-side revert could
+  never block trading, but the call is intentionally *not* isolated. Rationale:
+  - The hook is a small, owner-controlled, non-upgradeable contract; if it ever misbehaves it is
+    unplugged instantly with `setHook(address(0))` — no upgrade, no migration.
+  - `try/catch` interacts badly with `eth_estimateGas`: because the catch swallows an
+    out-of-gas inner call, estimation settles on the gas level where the hook no-ops, so points
+    would silently fail to mint unless callers always added a gas buffer.
+  - Failing loudly surfaces misconfiguration (e.g. the venue missing `HOOK_CALLER_ROLE`, or the
+    POINTS token already `finalize()`d) instead of silently dropping points.
+- **Operational consequence**: because a reverting hook *does* block fills and liquidations, the
+  hook MUST be unplugged (`setHook(address(0))` on every venue) BEFORE `Points.finalize()` — after
+  finalize, `mint` reverts and would otherwise brick trading. The venue (proxy) must also hold
+  `HOOK_CALLER_ROLE` on the hook before it is plugged in.
 - Setting `hook = address(0)` disables points entirely, with no contract upgrade.
 - The only thing the venue repos import from collateral-margin is the `IPointsHook` interface.
+  Each venue depends on collateral-margin via `package.json` and adds `Points.sol` / `PointsHook.sol`
+  to its Hardhat `npmFilesToBuild` so the real contracts (not mocks) are used in integration tests.
 
 ### 5.4 In-protocol anti-gaming
 
@@ -163,18 +177,17 @@ If a later program replaces POINTS with real GOV, a migration contract similar t
 The `Points` balance is the **canonical** ledger. The indexer is not the source of truth; it serves two purposes:
 
 1. **Live leaderboard** — the primary user-facing surface. A `UserPoints` entity, queryable by any frontend with `orderBy: total`.
-2. **Mirror** — keeps the leaderboard in sync with on-chain events, so it always reflects canonical balances, with a per-category breakdown (maker / taker / keeper) derived from the hook's own events.
+2. **Mirror** — keeps the leaderboard in sync with on-chain events, so it always reflects canonical balances. Every mint is also counted (`mintCount`) and recorded as a `PointsMint`.
 
 Design — the subgraph indexes **the points contracts only**, not the venue contracts:
 
-- **Three data sources**, all in collateral-margin and deployable on a single chain:
-  - `Points` — `Transfer` (mint/burn → `total`, `totalSupply`) and `Finalized` (program lifecycle).
-  - `PointsHook` — `FillPointsMinted(account, amount, isMaker)` and `KeeperPointsMinted(liquidator, amount)`. These carry the **category breakdown** (maker / taker / keeper) directly, so the subgraph never re-derives the points formula.
+- **Two data sources**, both in collateral-margin and deployable on a single chain:
+  - `Points` — `Transfer` (mint/burn → `total`, `totalSupply`, `mintCount`, `PointsMint`) and `Finalized` (program lifecycle).
   - `PointsRedeemer` — `RedemptionEnabled` and `Swapped` (burn + GOV payout split), feeding `PointsRedemption` entities.
-- **Why hook events, not venue events**: the hook is the single source of truth for the formula, and it emits exactly the amount it minted. Indexing the hook avoids re-implementing maker/taker math in AssemblyScript and avoids drifting from the contract when weights change. It also removes the cross-network problem — there is one hook regardless of how many venues call it.
+- **Why no hook data source**: every accrual ends in `points.mint(...)`, which emits a POINTS `Transfer(0x0 -> account)`. The subgraph mirrors that one stream — counting each mint and recording a `PointsMint` row — so the hook needs no dedicated accrual events and is not indexed. This avoids re-implementing maker/taker math in AssemblyScript and avoids drifting from the contract when weights change, since the subgraph never re-derives the formula. It also removes the cross-network problem — there is one POINTS token regardless of how many venues mint through it. The cost is that the maker/taker/keeper category split is no longer surfaced on-chain; it was dropped as non-essential analytics (see [`points-system-improvements.md`](./points-system-improvements.md) if it is ever needed).
 - **Dedicated subgraph**, not an extension of the production accounting subgraph. The points formula is volatile (it changes when the hook is redeployed); keeping it separate lets it re-sync independently of the accounting subgraph that keepers and the market maker depend on.
-- **Mirror exactness**: `total` is reconciled from `Points.Transfer`, while the maker/taker/keeper split comes from the hook events — the two are asserted to agree in the subgraph tests.
-- Entities: `PointsProgram` (totals + finalized flag), `UserPoints` (`total`, `makerPoints`, `takerPoints`, `keeperPoints`), `PointsMint`, `PointsCategory`, `PointsRedemption`.
+- **Mirror exactness**: `total` / `totalSupply` and `mintCount` are reconciled directly from `Points.Transfer` — asserted in the subgraph tests.
+- Entities: `PointsProgram` (totals, `mintCount`, finalized flag), `UserPoints` (`total`, `totalEarned`, `mintCount`), `PointsMint`, `PointsRedemption`.
 
 ## 8. Accepted tradeoffs
 
@@ -196,12 +209,12 @@ Everything incentives-related lives in **collateral-margin**, the shared infrast
 - **Design document**: `collateral-margin/docs/points-system-design.md` (this file); deferred features in `collateral-margin/docs/points-system-improvements.md`.
 - **Contracts** (`Points`, `PointsHook`, `PointsRedeemer`, plus `GovTokenMock` / `VestingEscrowMock` for tests): `collateral-margin/contracts/contracts/`, with tests in `collateral-margin/contracts/tests/` and a `deploy-points.ts` script (`pnpm deploy:points`).
 - **Points subgraph** (leaderboard + mirror): `collateral-margin/points-indexer/`, separate from the existing accounting subgraph.
-- **Venue wiring** (the `hook` address + `setHook` setter + the two `try/catch` call sites + `HOOK_CALLER_ROLE` grant): in the venue repos `perps/` and `futures-marketplace/`. They import only the `IPointsHook` interface from collateral-margin.
+- **Venue wiring** (the `hook` address + `setHook` setter + the `onFill` / `onLiquidation` call sites + `HOOK_CALLER_ROLE` grant): in the venue repos `perps/` and `futures-marketplace/`. They import only the `IPointsHook` interface from collateral-margin.
 - **GOV / `VestingEscrow`**: unchanged, in the `governance-token` repo. `PointsRedeemer` calls into the existing `VestingEscrow.lockFor`.
 
 ### Upstream coupling mitigations
 
-Because the points subgraph indexes the **points contracts only** (`Points`, `PointsHook`, `PointsRedeemer`) and not the UUPS-upgradeable venue contracts, it does not depend on venue event signatures — a venue upgrade cannot silently break the leaderboard. The only coupling is the `IPointsHook` interface the venues import; that surface is small and pinned. Remaining hygiene:
+Because the points subgraph indexes the **points contracts only** (`Points`, `PointsRedeemer`) and not the UUPS-upgradeable venue contracts, it does not depend on venue event signatures — a venue upgrade cannot silently break the leaderboard. The only coupling is the `IPointsHook` interface the venues import; that surface is small and pinned. Remaining hygiene:
 
 - Vendor pinned ABI files for the three points contracts into `points-indexer/abis/` (reusing the org's existing `contracts/abi` -> `keeper/src/abi.ts` copy convention).
 - Track an explicit start block per data source.
@@ -210,7 +223,7 @@ Because the points subgraph indexes the **points contracts only** (`Points`, `Po
 
 ```mermaid
 flowchart TD
-    trade["Trade / liquidation on perps / futures"] -->|"try onFill() / onLiquidation()"| pointsHook["PointsHook contract"]
+    trade["Trade / liquidation on perps / futures"] -->|"onFill() / onLiquidation()"| pointsHook["PointsHook contract"]
     pointsHook -->|"Points.mint()"| points["Points ledger (non-transferable, HP)"]
     pointsHook --> mirror["Points subgraph -> leaderboard"]
     points --> mirror

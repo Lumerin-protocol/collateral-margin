@@ -19,7 +19,6 @@ export function userAddress(id: i32): Address {
 }
 
 export const POINTS_ADDRESS = userAddress(255);
-export const HOOK_ADDRESS = userAddress(254);
 export const REDEEMER_ADDRESS = userAddress(253);
 
 /**
@@ -38,10 +37,6 @@ export function paramAddr(name: string, value: Address): ethereum.EventParam {
 
 export function paramUint(name: string, value: BigInt): ethereum.EventParam {
   return new ethereum.EventParam(name, ethereum.Value.fromUnsignedBigInt(value));
-}
-
-export function paramBool(name: string, value: boolean): ethereum.EventParam {
-  return new ethereum.EventParam(name, ethereum.Value.fromBoolean(value));
 }
 
 export function paramBytes(name: string, value: Bytes): ethereum.EventParam {

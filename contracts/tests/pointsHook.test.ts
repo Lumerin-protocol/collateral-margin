@@ -1,6 +1,5 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { getAddress } from "viem";
 import { network } from "hardhat";
 import {
   KEEPER_POINTS,
@@ -88,12 +87,7 @@ describe("PointsHook", () => {
   describe("onLiquidation", () => {
     it("mints flat keeper points", async () => {
       const { hook, points, venue, keeper } = await networkHelpers.loadFixture(deployHookFixture);
-      await viem.assertions.emitWithArgs(
-        hook.write.onLiquidation([keeper.account.address, FEE], { account: venue.account }),
-        hook,
-        "KeeperPointsMinted",
-        [getAddress(keeper.account.address), KEEPER_POINTS],
-      );
+      await hook.write.onLiquidation([keeper.account.address, FEE], { account: venue.account });
       assert.equal(await points.read.balanceOf([keeper.account.address]), KEEPER_POINTS);
     });
   });

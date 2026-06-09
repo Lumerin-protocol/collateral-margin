@@ -58,11 +58,6 @@ export const contractErrors = [
     "type": "error"
   },
   {
-    "inputs": [],
-    "name": "AlreadyFinalized",
-    "type": "error"
-  },
-  {
     "inputs": [
       {
         "internalType": "address",
@@ -102,11 +97,6 @@ export const contractErrors = [
   },
   {
     "inputs": [],
-    "name": "InvalidReferrer",
-    "type": "error"
-  },
-  {
-    "inputs": [],
     "name": "AccessControlBadConfirmation",
     "type": "error"
   },
@@ -117,12 +107,12 @@ export const contractErrors = [
   },
   {
     "inputs": [],
-    "name": "MarginBreach",
+    "name": "TransfersDisabled",
     "type": "error"
   },
   {
     "inputs": [],
-    "name": "TransferNotAllowed",
+    "name": "MarginBreach",
     "type": "error"
   },
   {
@@ -134,11 +124,6 @@ export const contractErrors = [
       }
     ],
     "name": "ERC20InvalidSpender",
-    "type": "error"
-  },
-  {
-    "inputs": [],
-    "name": "ReferrerAlreadySet",
     "type": "error"
   },
   {
@@ -271,6 +256,11 @@ export const contractErrors = [
   {
     "inputs": [],
     "name": "AlreadyEnabled",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InsufficientBalance",
     "type": "error"
   },
   {
