@@ -23,7 +23,7 @@ async function main() {
   const keeperPoints = readOptionalBigInt("POINTS_KEEPER") ?? DEFAULT_KEEPER_POINTS;
   const minFee = readOptionalBigInt("POINTS_MIN_FEE");
 
-  const PERPS_DEX_ADDRESS = readOptionalAddress("PERPS_DEX_ADDRESS");
+  const PERPS_ADDRESS = readOptionalAddress("PERPS_ADDRESS");
   const FUTURES_ADDRESS = readOptionalAddress("FUTURES_ADDRESS");
   const GOV_TOKEN_ADDRESS = readOptionalAddress("GOV_TOKEN_ADDRESS");
   const VESTING_ESCROW_ADDRESS = readOptionalAddress("VESTING_ESCROW_ADDRESS");
@@ -41,7 +41,7 @@ async function main() {
     minFee: minFee?.toString() ?? "(0)",
   });
   logInfo("venues (granted HOOK_CALLER_ROLE if set)", {
-    Perps: PERPS_DEX_ADDRESS ?? "(none)",
+    Perps: PERPS_ADDRESS ?? "(none)",
     Futures: FUTURES_ADDRESS ?? "(none)",
   });
   logInfo("redeemer (deployed if both set)", {
@@ -86,7 +86,7 @@ async function main() {
   // ── 5. Grant HOOK_CALLER_ROLE to the venues ─────────────────────────────────
   const HOOK_CALLER_ROLE = await hook.read.HOOK_CALLER_ROLE();
   for (const [label, addr] of [
-    ["perps", PERPS_DEX_ADDRESS],
+    ["perps", PERPS_ADDRESS],
     ["futures", FUTURES_ADDRESS],
   ] as const) {
     if (!addr) continue;
