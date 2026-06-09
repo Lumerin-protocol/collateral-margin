@@ -14,7 +14,7 @@ async function main() {
 
   const vaultAddress = requireAddress("VAULT_ADDRESS");
   const SAFE_OWNER_ADDRESS = readOptionalAddress("SAFE_OWNER_ADDRESS");
-  const PERPS_DEX_ADDRESS = readOptionalAddress("PERPS_DEX_ADDRESS");
+  const PERPS_ADDRESS = readOptionalAddress("PERPS_ADDRESS");
   const OPTIONS_ENGINE_ADDRESS = readOptionalAddress("OPTIONS_ENGINE_ADDRESS");
   const FUTURES_ADDRESS = readOptionalAddress("FUTURES_ADDRESS");
 
@@ -44,7 +44,7 @@ async function main() {
   });
 
   logInfo("optional engines (will be registered if set)", {
-    Perps: PERPS_DEX_ADDRESS ?? "(none)",
+    Perps: PERPS_ADDRESS ?? "(none)",
     Options: OPTIONS_ENGINE_ADDRESS ?? "(none)",
     Futures: FUTURES_ADDRESS ?? "(none)",
   });
@@ -126,10 +126,10 @@ async function main() {
   }
 
   // ── 4. Register product engines on PME (optional) ───────────────────────
-  if (PERPS_DEX_ADDRESS) {
-    logInfo("PME.setPerps", { perpsDex: PERPS_DEX_ADDRESS });
+  if (PERPS_ADDRESS) {
+    logInfo("PME.setPerps", { perpsDex: PERPS_ADDRESS });
     await logPrompt("Proceed?");
-    const sim = await pme.simulate.setPerps([PERPS_DEX_ADDRESS]);
+    const sim = await pme.simulate.setPerps([PERPS_ADDRESS]);
     const receipt = await writeAndWait(deployer, sim);
     logStep("Done", txUrl(pc, receipt.transactionHash));
   }
@@ -153,7 +153,7 @@ async function main() {
   // we surface the calldata that the current owner (typically a Safe) must
   // execute manually.
   const engines: { label: string; addr: Address }[] = [];
-  if (PERPS_DEX_ADDRESS) engines.push({ label: "perps", addr: PERPS_DEX_ADDRESS });
+  if (PERPS_ADDRESS) engines.push({ label: "perps", addr: PERPS_ADDRESS });
   if (OPTIONS_ENGINE_ADDRESS) engines.push({ label: "options", addr: OPTIONS_ENGINE_ADDRESS });
   if (FUTURES_ADDRESS) engines.push({ label: "futures", addr: FUTURES_ADDRESS });
 

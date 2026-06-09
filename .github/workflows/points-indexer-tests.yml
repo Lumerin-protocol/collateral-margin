@@ -1,0 +1,98 @@
+name: Points indexer tests
+
+on:
+  pull_request:
+    paths:
+      - "points-indexer/**"
+      - "contracts/**"
+      - ".github/workflows/points-indexer-tests.yml"
+  push:
+    branches:
+      - main
+      - stg
+      - dev
+    paths:
+      - "points-indexer/**"
+      - "contracts/**"
+      - ".github/workflows/points-indexer-tests.yml"
+
+jobs:
+  pre:
+    name: Skip duplicate runs
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.skip-check.outputs.should_skip }}
+    steps:
+      - id: skip-check
+        uses: fkirc/skip-duplicate-actions@v5
+        with:
+          concurrent_skipping: never
+          skip_after_successful_duplicate: "true"
+          paths_ignore: '["**/*.md"]'
+
+  test:
+    name: Points indexer tests
+    needs: pre
+    if: needs.pre.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: points-indexer/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: |
+            points-indexer/pnpm-lock.yaml
+            contracts/pnpm-lock.yaml
+
+      # Integration tests deploy the real points contracts from their compiled
+      # Hardhat artifacts (contracts/artifacts/**), so the contracts package must
+      # be installed and compiled first.
+      - name: Install contracts dependencies
+        working-directory: ./contracts
+        run: pnpm install --frozen-lockfile
+
+      - name: Compile contracts
+        working-directory: ./contracts
+        run: pnpm compile
+
+      - name: Install points-indexer dependencies
+        working-directory: ./points-indexer
+        run: pnpm install --frozen-lockfile
+
+      # Render subgraph.yaml from the template using the dummy values shipped in
+      # .env.example so codegen (and the matchstick harness) has something to
+      # chew on. Real addresses are only needed at deploy time.
+      - name: Prepare subgraph (with .env.example defaults)
+        working-directory: ./points-indexer
+        run: |
+          set -a && source .env.example && set +a
+          pnpm prepare:env
+          echo "--- subgraph.yaml ---"
+          cat subgraph.yaml
+
+      - name: Codegen
+        working-directory: ./points-indexer
+        run: pnpm codegen
+
+      - name: Build
+        working-directory: ./points-indexer
+        run: pnpm build
+
+      - name: Run matchstick unit tests
+        working-directory: ./points-indexer
+        run: pnpm test
+
+      - name: Run integration tests
+        working-directory: ./points-indexer
+        run: pnpm test:integration

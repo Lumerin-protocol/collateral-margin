@@ -1,5 +1,10 @@
 [
   {
+    "inputs": [],
+    "name": "NoPoints",
+    "type": "error"
+  },
+  {
     "inputs": [
       {
         "internalType": "string",
@@ -11,6 +16,11 @@
     "type": "error"
   },
   {
+    "inputs": [],
+    "name": "EmptyPool",
+    "type": "error"
+  },
+  {
     "inputs": [
       {
         "internalType": "address",
@@ -19,6 +29,11 @@
       }
     ],
     "name": "OwnableUnauthorizedAccount",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotFinalized",
     "type": "error"
   },
   {
@@ -35,6 +50,11 @@
   {
     "inputs": [],
     "name": "ZeroAmount",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "ReentrancyGuardReentrantCall",
     "type": "error"
   },
   {
@@ -68,6 +88,26 @@
       }
     ],
     "name": "SafeERC20FailedOperation",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InsufficientGov",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "AccessControlBadConfirmation",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "NotEnabled",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "TransfersDisabled",
     "type": "error"
   },
   {
@@ -153,6 +193,22 @@
     "inputs": [
       {
         "internalType": "address",
+        "name": "account",
+        "type": "address"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "neededRole",
+        "type": "bytes32"
+      }
+    ],
+    "name": "AccessControlUnauthorizedAccount",
+    "type": "error"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
         "name": "sender",
         "type": "address"
       },
@@ -195,6 +251,21 @@
       }
     ],
     "name": "ERC20InvalidReceiver",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "AlreadyEnabled",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InsufficientBalance",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "MintingFinalized",
     "type": "error"
   },
   {
