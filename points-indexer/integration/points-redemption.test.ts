@@ -39,10 +39,10 @@ describe("swap: burn debits supply, Swapped records the GOV payout split", () =>
     await conn.matchstick.anchor();
 
     // Accrue: carol is the maker (makerFee 0 → no maker mint); alice/bob take.
-    await hook.write.onFill([carol.account.address, alice.account.address, NOTIONAL, 0n, FEE], {
+    await hook.write.onFill([carol.account.address, alice.account.address, NOTIONAL, 0n, FEE, 0n, 0n], {
       account: venue.account,
     });
-    await hook.write.onFill([carol.account.address, bob.account.address, NOTIONAL * 3n, 0n, FEE], {
+    await hook.write.onFill([carol.account.address, bob.account.address, NOTIONAL * 3n, 0n, FEE, 0n, 0n], {
       account: venue.account,
     });
 

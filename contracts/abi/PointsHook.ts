@@ -86,6 +86,25 @@ export const PointsHookAbi = [
     "anonymous": false,
     "inputs": [
       {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "maxMakerMult",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "maxSpread",
+        "type": "uint256"
+      }
+    ],
+    "name": "PriceImprovementSet",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
         "indexed": true,
         "internalType": "bytes32",
         "name": "role",
@@ -291,6 +310,32 @@ export const PointsHookAbi = [
   },
   {
     "inputs": [],
+    "name": "maxMakerMult",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "maxSpread",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "minFee",
     "outputs": [
       {
@@ -327,6 +372,16 @@ export const PointsHookAbi = [
       {
         "internalType": "uint256",
         "name": "takerFee",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "makerPrice",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "refPrice",
         "type": "uint256"
       }
     ],
@@ -424,6 +479,24 @@ export const PointsHookAbi = [
       }
     ],
     "name": "setMinFee",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "_maxMakerMult",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "_maxSpread",
+        "type": "uint256"
+      }
+    ],
+    "name": "setPriceImprovement",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

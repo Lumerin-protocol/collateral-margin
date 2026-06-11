@@ -17,7 +17,21 @@ interface IPointsHook {
     /// @param makerFee  Maker fee actually paid (collateral decimals, signed; a
     ///                  rebate would be negative — disallowed while points are live).
     /// @param takerFee  Taker fee actually paid (collateral decimals).
-    function onFill(address maker, address taker, uint256 notional, int256 makerFee, uint256 takerFee) external;
+    /// @param makerPrice The resting maker order's price, in the venue's price units.
+    /// @param refPrice  A manipulation-resistant reference (oracle) price in the SAME
+    ///                  units as `makerPrice`, used for the maker price-improvement
+    ///                  multiplier. Pass 0 when no fresh reference is available (e.g. a
+    ///                  stale oracle); the hook then applies no bonus (1x) rather than
+    ///                  reverting, so a points read can never block a fill.
+    function onFill(
+        address maker,
+        address taker,
+        uint256 notional,
+        int256 makerFee,
+        uint256 takerFee,
+        uint256 makerPrice,
+        uint256 refPrice
+    ) external;
 
     /// @notice Called when a keeper executes a liquidation on either venue.
     /// @param liquidator The address that executed the liquidation.
