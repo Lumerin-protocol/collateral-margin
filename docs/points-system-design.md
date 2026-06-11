@@ -99,7 +99,7 @@ function burn(address from, uint256 amount) external onlyRole(BURNER_ROLE) { /* 
 
 - **Non-upgradeable, plain deploy.** Holds `MINTER_ROLE` on `POINTS`. Contains all the points math and weight parameters. Not a fund-holding contract.
 - Implements `IPointsHook` with two entry points called by the venues:
-  - `onFill(maker, taker, notional, makerFee, takerFee)` — called by perps `_executeMatch` and futures lot creation. Skips entirely on a self-match (`maker == taker`); otherwise mints `notional * w_taker / WEIGHT_SCALE` to the taker when `takerFee >= minFee`, and `notional * w_maker / WEIGHT_SCALE` to the maker when `makerFee > 0 && makerFee >= minFee` (a maker rebate earns nothing). Each side mints via `points.mint`, which emits the POINTS `Transfer(0x0 -> account)` the leaderboard subgraph indexes; the hook emits no separate accrual event. Note: one perps `createOrder` can walk the book and match against N resting maker orders in a single transaction, producing N `onFill` calls — so minting is O(matched levels) per taker transaction.
+  - `onFill(maker, taker, notional, makerFee, takerFee, makerPrice, refPrice)` — called by perps `_executeMatch` and futures lot creation. Skips entirely on a self-match (`maker == taker`); otherwise mints `notional * w_taker / WEIGHT_SCALE` to the taker when `takerFee >= minFee`, and `notional * w_maker * mult / WEIGHT_SCALE^2` to the maker when `makerFee > 0 && makerFee >= minFee` (a maker rebate earns nothing). `mult` is the **maker price-improvement multiplier** (see [Section 5.2.1](#521-maker-price-improvement-multiplier)). Each side mints via `points.mint`, which emits the POINTS `Transfer(0x0 -> account)` the leaderboard subgraph indexes; the hook emits no separate accrual event. Note: one perps `createOrder` can walk the book and match against N resting maker orders in a single transaction, producing N `onFill` calls — so minting is O(matched levels) per taker transaction.
   - `onLiquidation(liquidator, fee)` — called by perps `liquidatePosition` and futures `liquidatePosition` / `liquidateOrder`. Mints flat keeper points to the liquidator.
 - **Caller authorization**: the hook checks that the caller holds a `HOOK_CALLER_ROLE`, granted only to the two venue contracts, so arbitrary addresses cannot mint points by calling the hook directly.
 - **Retuning**: changing `w_maker`, `w_taker`, or the keeper rate is done by deploying a new `PointsHook` and calling `setHook()` on each venue. No proxy is required because the hook is designed to be **replaced**, not upgraded.
@@ -111,12 +111,23 @@ interface IPointsHook {
         address taker,
         uint256 notional,
         int256 makerFee,
-        uint256 takerFee
+        uint256 takerFee,
+        uint256 makerPrice, // resting maker order price (venue price units)
+        uint256 refPrice    // oracle reference, same units; 0 ⇒ no bonus (stale oracle)
     ) external;
 
     function onLiquidation(address liquidator, uint256 fee) external;
 }
 ```
+
+#### 5.2.1 Maker price-improvement multiplier
+
+To reward *tight* liquidity (not just filled volume), the maker side of `onFill` is scaled by a multiplier based on how close the resting maker quote was to a manipulation-resistant reference price:
+
+- `spread = |makerPrice - refPrice| / refPrice`. The multiplier is `maxMakerMult` (WAD; e.g. `3e18` == 3x) at `spread == 0`, tapers **linearly** to 1x at `spread == maxSpread`, and is 1x beyond. Both `maxMakerMult` and `maxSpread` are admin-tunable hook parameters; the bonus is **disabled by default** (`maxMakerMult == 0`), so the hook behaves as a plain linear model until `setPriceImprovement` turns it on.
+- The reference is an **oracle**, never the order-book mid (which a maker can push toward their own order). Each venue sources it from its existing oracle: perps from the price oracle (`getMarketPrice`'s feed), futures from the hashrate oracle. The taker side is **not** multiplied.
+- **Oracle degradation contract.** The venue passes `refPrice = 0` when its oracle is stale/invalid (via a non-reverting read, *not* the reverting `getMarketPrice()`), and the hook then applies a neutral 1x. This keeps the rule: the incentive layer **fails soft** (base maker points still mint, bonus drops) and can never block a fill the matching engine would otherwise allow — whereas the engine's own margin/funding/liquidation paths **fail closed** on a stale oracle, as before. Base maker/taker/keeper accrual never depends on the oracle.
+- Why "near", not "far": rewarding quotes *close* to fair value tightens spreads (useful liquidity); rewarding distance would pay for liquidity that rarely fills. The multiplier is still minted only on a fee-paying fill, so it inherits the same wash-resistance as the base maker points.
 
 ### 5.3 Venue wiring (perps, futures)
 
@@ -128,7 +139,9 @@ Venue changes are deliberately minimal and live in the venue repos, not here:
 
 ```solidity
 if (address(hook) != address(0)) {
-    hook.onFill(maker, taker, notional, makerFee, takerFee);
+    // `makerPrice` is the resting maker order's price; `_refPriceForPoints()` reads the
+    // venue oracle but returns 0 (rather than reverting) when stale, so points never block a fill.
+    hook.onFill(maker, taker, notional, makerFee, takerFee, makerPrice, _refPriceForPoints());
 }
 ```
 
@@ -242,6 +255,6 @@ flowchart TD
 ## 12. Open items / preconditions
 
 - **Same-chain deployment** of perps and futures with the single `PointsHook` is required for cross-venue minting (both venues call the same hook). The points subgraph itself only needs the points contracts, which deploy together.
-- Final weight values (`w_maker`, `w_taker`, keeper rate) and the minimum-fee threshold (`minFee`) are parameters to be set on `PointsHook` at deploy / via the admin setters.
+- Final weight values (`w_maker`, `w_taker`, keeper rate), the minimum-fee threshold (`minFee`), and the maker price-improvement multiplier (`maxMakerMult`, `maxSpread` — disabled by default) are parameters to be set on `PointsHook` at deploy / via the admin setters.
 - The treasury GOV pool size and the decision to enable conversion at all remain discretionary.
 - Deferred features (referral, loyalty, per-account caps, sybil/cluster detection) are tracked in `points-system-improvements.md` for a future iteration.

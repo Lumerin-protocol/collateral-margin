@@ -25,6 +25,16 @@ export const IPointsHookAbi = [
         "internalType": "uint256",
         "name": "takerFee",
         "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "makerPrice",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "refPrice",
+        "type": "uint256"
       }
     ],
     "name": "onFill",

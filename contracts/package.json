@@ -13,6 +13,7 @@
     "deploy:vault": "hardhat run scripts/deploy-collateral-vault.ts",
     "deploy:pme": "hardhat run scripts/deploy-portfolio-margin-engine.ts",
     "deploy:points": "hardhat run scripts/deploy-points.ts",
+    "deploy:points-hook": "hardhat run scripts/deploy-points-hook.ts",
     "upgrade:vault": "hardhat run scripts/update-collateral-vault.ts",
     "upgrade:pme": "hardhat run scripts/update-portfolio-margin-engine.ts"
   },

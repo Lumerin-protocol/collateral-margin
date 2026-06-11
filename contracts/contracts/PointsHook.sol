@@ -45,6 +45,14 @@ contract PointsHook is IPointsHook, AccessControl {
     uint256 public keeperPoints;
     /// @notice Minimum fee (collateral decimals) a side must pay to earn on a fill.
     uint256 public minFee;
+    /// @notice Maker multiplier (WAD) at zero spread, e.g. `3e18` == 3x. The bonus is
+    ///         disabled (every maker fill earns the flat `wMaker` rate) whenever this is
+    ///         `<= WEIGHT_SCALE`. Defaults to 0 (disabled), so deploys behave like a
+    ///         plain linear hook until `setPriceImprovement` turns the bonus on.
+    uint256 public maxMakerMult;
+    /// @notice Spread (WAD fraction of `refPrice`) at/above which the maker multiplier
+    ///         returns to 1x. `0` also disables the bonus.
+    uint256 public maxSpread;
 
     // ── Errors / events ─────────────────────────────────────────────────────────
 
@@ -53,6 +61,7 @@ contract PointsHook is IPointsHook, AccessControl {
     event WeightsSet(uint256 wMaker, uint256 wTaker);
     event KeeperPointsSet(uint256 keeperPoints);
     event MinFeeSet(uint256 minFee);
+    event PriceImprovementSet(uint256 maxMakerMult, uint256 maxSpread);
 
     /// @param _points     The POINTS token (this hook must be set as its `minter`).
     /// @param admin        Receives `DEFAULT_ADMIN_ROLE` (parameter tuning + role grants).
@@ -80,11 +89,15 @@ contract PointsHook is IPointsHook, AccessControl {
     // ── Venue entry points ──────────────────────────────────────────────────────
 
     /// @inheritdoc IPointsHook
-    function onFill(address maker, address taker, uint256 notional, int256 makerFee, uint256 takerFee)
-        external
-        override
-        onlyRole(HOOK_CALLER_ROLE)
-    {
+    function onFill(
+        address maker,
+        address taker,
+        uint256 notional,
+        int256 makerFee,
+        uint256 takerFee,
+        uint256 makerPrice,
+        uint256 refPrice
+    ) external override onlyRole(HOOK_CALLER_ROLE) {
         // Self-match exclusion: a wallet trading with itself earns nothing.
         if (maker == taker) return;
 
@@ -98,13 +111,33 @@ contract PointsHook is IPointsHook, AccessControl {
         }
 
         // Maker side. A negative makerFee (rebate) earns nothing and violates the
-        // positive-fees invariant the program runs under.
+        // positive-fees invariant the program runs under. Tighter quotes (closer to
+        // the reference price) earn a higher multiplier — see `_makerMultiplier`.
         if (makerFee > 0 && uint256(makerFee) >= minFee) {
-            uint256 amount = (notional * wMaker) / WEIGHT_SCALE;
+            uint256 mult = _makerMultiplier(makerPrice, refPrice);
+            uint256 amount = (notional * wMaker * mult) / (WEIGHT_SCALE * WEIGHT_SCALE);
             if (amount > 0) {
                 points.mint(maker, amount);
             }
         }
+    }
+
+    /// @dev Maker price-improvement multiplier (WAD; `WEIGHT_SCALE` == 1x). Rewards
+    ///      quotes resting closer to the reference price: full `maxMakerMult` at zero
+    ///      spread, tapering linearly to 1x at `maxSpread`, and 1x beyond. Returns a
+    ///      neutral 1x when the bonus is disabled or no reference price is available
+    ///      (`refPrice == 0`), so a missing/stale oracle simply drops the bonus.
+    function _makerMultiplier(uint256 makerPrice, uint256 refPrice) internal view returns (uint256) {
+        uint256 cap = maxMakerMult;
+        uint256 width = maxSpread;
+        if (cap <= WEIGHT_SCALE || width == 0 || refPrice == 0) return WEIGHT_SCALE;
+
+        uint256 diff = makerPrice > refPrice ? makerPrice - refPrice : refPrice - makerPrice;
+        uint256 spread = (diff * WEIGHT_SCALE) / refPrice;
+        if (spread >= width) return WEIGHT_SCALE;
+
+        // Linear taper from `cap` (spread 0) down to 1x (spread == width).
+        return cap - ((cap - WEIGHT_SCALE) * spread) / width;
     }
 
     /// @inheritdoc IPointsHook
@@ -135,5 +168,20 @@ contract PointsHook is IPointsHook, AccessControl {
     function setMinFee(uint256 _minFee) external onlyRole(DEFAULT_ADMIN_ROLE) {
         minFee = _minFee;
         emit MinFeeSet(_minFee);
+    }
+
+    /// @notice Configure the maker price-improvement multiplier.
+    /// @param _maxMakerMult Multiplier (WAD) applied to maker points at zero spread
+    ///        (e.g. `3e18` == 3x). Pass `0` or any value `<= WEIGHT_SCALE` to disable
+    ///        the bonus so makers earn the flat `wMaker` rate.
+    /// @param _maxSpread Spread (WAD fraction of the reference price) at/above which the
+    ///        multiplier returns to 1x. Pass `0` to disable the bonus.
+    function setPriceImprovement(uint256 _maxMakerMult, uint256 _maxSpread)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        maxMakerMult = _maxMakerMult;
+        maxSpread = _maxSpread;
+        emit PriceImprovementSet(_maxMakerMult, _maxSpread);
     }
 }

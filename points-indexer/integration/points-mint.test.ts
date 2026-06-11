@@ -35,7 +35,7 @@ describe("onFill accrual: maker + taker mints mirrored to the leaderboard", () =
     await conn.matchstick.anchor();
 
     // alice = maker, bob = taker. Both fees above threshold → both sides mint.
-    await hook.write.onFill([alice.account.address, bob.account.address, NOTIONAL, FEE, FEE], {
+    await hook.write.onFill([alice.account.address, bob.account.address, NOTIONAL, FEE, FEE, 0n, 0n], {
       account: venue.account,
     });
 
@@ -99,11 +99,11 @@ describe("onFill accrual: a self-match contributes nothing to the leaderboard", 
     await conn.matchstick.anchor();
 
     // A self-match by alice (maker == taker) mints nothing...
-    await hook.write.onFill([alice.account.address, alice.account.address, NOTIONAL, FEE, FEE], {
+    await hook.write.onFill([alice.account.address, alice.account.address, NOTIONAL, FEE, FEE, 0n, 0n], {
       account: venue.account,
     });
     // ...while a real fill (carol maker w/ 0 fee → no maker mint; bob takes) mints once.
-    await hook.write.onFill([carol.account.address, bob.account.address, NOTIONAL, 0n, FEE], {
+    await hook.write.onFill([carol.account.address, bob.account.address, NOTIONAL, 0n, FEE, 0n, 0n], {
       account: venue.account,
     });
 
