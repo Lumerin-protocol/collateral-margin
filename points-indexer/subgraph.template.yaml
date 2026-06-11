@@ -38,25 +38,25 @@ dataSources:
       file: ./src/points.ts
 
   # ── Redemption: POINTS → GOV swaps ────────────────────────────────────────
-  - kind: ethereum
-    name: PointsRedeemer
-    network: "${NETWORK}"
-    source:
-      address: "${REDEEMER_ADDRESS}"
-      startBlock: ${REDEEMER_START_BLOCK}
-      abi: PointsRedeemer
-    mapping:
-      kind: ethereum/events
-      apiVersion: 0.0.9
-      language: wasm/assemblyscript
-      entities:
-        - PointsProgram
-        - UserPoints
-        - PointsRedemption
-      abis:
-        - name: PointsRedeemer
-          file: ../contracts/abi/PointsRedeemer.json
-      eventHandlers:
-        - event: Swapped(indexed address,uint256,uint256,uint256,uint256)
-          handler: handleSwapped
-      file: ./src/points.ts
+  # - kind: ethereum
+  #   name: PointsRedeemer
+  #   network: "${NETWORK}"
+  #   source:
+  #     address: "${REDEEMER_ADDRESS}"
+  #     startBlock: ${REDEEMER_START_BLOCK}
+  #     abi: PointsRedeemer
+  #   mapping:
+  #     kind: ethereum/events
+  #     apiVersion: 0.0.9
+  #     language: wasm/assemblyscript
+  #     entities:
+  #       - PointsProgram
+  #       - UserPoints
+  #       - PointsRedemption
+  #     abis:
+  #       - name: PointsRedeemer
+  #         file: ../contracts/abi/PointsRedeemer.json
+  #     eventHandlers:
+  #       - event: Swapped(indexed address,uint256,uint256,uint256,uint256)
+  #         handler: handleSwapped
+  #     file: ./src/points.ts
