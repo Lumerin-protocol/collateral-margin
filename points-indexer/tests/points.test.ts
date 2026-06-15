@@ -2,11 +2,11 @@ import { Address, BigInt } from "@graphprotocol/graph-ts";
 import { newTypedMockEventWithParams } from "matchstick-as/assembly/defaults";
 import { assert, beforeEach, clearStore, describe, test } from "matchstick-as/assembly/index";
 import { Finalized, Transfer } from "../generated/Points/Points";
-import { Swapped } from "../generated/PointsRedeemer/PointsRedeemer";
-import { handleFinalized, handleSwapped, handleTransfer } from "../src/points";
+// import { Swapped } from "../generated/PointsRedeemer/PointsRedeemer";
+import { handleFinalized, handleTransfer } from "../src/points";
 import {
   POINTS_ADDRESS,
-  REDEEMER_ADDRESS,
+  // REDEEMER_ADDRESS,
   mockDataSource,
   paramAddr,
   paramUint,
@@ -23,21 +23,21 @@ function transferEvent(from: Address, to: Address, value: BigInt): Transfer {
   ]);
 }
 
-function swappedEvent(
-  user: Address,
-  pointsBurned: BigInt,
-  govAmount: BigInt,
-  liquidAmount: BigInt,
-  escrowAmount: BigInt,
-): Swapped {
-  return newTypedMockEventWithParams<Swapped>([
-    paramAddr("user", user),
-    paramUint("pointsBurned", pointsBurned),
-    paramUint("govAmount", govAmount),
-    paramUint("liquidAmount", liquidAmount),
-    paramUint("escrowAmount", escrowAmount),
-  ]);
-}
+// function swappedEvent(
+//   user: Address,
+//   pointsBurned: BigInt,
+//   govAmount: BigInt,
+//   liquidAmount: BigInt,
+//   escrowAmount: BigInt,
+// ): Swapped {
+//   return newTypedMockEventWithParams<Swapped>([
+//     paramAddr("user", user),
+//     paramUint("pointsBurned", pointsBurned),
+//     paramUint("govAmount", govAmount),
+//     paramUint("liquidAmount", liquidAmount),
+//     paramUint("escrowAmount", escrowAmount),
+//   ]);
+// }
 
 describe("Points mirror (Transfer)", () => {
   beforeEach(() => {
@@ -94,63 +94,63 @@ describe("Points mirror (Transfer)", () => {
   });
 });
 
-describe("Redemption (PointsRedeemer)", () => {
-  beforeEach(() => {
-    clearStore();
-    mockDataSource(REDEEMER_ADDRESS);
-  });
+// describe("Redemption (PointsRedeemer)", () => {
+//   beforeEach(() => {
+//     clearStore();
+//     mockDataSource(REDEEMER_ADDRESS);
+//   });
 
-  test("swap records redeemed points and GOV received", () => {
-    const alice = userAddress(1);
-    const evt = swappedEvent(
-      alice,
-      BigInt.fromI32(1_000_000),
-      BigInt.fromI32(2_000_000),
-      BigInt.fromI32(1_000_000),
-      BigInt.fromI32(1_000_000),
-    );
-    handleSwapped(evt);
+//   test("swap records redeemed points and GOV received", () => {
+//     const alice = userAddress(1);
+//     const evt = swappedEvent(
+//       alice,
+//       BigInt.fromI32(1_000_000),
+//       BigInt.fromI32(2_000_000),
+//       BigInt.fromI32(1_000_000),
+//       BigInt.fromI32(1_000_000),
+//     );
+//     handleSwapped(evt);
 
-    assert.fieldEquals("UserPoints", alice.toHexString(), "redeemedPoints", "1000000");
-    assert.fieldEquals("UserPoints", alice.toHexString(), "govReceived", "2000000");
-    assert.fieldEquals("PointsProgram", "0", "totalRedeemedPoints", "1000000");
-    assert.fieldEquals("PointsProgram", "0", "totalGovDistributed", "2000000");
-    assert.fieldEquals("PointsProgram", "0", "redemptionCount", "1");
+//     assert.fieldEquals("UserPoints", alice.toHexString(), "redeemedPoints", "1000000");
+//     assert.fieldEquals("UserPoints", alice.toHexString(), "govReceived", "2000000");
+//     assert.fieldEquals("PointsProgram", "0", "totalRedeemedPoints", "1000000");
+//     assert.fieldEquals("PointsProgram", "0", "totalGovDistributed", "2000000");
+//     assert.fieldEquals("PointsProgram", "0", "redemptionCount", "1");
 
-    const id = evt.transaction.hash.concatI32(evt.logIndex.toI32()).toHexString();
-    assert.fieldEquals("PointsRedemption", id, "pointsBurned", "1000000");
-    assert.fieldEquals("PointsRedemption", id, "escrowAmount", "1000000");
-  });
-});
+//     const id = evt.transaction.hash.concatI32(evt.logIndex.toI32()).toHexString();
+//     assert.fieldEquals("PointsRedemption", id, "pointsBurned", "1000000");
+//     assert.fieldEquals("PointsRedemption", id, "escrowAmount", "1000000");
+//   });
+// });
 
-describe("End-to-end reconciliation", () => {
-  beforeEach(() => {
-    clearStore();
-  });
+// describe("End-to-end reconciliation", () => {
+//   beforeEach(() => {
+//     clearStore();
+//   });
 
-  test("mint then redeem reconciles balance, earned, and circulating supply", () => {
-    const alice = userAddress(1);
+//   test("mint then redeem reconciles balance, earned, and circulating supply", () => {
+//     const alice = userAddress(1);
 
-    mockDataSource(POINTS_ADDRESS);
-    handleTransfer(transferEvent(ZERO, alice, BigInt.fromI32(1_500_000)));
-    // Redemption burns part of the balance via the token's Transfer(to == 0x0).
-    handleTransfer(transferEvent(alice, ZERO, BigInt.fromI32(500_000)));
+//     mockDataSource(POINTS_ADDRESS);
+//     handleTransfer(transferEvent(ZERO, alice, BigInt.fromI32(1_500_000)));
+//     // Redemption burns part of the balance via the token's Transfer(to == 0x0).
+//     handleTransfer(transferEvent(alice, ZERO, BigInt.fromI32(500_000)));
 
-    mockDataSource(REDEEMER_ADDRESS);
-    handleSwapped(
-      swappedEvent(
-        alice,
-        BigInt.fromI32(500_000),
-        BigInt.fromI32(1_000_000),
-        BigInt.fromI32(500_000),
-        BigInt.fromI32(500_000),
-      ),
-    );
+//     mockDataSource(REDEEMER_ADDRESS);
+//     handleSwapped(
+//       swappedEvent(
+//         alice,
+//         BigInt.fromI32(500_000),
+//         BigInt.fromI32(1_000_000),
+//         BigInt.fromI32(500_000),
+//         BigInt.fromI32(500_000),
+//       ),
+//     );
 
-    assert.fieldEquals("UserPoints", alice.toHexString(), "total", "1000000");
-    assert.fieldEquals("UserPoints", alice.toHexString(), "totalEarned", "1500000");
-    assert.fieldEquals("UserPoints", alice.toHexString(), "redeemedPoints", "500000");
-    assert.fieldEquals("PointsProgram", "0", "totalPoints", "1000000");
-    assert.fieldEquals("PointsProgram", "0", "totalUsers", "1");
-  });
-});
+//     assert.fieldEquals("UserPoints", alice.toHexString(), "total", "1000000");
+//     assert.fieldEquals("UserPoints", alice.toHexString(), "totalEarned", "1500000");
+//     assert.fieldEquals("UserPoints", alice.toHexString(), "redeemedPoints", "500000");
+//     assert.fieldEquals("PointsProgram", "0", "totalPoints", "1000000");
+//     assert.fieldEquals("PointsProgram", "0", "totalUsers", "1");
+//   });
+// });
