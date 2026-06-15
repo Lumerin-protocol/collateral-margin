@@ -15,7 +15,9 @@
     {
       "includes": [
         "indexer/src/**",
-        "indexer/tests/**"
+        "indexer/tests/**",
+        "points-indexer/src/**",
+        "points-indexer/tests/**"
       ],
       "linter": {
         "rules": {
