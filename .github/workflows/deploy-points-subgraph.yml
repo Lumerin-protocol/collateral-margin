@@ -109,10 +109,10 @@ jobs:
         run: |
           ENV="${{ needs.setup.outputs.environment }}"
 
-          # Goldsky subgraph name — override via vars.GOLDSKY_POINTS_SUBGRAPH_NAME (default: points)
+          # Goldsky subgraph name — override via vars.GOLDSKY_POINTS_SUBGRAPH_NAME (default: hpow-points)
           GS_NAME="${{ vars.GOLDSKY_POINTS_SUBGRAPH_NAME }}"
           if [ -z "$GS_NAME" ]; then
-            GS_NAME="points"
+            GS_NAME="hpow-points"
           fi
           echo "goldsky_subgraph_name=$GS_NAME" >> $GITHUB_OUTPUT
 
