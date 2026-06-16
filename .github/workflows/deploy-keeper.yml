@@ -182,6 +182,9 @@ jobs:
     needs: build
     if: needs.build.outputs.is_cicd_branch != 'true'
     environment: ${{ needs.build.outputs.environment }}
+    outputs:
+      task_def_arn: ${{ steps.deploy.outputs.task_def_arn }}
+      skipped: ${{ steps.svc_check.outputs.skip }}
 
     steps:
       - name: Configure AWS credentials
@@ -215,6 +218,7 @@ jobs:
           fi
 
       - name: Render new task definition + deploy
+        id: deploy
         if: steps.svc_check.outputs.skip != 'true'
         env:
           CLUSTER: ${{ needs.build.outputs.ecs_cluster }}
@@ -222,6 +226,7 @@ jobs:
           TASK_FAMILY: ${{ needs.build.outputs.task_family }}
           REGION: ${{ needs.build.outputs.aws_region }}
           IMAGE: ${{ env.GHCR_IMAGE }}:${{ needs.build.outputs.version }}
+          KEEPER_VERSION: ${{ needs.build.outputs.version }}
 
           NETWORK: ${{ vars.NETWORK }}
           VAULT_ADDRESS: ${{ vars.VAULT_ADDRESS }}
@@ -292,7 +297,9 @@ jobs:
             --arg ALCHEMY_API_KEY           "${ALCHEMY_API_KEY}" \
             --arg LIQUIDATOR_PRIVATE_KEY    "${LIQUIDATOR_PRIVATE_KEY}" \
             --arg WEBHOOK_SECRET            "${WEBHOOK_SECRET:-}" \
+            --arg KEEPER_VERSION            "${KEEPER_VERSION}" \
             '[
+              {name:"KEEPER_VERSION", value:$KEEPER_VERSION},
               {name:"NETWORK", value:$NETWORK},
               {name:"VAULT_ADDRESS", value:$VAULT_ADDRESS},
               {name:"PME_ADDRESS", value:$PME_ADDRESS},
@@ -328,6 +335,12 @@ jobs:
 
           echo "✅ Registered: ${NEW_TASK_DEF}"
 
+          # Export the exact ARN we deployed so the verify job can assert the
+          # service actually rolled forward to *this* revision (and didn't
+          # silently roll back to a prior one via the deployment circuit
+          # breaker — which still leaves the service "stable").
+          echo "task_def_arn=${NEW_TASK_DEF}" >> "$GITHUB_OUTPUT"
+
           aws ecs update-service \
             --cluster "${CLUSTER}" \
             --service "${SERVICE}" \
@@ -352,12 +365,22 @@ jobs:
           aws-region: ${{ needs.build.outputs.aws_region }}
           role-session-name: GitHubActions-ColMarKeeper-Verify-${{ github.run_id }}
 
-      - name: Wait for service to stabilize
+      - name: Verify rollout reached the deployed revision
+        id: rollout
         env:
           SERVICE: ${{ needs.build.outputs.ecs_service }}
           CLUSTER: ${{ needs.build.outputs.ecs_cluster }}
           REGION: ${{ needs.build.outputs.aws_region }}
+          EXPECTED_ARN: ${{ needs.deploy.outputs.task_def_arn }}
+          DEPLOY_SKIPPED: ${{ needs.deploy.outputs.skipped }}
         run: |
+          set -euo pipefail
+
+          if [ "${DEPLOY_SKIPPED}" = "true" ] || [ -z "${EXPECTED_ARN}" ]; then
+            echo "⚠️ Deploy was skipped (no task definition registered) — nothing to verify."
+            exit 0
+          fi
+
           ACTIVE=$(aws ecs describe-services \
             --cluster "$CLUSTER" \
             --services "$SERVICE" \
@@ -369,12 +392,117 @@ jobs:
             exit 0
           fi
 
-          echo "⏳ Waiting for $SERVICE to stabilize..."
-          aws ecs wait services-stable \
-            --cluster "$CLUSTER" \
-            --services "$SERVICE" \
-            --region "$REGION"
-          echo "✅ Stable"
+          echo "diagnose=true" >> "$GITHUB_OUTPUT"
+          echo "🎯 Expecting service to converge on: ${EXPECTED_ARN}"
+
+          # `wait services-stable` only proves the service is steady — NOT that
+          # it's steady on the *new* revision. With the deployment circuit
+          # breaker enabled, a task that crash-loops on startup gets rolled
+          # back to the previous revision, and the service is then "stable"
+          # again. So we wait (best-effort) and then assert the truth below.
+          echo "⏳ Waiting for $SERVICE to stabilize (best-effort)..."
+          if aws ecs wait services-stable \
+            --cluster "$CLUSTER" --services "$SERVICE" --region "$REGION"; then
+            echo "   service reported stable"
+          else
+            echo "   ⚠️ stabilization wait did not succeed — inspecting state anyway"
+          fi
+
+          # The PRIMARY deployment is the one ECS is currently driving toward.
+          # rolloutState is COMPLETED only when the new tasks passed health
+          # checks; FAILED means the circuit breaker tripped (and may have
+          # rolled back). We assert BOTH the task-def ARN and the rollout state.
+          PRIMARY=$(aws ecs describe-services \
+            --cluster "$CLUSTER" --services "$SERVICE" --region "$REGION" \
+            --query 'services[0].deployments[?status==`PRIMARY`] | [0]' \
+            --output json)
+
+          LIVE_ARN=$(echo "$PRIMARY" | jq -r '.taskDefinition // ""')
+          ROLLOUT=$(echo "$PRIMARY" | jq -r '.rolloutState // "UNKNOWN"')
+          ROLLOUT_REASON=$(echo "$PRIMARY" | jq -r '.rolloutStateReason // ""')
+          RUNNING=$(echo "$PRIMARY" | jq -r '.runningCount // 0')
+          DESIRED=$(echo "$PRIMARY" | jq -r '.desiredCount // 0')
+          FAILED=$(echo "$PRIMARY" | jq -r '.failedTasks // 0')
+
+          echo "   live PRIMARY task-def : ${LIVE_ARN}"
+          echo "   rolloutState          : ${ROLLOUT} (${ROLLOUT_REASON})"
+          echo "   running/desired/failed: ${RUNNING}/${DESIRED}/${FAILED}"
+
+          FAIL=0
+          if [ "$LIVE_ARN" != "$EXPECTED_ARN" ]; then
+            echo "::error::Service is running '${LIVE_ARN}' but we deployed '${EXPECTED_ARN}'. The new revision did not roll out (likely a startup crash + circuit-breaker rollback)."
+            FAIL=1
+          fi
+          if [ "$ROLLOUT" != "COMPLETED" ]; then
+            echo "::error::Deployment rolloutState is '${ROLLOUT}', expected 'COMPLETED'. Reason: ${ROLLOUT_REASON}"
+            FAIL=1
+          fi
+          if [ "$RUNNING" != "$DESIRED" ]; then
+            echo "::error::runningCount (${RUNNING}) != desiredCount (${DESIRED})."
+            FAIL=1
+          fi
+
+          if [ "$FAIL" != "0" ]; then
+            exit 1
+          fi
+          echo "✅ Service converged on the deployed revision."
+
+      - name: Smoke-test /health reports the deployed version
+        if: steps.rollout.outputs.diagnose == 'true'
+        env:
+          HEALTH_URL: ${{ needs.build.outputs.keeper_health_url }}
+          EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "🔎 GET ${HEALTH_URL} (expecting version=${EXPECTED_VERSION})"
+
+          # Give the new task a moment to bind the health port, then poll.
+          ATTEMPTS=12
+          for i in $(seq 1 "$ATTEMPTS"); do
+            BODY=$(curl -fsS -m 10 "$HEALTH_URL" 2>/dev/null || true)
+            if [ -n "$BODY" ]; then
+              STATUS=$(echo "$BODY" | jq -r '.status // "?"')
+              LIVE_VERSION=$(echo "$BODY" | jq -r '.info.version // "?"')
+              echo "   attempt ${i}: status=${STATUS} version=${LIVE_VERSION}"
+              if [ "$STATUS" = "ok" ] && [ "$LIVE_VERSION" = "$EXPECTED_VERSION" ]; then
+                echo "✅ /health is OK and serving the deployed version."
+                exit 0
+              fi
+            else
+              echo "   attempt ${i}: no response yet"
+            fi
+            sleep 10
+          done
+
+          echo "::error::/health never reported status=ok with version=${EXPECTED_VERSION}. Last body: ${BODY:-<none>}"
+          exit 1
+
+      - name: Diagnose failed rollout
+        if: failure() && steps.rollout.outputs.diagnose == 'true'
+        env:
+          SERVICE: ${{ needs.build.outputs.ecs_service }}
+          CLUSTER: ${{ needs.build.outputs.ecs_cluster }}
+          REGION: ${{ needs.build.outputs.aws_region }}
+          LOG_GROUP: /ecs/col-mar-keeper-${{ needs.build.outputs.env_suffix }}
+        run: |
+          set +e
+          echo "## ❌ Rollout diagnostics" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "### Stopped tasks (stop reasons)"
+          STOPPED=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
+            --desired-status STOPPED --region "$REGION" \
+            --query 'taskArns' --output text)
+          if [ -n "$STOPPED" ] && [ "$STOPPED" != "None" ]; then
+            aws ecs describe-tasks --cluster "$CLUSTER" --tasks $STOPPED --region "$REGION" \
+              --query 'tasks[].{stoppedReason:stoppedReason,task:taskArn,containers:containers[].{name:name,exitCode:exitCode,reason:reason}}' \
+              --output json | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "(no stopped tasks found)" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "### Recent keeper logs (${LOG_GROUP}, last 10m)"
+          aws logs tail "$LOG_GROUP" --region "$REGION" --since 10m --format short 2>&1 \
+            | tail -n 60 | tee -a "$GITHUB_STEP_SUMMARY"
 
   cleanup:
     name: 🧹 Cleanup
