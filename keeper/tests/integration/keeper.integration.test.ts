@@ -671,6 +671,20 @@ describe("DeliveryCoordinator (live RPC)", () => {
       // a `LotClosed` event from the keeper's signer, and the
       // index dropped all of them.
       await expectFuturesClosed(ctx, alice);
+
+      // The index drop happens after the settling tx confirms. The
+      // coordinator also runs a background safety-net sweep every
+      // `sweepIntervalMs`; when it wins the race against this manual
+      // `sweep()` the on-chain `LotClosed` can be observable a tick before
+      // the in-memory index is pruned. Poll for the drop rather than
+      // asserting it synchronously to avoid that race.
+      const delivery = keeper.delivery;
+      assert.ok(delivery);
+      await waitFor(
+        () => positionsBefore.every((id) => !delivery.has(id)),
+        10_000,
+      );
+
       const settledBlocks: bigint[] = [];
       for (const id of positionsBefore) {
         const settledBlock = await readLotClosedBlock(ctx, id);
@@ -679,7 +693,6 @@ describe("DeliveryCoordinator (live RPC)", () => {
           `expected a LotClosed event for position ${id}`,
         );
         settledBlocks.push(settledBlock);
-        assert.equal(keeper.delivery.has(id), false, `settled position ${id} is dropped`);
       }
       // Batching invariant: all 12 settlements ride a single
       // `Futures.multicall(bytes[])` transaction, so every
