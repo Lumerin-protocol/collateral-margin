@@ -209,6 +209,7 @@ function buildConfig(
   overrides: BuildKeeperOverrides,
 ): Config {
   return {
+    version: "test",
     chain: {
       network: "hardhat",
       rpcUrl: stack.rpcUrl,

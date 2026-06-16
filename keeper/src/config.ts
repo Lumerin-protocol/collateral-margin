@@ -30,6 +30,13 @@ export const SUPPORTED_NETWORKS: readonly NetworkName[] = [
 ] as const;
 
 export interface Config {
+  /**
+   * Build identity stamp (image tag / git describe), surfaced on `/health`
+   * so a deploy pipeline can assert the *new* artifact is actually serving
+   * traffic rather than an old revision a circuit-breaker rolled back to.
+   * Defaults to `"dev"` for local runs where `KEEPER_VERSION` is unset.
+   */
+  version: string;
   chain: {
     /** Logical network selector. Drives both `rpcUrl` and the viem chain object. */
     network: NetworkName;
@@ -344,6 +351,7 @@ export function loadConfig(): Config {
   const network = requireNetwork();
 
   return {
+    version: process.env.KEEPER_VERSION ?? "dev",
     chain: {
       network,
       rpcUrl: resolveRpcUrl(network),

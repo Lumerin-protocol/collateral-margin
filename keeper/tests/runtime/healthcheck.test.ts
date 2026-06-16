@@ -18,6 +18,7 @@ const silentLogger = pino({ level: "silent" });
 
 const SIGNER: Address = "0x000000000000000000000000000000000000005C";
 const STUB_CONFIG: Config = {
+  version: "test",
   chain: {
     network: "hardhat",
     rpcUrl: "http://stub",
@@ -212,6 +213,7 @@ describe("runtime/healthcheck: info", () => {
     });
     const hc = new Healthcheck(config, SIGNER, tracker, executor, queue, silentLogger);
     assert.deepEqual(hc.info(), {
+      version: "test",
       network: "hardhat",
       discoveryMode: "events",
       dryRun: "false",

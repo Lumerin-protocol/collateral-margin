@@ -68,6 +68,7 @@ export class Healthcheck {
    */
   info(): Record<string, string> {
     return {
+      version: this.config.version,
       network: this.config.chain.network,
       discoveryMode: this.config.chain.discoveryMode,
       dryRun: String(this.config.keeper.dryRun),
