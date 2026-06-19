@@ -179,25 +179,18 @@ export interface Config {
   };
   delivery: {
     /**
-     * Opt-in: when true, the keeper acts as the futures `validator` and calls
-     * `closeDelivery(positionId, blameSeller)` on every active futures position
-     * the moment its `deliveryAt` is reached. Defaults to `false` so a stock
-     * keeper deployment doesn't accidentally start cash-settling positions on a
-     * chain where it isn't the configured validator.
+     * Opt-in: when true, the keeper permissionlessly calls
+     * `settlePosition(positionId)` on every active futures position the moment
+     * its `deliveryAt` (maturity) is reached, cash-settling it at the oracle
+     * mark. Defaults to `false` so a stock keeper deployment doesn't start
+     * settling positions unless explicitly enabled.
      *
-     * Requires the keeper signer (`LIQUIDATOR_PRIVATE_KEY`) to equal the
-     * Futures contract's `validatorAddress` — otherwise `closeDelivery` reverts
-     * `OnlyValidatorOrPositionParticipant` and the module logs the skip.
+     * `settlePosition` is permissionless — the keeper signer
+     * (`LIQUIDATOR_PRIVATE_KEY`) needs no special role, only enough gas. (The
+     * retired `closeDelivery` path required the signer to equal the Futures
+     * contract's `validatorAddress`.)
      */
     enabled: boolean;
-    /**
-     * Side blamed for the breach when settling at delivery start. The breach
-     * penalty is paid by the blamed party to the counterparty; with
-     * `breachPenaltyRatePerDay = 0` (the default in production) the choice is
-     * cosmetic. Set `true` to blame the seller (default: they're the ones
-     * who didn't deliver hashrate), `false` to blame the buyer.
-     */
-    blameSeller: boolean;
     /**
      * Cadence of the periodic safety-net sweep over tracked positions. Picks
      * up anything the per-position timers missed (process restarts, missed
@@ -205,7 +198,7 @@ export interface Config {
      */
     sweepIntervalMs: number;
     /**
-     * Delay after `position.deliveryAt` before attempting `closeDelivery`.
+     * Delay after `position.deliveryAt` before attempting `settlePosition`.
      * Adds a small cushion so the on-chain `block.timestamp >= deliveryAt`
      * guard is satisfied even when local and miner clocks drift slightly.
      */
@@ -220,11 +213,11 @@ export interface Config {
      */
     bootstrapUsers: readonly Address[];
     /**
-     * Maximum number of `closeDelivery` calls bundled into a single
+     * Maximum number of `settlePosition` calls bundled into a single
      * `Futures.multicall(bytes[])` transaction. Trades a single nonce per
      * sweep tick (no replacement-underpriced races) for one bigger tx.
      * Capped to keep gas usage well under the block limit — Base has 30M
-     * block gas, each `closeDelivery` is roughly 200-300k gas, so 50 is
+     * block gas, each `settlePosition` is roughly 200-300k gas, so 50 is
      * conservative (~15M gas worst case). Set lower if your participants
      * have unusually expensive settlement paths.
      */
@@ -414,7 +407,6 @@ export function loadConfig(): Config {
     },
     delivery: {
       enabled: process.env.DELIVERY_KEEPER_ENABLED === "true",
-      blameSeller: process.env.DELIVERY_BLAME_SELLER !== "false",
       sweepIntervalMs: Number(process.env.DELIVERY_SWEEP_INTERVAL_MS ?? "60000"),
       settleDelayMs: Number(process.env.DELIVERY_SETTLE_DELAY_MS ?? "5000"),
       bootstrapUsers: parseAddressList("DELIVERY_BOOTSTRAP_USERS"),

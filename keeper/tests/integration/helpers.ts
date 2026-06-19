@@ -184,7 +184,7 @@ export const readFuturesOrderLiquidationBlock = (s: DeployedStack, u: Address) =
 /**
  * Earliest block at which `Futures.LotClosed(lotId)` was
  * emitted. Used by the delivery-coordinator e2e tests to confirm the keeper
- * actually sent `closeDelivery` for a specific position id.
+ * actually settled a specific position id via `settlePosition`.
  */
 export async function readLotClosedBlock(
   stack: DeployedStack,

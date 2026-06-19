@@ -55,10 +55,9 @@ export interface KeeperHarness {
   predictor: PredictiveCoordinator;
   /**
    * Only present when `BuildKeeperOverrides.delivery` is set. Tests that
-   * exercise the delivery module must pass `delivery: true` and ensure the
-   * keeper signer equals the Futures contract's `validatorAddress` —
-   * otherwise every `closeDelivery` simulate fails authorization and the
-   * sweep silently no-ops.
+   * exercise the delivery module pass `delivery: true`. Settlement via
+   * `settlePosition` is permissionless, so the keeper signer needs no
+   * special role.
    */
   delivery?: DeliveryCoordinator;
   start(): Promise<void>;
@@ -74,10 +73,9 @@ export interface BuildKeeperOverrides {
   /** Inject your own keeper signer key. Defaults to Hardhat account #3. */
   liquidatorPrivateKey?: `0x${string}`;
   /**
-   * Wire up the optional `DeliveryCoordinator`. Defaults to false. When
-   * true, tests should also pass `liquidatorPrivateKey: HARDHAT_PRIVATE_KEYS[4]`
-   * (the validator) so `closeDelivery` simulations pass the contract's
-   * `_msgSender() == validatorAddress` guard.
+   * Wire up the optional `DeliveryCoordinator`. Defaults to false. Settlement
+   * via `settlePosition` is permissionless, so any keeper signer works — no
+   * need to align with the Futures `validatorAddress`.
    */
   delivery?: boolean;
   /**
@@ -88,7 +86,7 @@ export interface BuildKeeperOverrides {
    */
   deliveryBootstrapUsers?: readonly Address[];
   /**
-   * Maximum closeDelivery calls bundled into one Futures.multicall tx by
+   * Maximum settlePosition calls bundled into one Futures.multicall tx by
    * the delivery coordinator. Defaults to 50 for parity with production.
    * Override to a small value to assert batching behaviour explicitly
    * (e.g. set to 1 to force per-id calls, or 2 to assert chunked sweeps).
@@ -263,7 +261,6 @@ function buildConfig(
     },
     delivery: {
       enabled: overrides.delivery === true,
-      blameSeller: true,
       // Tighter than production so tests don't have to wait a minute for
       // the safety-net sweep when they want to verify backfill behaviour.
       sweepIntervalMs: 1_000,

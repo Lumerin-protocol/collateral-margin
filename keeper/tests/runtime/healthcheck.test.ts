@@ -56,7 +56,6 @@ const STUB_CONFIG: Config = {
   },
   delivery: {
     enabled: false,
-    blameSeller: true,
     sweepIntervalMs: 60_000,
     settleDelayMs: 0,
     bootstrapUsers: [],
