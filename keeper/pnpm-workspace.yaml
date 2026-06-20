@@ -1,9 +1,6 @@
-allowBuilds:
-  "@arbitrum/nitro-contracts": set this to true or false
-  keccak: set this to true or false
-  secp256k1: set this to true or false
 autoInstallPeers: false
 blockExoticSubdeps: false
 patchedDependencies:
   collateral-margin-abi: patches/collateral-margin-abi@.patch
   derivatives-marketplace-abi: patches/derivatives-marketplace-abi@.patch
+  futures-marketplace-abi: patches/futures-marketplace-abi@.patch

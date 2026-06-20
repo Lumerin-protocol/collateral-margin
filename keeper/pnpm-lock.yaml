@@ -7,6 +7,7 @@ settings:
 patchedDependencies:
   collateral-margin-abi: 7c97e1895133c2310ee81b6c24248a113d66b141bfa49a51d5b3ed468df4045d
   derivatives-marketplace-abi: 96cf5481d03a402c55577d18ce7e4576a0252323c61d0b1f48f6fec7d7001c2d
+  futures-marketplace-abi: 834111deab90972a9bdd88062197b2e3b180844df8a46e300657b1160df2723a
 
 importers:
 
@@ -23,7 +24,7 @@ importers:
         version: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/8b593843ce4312ea27e0cf3cd4ab321014187487#path:/contracts/abi(patch_hash=96cf5481d03a402c55577d18ce7e4576a0252323c61d0b1f48f6fec7d7001c2d)
       futures-marketplace-abi:
         specifier: github:Lumerin-protocol/futures-marketplace#feat/no-delivery&path:/contracts/abi
-        version: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/0aae92cd86a01b187ea20544b6e65784b067d118#path:/contracts/abi
+        version: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/0aae92cd86a01b187ea20544b6e65784b067d118#path:/contracts/abi(patch_hash=834111deab90972a9bdd88062197b2e3b180844df8a46e300657b1160df2723a)
       pino:
         specifier: ^10.3.1
         version: 10.3.1
@@ -364,7 +365,7 @@ snapshots:
 
   fast-safe-stringify@2.1.1: {}
 
-  futures-marketplace-abi@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/0aae92cd86a01b187ea20544b6e65784b067d118#path:/contracts/abi: {}
+  futures-marketplace-abi@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/0aae92cd86a01b187ea20544b6e65784b067d118#path:/contracts/abi(patch_hash=834111deab90972a9bdd88062197b2e3b180844df8a46e300657b1160df2723a): {}
 
   help-me@5.0.0: {}
 
