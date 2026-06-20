@@ -233,7 +233,6 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     "initialize",
     [
       hashpriceOracle,
-      validator.account.address,
       FUTURES_LIQUIDATION_MARGIN_PCT,
       FUTURES_SPEED_HPS,
       MIN_PRICE_INCREMENT,
@@ -335,14 +334,6 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     futuresArt.abi,
     "setLiquidationFee",
     [FUTURES_LIQUIDATION_FEE],
-  );
-  await write(
-    publicClient,
-    owner.client,
-    futures,
-    futuresArt.abi,
-    "setValidatorURL",
-    ["//keeper-test-validator"],
   );
 
   // ── Fund & approve test wallets ───────────────────────────────────────

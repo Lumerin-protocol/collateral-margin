@@ -61,7 +61,6 @@ function makeConfig(overrides: Partial<Config["delivery"]> = {}): Config {
     coordinator: { confirmationBlocks: 1 },
     delivery: {
       enabled: true,
-      blameSeller: true,
       sweepIntervalMs: 1_000_000,
       settleDelayMs: 0,
       bootstrapUsers: [],
@@ -258,7 +257,7 @@ const FUTURES_ABI = parseAbi([
   "error PositionNotExists()",
   "error OnlyValidatorOrPositionParticipant()",
   "error UnknownProblem()",
-  "function closeDelivery(bytes32 positionId, bool blameSeller)",
+  "function settlePosition(bytes32 positionId)",
 ]);
 
 /** Build the same shape of revert viem hands `simulateContract` callers. */
@@ -266,7 +265,7 @@ function makeRevert(errorName: string): BaseError {
   const inner = new ContractFunctionRevertedError({
     abi: FUTURES_ABI,
     data: undefined,
-    functionName: "closeDelivery",
+    functionName: "settlePosition",
   });
   (inner as unknown as { data: { errorName: string } }).data = { errorName };
   const outer = new BaseError("simulated revert");
@@ -275,28 +274,33 @@ function makeRevert(errorName: string): BaseError {
 }
 
 describe("DeliveryCoordinator: revert classification", () => {
-  it("recognises the contract's settlement-window guards as recoverable", () => {
+  it("recognises the maturity guard and benign already-settled as recoverable", () => {
     assert.equal(
       __testing.decodeRecoverableRevert(makeRevert("PositionDeliveryNotStartedYet")),
       "PositionDeliveryNotStartedYet",
     );
     assert.equal(
-      __testing.decodeRecoverableRevert(makeRevert("PositionDeliveryExpired")),
-      "PositionDeliveryExpired",
-    );
-    assert.equal(
       __testing.decodeRecoverableRevert(makeRevert("PositionNotExists")),
       "PositionNotExists",
-    );
-    assert.equal(
-      __testing.decodeRecoverableRevert(makeRevert("OnlyValidatorOrPositionParticipant")),
-      "OnlyValidatorOrPositionParticipant",
     );
   });
 
   it("treats oracle freshness reverts as recoverable so the sweep retries", () => {
     assert.equal(__testing.decodeRecoverableRevert(makeRevert("OracleStale")), "OracleStale");
     assert.equal(__testing.decodeRecoverableRevert(makeRevert("InvalidOracle")), "InvalidOracle");
+  });
+
+  it("no longer classifies retired validator/window reverts as recoverable", () => {
+    // settlePosition is permissionless with no upper time bound, so these
+    // closeDelivery-era reverts can never occur and are treated as unknown.
+    assert.equal(
+      __testing.decodeRecoverableRevert(makeRevert("PositionDeliveryExpired")),
+      undefined,
+    );
+    assert.equal(
+      __testing.decodeRecoverableRevert(makeRevert("OnlyValidatorOrPositionParticipant")),
+      undefined,
+    );
   });
 
   it("does not classify unknown reverts as recoverable", () => {
@@ -337,7 +341,7 @@ describe("DeliveryCoordinator: live event handling", () => {
 });
 
 describe("DeliveryCoordinator: settle()", () => {
-  it("simulates and broadcasts closeDelivery with the configured blame side", async () => {
+  it("simulates and broadcasts settlePosition for the matured lot", async () => {
     let simulatedArgs: readonly unknown[] | undefined;
     const chain = makeChain({
       simulate: (args) => {
@@ -346,11 +350,7 @@ describe("DeliveryCoordinator: settle()", () => {
       },
       writeHash: "0xfeed",
     });
-    const coordinator = new DeliveryCoordinator(
-      chain,
-      makeConfig({ blameSeller: false }),
-      silentLogger,
-    );
+    const coordinator = new DeliveryCoordinator(chain, makeConfig(), silentLogger);
     await coordinator.start();
     // Inject directly via the live watcher stub so we don't have to wait
     // on a real timer.
@@ -362,7 +362,7 @@ describe("DeliveryCoordinator: settle()", () => {
     });
     await coordinator.settle(POSITION_A);
 
-    assert.deepEqual(simulatedArgs, [POSITION_A, false]);
+    assert.deepEqual(simulatedArgs, [POSITION_A]);
     assert.equal(chain.calls.writes.length, 1);
     assert.equal(coordinator.has(POSITION_A), false, "settled position is dropped");
     coordinator.stop();
@@ -386,25 +386,6 @@ describe("DeliveryCoordinator: settle()", () => {
     await coordinator.settle(POSITION_A);
     assert.equal(chain.calls.writes.length, 0, "no tx in dryRun");
     assert.equal(coordinator.has(POSITION_A), false);
-    coordinator.stop();
-  });
-
-  it("drops positions on PositionDeliveryExpired (no second attempt possible)", async () => {
-    const chain = makeChain({
-      simulate: () => ({ error: makeRevert("PositionDeliveryExpired") }),
-    });
-    const coordinator = new DeliveryCoordinator(chain, makeConfig(), silentLogger);
-    await coordinator.start();
-    coordinator["tracked"].set(POSITION_A, {
-      positionId: POSITION_A,
-      deliveryAt: 0n,
-      seller: SELLER,
-      buyer: BUYER,
-    });
-
-    await coordinator.settle(POSITION_A);
-    assert.equal(chain.calls.writes.length, 0);
-    assert.equal(coordinator.has(POSITION_A), false, "expired position is dropped");
     coordinator.stop();
   });
 
@@ -439,23 +420,6 @@ describe("DeliveryCoordinator: settle()", () => {
     });
     await coordinator.settle(POSITION_A);
     assert.equal(coordinator.has(POSITION_A), true, "still tracked — sweep retries later");
-    coordinator.stop();
-  });
-
-  it("keeps positions on OnlyValidatorOrPositionParticipant (signer not validator)", async () => {
-    const chain = makeChain({
-      simulate: () => ({ error: makeRevert("OnlyValidatorOrPositionParticipant") }),
-    });
-    const coordinator = new DeliveryCoordinator(chain, makeConfig(), silentLogger);
-    await coordinator.start();
-    coordinator["tracked"].set(POSITION_A, {
-      positionId: POSITION_A,
-      deliveryAt: 0n,
-      seller: SELLER,
-      buyer: BUYER,
-    });
-    await coordinator.settle(POSITION_A);
-    assert.equal(coordinator.has(POSITION_A), true, "auth misconfig is recoverable");
     coordinator.stop();
   });
 
@@ -533,7 +497,7 @@ describe("DeliveryCoordinator: settle()", () => {
 });
 
 describe("DeliveryCoordinator: settleBatch()", () => {
-  it("bundles N closeDelivery calls into one Futures.multicall(bytes[]) tx", async () => {
+  it("bundles N settlePosition calls into one Futures.multicall(bytes[]) tx", async () => {
     // The whole point of batching: even with 3 candidates, we want exactly
     // one writeContract call (one nonce) so a concurrent manual send or a
     // stale pending tx can't cause `replacement transaction underpriced`.
@@ -567,7 +531,7 @@ describe("DeliveryCoordinator: settleBatch()", () => {
     assert.equal(writeArgs.length, 1, "exactly one broadcast — one nonce, no race");
     const req = writeArgs[0] as { functionName: string; args: readonly [readonly `0x${string}`[]] };
     assert.equal(req.functionName, "multicall");
-    assert.equal(req.args[0].length, 3, "three encoded closeDelivery calls in the bundle");
+    assert.equal(req.args[0].length, 3, "three encoded settlePosition calls in the bundle");
     for (const id of [POSITION_A, POSITION_B, POSITION_C]) {
       assert.equal(coordinator.has(id), false, `${id} dropped after multicall confirms`);
     }
@@ -741,8 +705,9 @@ describe("DeliveryCoordinator: backfill", () => {
     coordinator.stop();
   });
 
-  it("drops positions whose entire settlement window has already expired", async () => {
-    // 7 days * 86400 s + extra → window expired
+  it("still settles long-ago matured positions (settlePosition has no expiry window)", async () => {
+    // Pre-cash-settlement this would be pruned as "window expired". Now any
+    // matured position stays settleable forever, so backfill settles it.
     const longAgo = BigInt(Math.floor(Date.now() / 1000)) - 8n * 86_400n;
     let simulateCount = 0;
     const chain = makeChain({
@@ -752,7 +717,6 @@ describe("DeliveryCoordinator: backfill", () => {
         return { request: { ok: true } };
       },
       writeHash: "0xfeed",
-      deliveryDurationDays: 7,
       history: {
         LotCreated: [lotCreatedLog(POSITION_A, longAgo)],
       },
@@ -761,8 +725,9 @@ describe("DeliveryCoordinator: backfill", () => {
     await coordinator.start();
     await coordinator.backfill(0n, 10_000n);
 
-    assert.equal(simulateCount, 0, "no settlement attempted for expired window");
-    assert.equal(coordinator.has(POSITION_A), false, "expired position pruned");
+    assert.equal(simulateCount, 1, "matured position is settled, not abandoned");
+    assert.equal(chain.calls.writes.length, 1);
+    assert.equal(coordinator.has(POSITION_A), false, "settled position dropped");
     coordinator.stop();
   });
 
@@ -775,94 +740,11 @@ describe("DeliveryCoordinator: backfill", () => {
   });
 });
 
-describe("DeliveryCoordinator: validator pre-flight", () => {
-  it("start() throws when keeper signer is not Futures.validatorAddress()", async () => {
-    const OTHER = "0x0000000000000000000000000000000000000001" as Address;
-    const chain = makeChain({ validator: OTHER });
-    const coordinator = new DeliveryCoordinator(chain, makeConfig(), silentLogger);
-    await assert.rejects(
-      () => coordinator.start(),
-      /signer is not the futures validator/i,
-      "boot must fail loudly so the orchestrator restart loop pages on-call",
-    );
-  });
-
-  it("start() succeeds when keeper signer matches the validator", async () => {
-    const chain = makeChain({ validator: VALIDATOR });
-    const coordinator = new DeliveryCoordinator(chain, makeConfig(), silentLogger);
-    await coordinator.start();
-    coordinator.stop();
-  });
-});
-
 describe("DeliveryCoordinator: recoverable-revert log severity", () => {
-  // The whole point of differentiated logging: at the default `info` log
-  // level, an operator should *immediately* see operational misconfigs
-  // (wrong validator key, missed delivery window) without having to flip
-  // LOG_LEVEL=debug. Transient reverts the sweep will retry stay at debug
-  // so they don't drown out everything else.
-
-  it("errors once when the keeper signer is not the validator (page-worthy)", async () => {
-    const { logger, calls } = makeRecordingLogger();
-    const chain = makeChain({
-      simulate: () => ({ error: makeRevert("OnlyValidatorOrPositionParticipant") }),
-    });
-    const coordinator = new DeliveryCoordinator(chain, makeConfig(), logger);
-    await coordinator.start();
-    coordinator["tracked"].set(POSITION_A, {
-      positionId: POSITION_A,
-      deliveryAt: 0n,
-      seller: SELLER,
-      buyer: BUYER,
-    });
-    await coordinator.settle(POSITION_A);
-    const errors = calls.filter((c) => c.level === "error");
-    assert.equal(errors.length, 1, "first occurrence is an error the operator must see");
-    assert.equal(errors[0]?.obj.revert, "OnlyValidatorOrPositionParticipant");
-    assert.match(errors[0]?.msg ?? "", /signer is not Futures\.validatorAddress/);
-    assert.equal(coordinator.has(POSITION_A), true, "auth misconfig is recoverable; position kept");
-    coordinator.stop();
-  });
-
-  it("dedupes repeated auth-failure errors to debug to avoid flooding", async () => {
-    const { logger, calls } = makeRecordingLogger();
-    const chain = makeChain({
-      simulate: () => ({ error: makeRevert("OnlyValidatorOrPositionParticipant") }),
-    });
-    const coordinator = new DeliveryCoordinator(chain, makeConfig(), logger);
-    await coordinator.start();
-    coordinator["tracked"].set(POSITION_A, {
-      positionId: POSITION_A,
-      deliveryAt: 0n,
-      seller: SELLER,
-      buyer: BUYER,
-    });
-    await coordinator.settle(POSITION_A);
-    await coordinator.settle(POSITION_A);
-    await coordinator.settle(POSITION_A);
-    const errors = calls.filter((c) => c.level === "error");
-    assert.equal(errors.length, 1, "subsequent attempts on same position do not re-error");
-  });
-
-  it("errors once when settlement window has expired and drops the position", async () => {
-    const { logger, calls } = makeRecordingLogger();
-    const chain = makeChain({ simulate: () => ({ error: makeRevert("PositionDeliveryExpired") }) });
-    const coordinator = new DeliveryCoordinator(chain, makeConfig(), logger);
-    await coordinator.start();
-    coordinator["tracked"].set(POSITION_A, {
-      positionId: POSITION_A,
-      deliveryAt: 0n,
-      seller: SELLER,
-      buyer: BUYER,
-    });
-    await coordinator.settle(POSITION_A);
-    const errors = calls.filter((c) => c.level === "error");
-    assert.equal(errors.length, 1);
-    assert.equal(errors[0]?.obj.revert, "PositionDeliveryExpired");
-    assert.match(errors[0]?.msg ?? "", /settlement window already expired/);
-    assert.equal(coordinator.has(POSITION_A), false, "expired window → drop");
-    coordinator.stop();
-  });
+  // settlePosition is permissionless with no expiry window, so the only
+  // terminal revert is the benign "already settled" case (logged at info).
+  // Everything else is transient and stays at debug so the sweep retries
+  // quietly.
 
   it("logs at info (not error) when someone else already settled the position", async () => {
     const { logger, calls } = makeRecordingLogger();

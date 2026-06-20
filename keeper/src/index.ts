@@ -141,10 +141,9 @@ async function main(): Promise<void> {
     webhookIngester = new WebhookIngester(config, tracker, logger);
   }
 
-  // Optional: cash-settle futures positions at their delivery date. Off by
-  // default — only useful when the keeper signer is the Futures contract's
-  // configured `validatorAddress`. See `delivery/coordinator.ts` for the
-  // full authorization story.
+  // Optional: cash-settle futures positions at their maturity (`deliveryAt`)
+  // via the permissionless `Futures.settlePosition`. Off by default. Any keeper
+  // signer can settle — no validator role required. See `delivery/coordinator.ts`.
   let deliveryCoordinator: DeliveryCoordinator | undefined;
   if (config.delivery.enabled) {
     deliveryCoordinator = new DeliveryCoordinator(

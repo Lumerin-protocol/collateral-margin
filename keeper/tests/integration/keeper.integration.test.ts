@@ -619,18 +619,16 @@ describe("DeliveryCoordinator (live RPC)", () => {
     { timeout: 60_000 },
     async () => {
       // Precondition: alice holds a single long futures contract created
-      // at fixture time. The keeper boots with delivery enabled and the
-      // *validator* signing key — so `closeDelivery` simulations clear
-      // the contract's `_msgSender() == validatorAddress` guard.
+      // at fixture time. The keeper boots with delivery enabled. (The
+      // validator key is used here for historical parity, but `settlePosition`
+      // is permissionless — see the dedicated non-validator test below.)
       //
       // We then fast-forward the chain past `deliveryAt` and trigger one
-      // sweep. The contract's `_closeAndCashSettleDelivery` cash-settles
-      // the entire window at the current market price (positionElapsedTime
-      // = 0 → no contract-price portion), and emits `LotClosed`
-      // followed by `LotClosed`.
+      // sweep. `settlePosition` cash-settles the full position notional at the
+      // current market price and emits `LotClosed(SETTLED)`.
       const ctx = await loadFixture(futuresLongCrashFixture, testClient);
       keeper = buildKeeper(ctx, {
-        liquidatorPrivateKey: HARDHAT_PRIVATE_KEYS[4], // validator
+        liquidatorPrivateKey: HARDHAT_PRIVATE_KEYS[4], // validator (parity; not required)
         delivery: true,
       });
       await keeper.start();
@@ -651,7 +649,7 @@ describe("DeliveryCoordinator (live RPC)", () => {
         assert.ok(keeper.delivery.has(id), `backfill should index position ${id}`);
       }
 
-      // Fast-forward past `deliveryAt`. `closeDelivery` requires
+      // Fast-forward past `deliveryAt`. `settlePosition` requires
       // `block.timestamp >= position.deliveryAt`, and `block.timestamp` is
       // only advanced once a block is mined at the new clock.
       const deliveryAt = ctx.config.futuresFirstDeliveryDate;
@@ -660,9 +658,8 @@ describe("DeliveryCoordinator (live RPC)", () => {
 
       // The hashprice oracle has been silent for 7 days — refresh it so
       // `_getHashpriceUsd` doesn't revert `OracleStale` inside
-      // `closeDelivery`. We re-post the entry price; the cash-settlement
-      // formula uses this as the "current market price" applied to the
-      // full delivery window (positionElapsedTime = 0).
+      // `settlePosition`. We re-post the entry price; the settlement formula
+      // uses this as the mark applied to the full position notional.
       await ctx.bumpHashprice(ctx.config.initialHashprice);
 
       await keeper.delivery.sweep();
@@ -718,8 +715,8 @@ describe("DeliveryCoordinator (live RPC)", () => {
       // Precondition: alice's position was created at fixture time and
       // its `deliveryAt` is *already in the past* by the time the keeper
       // boots. The contract is the spec for "missing delivery": until
-      // someone calls `closeDelivery` the position lingers, and the
-      // settlement window stays open for `deliveryDurationDays`.
+      // someone calls `settlePosition` the position lingers, and (unlike the
+      // old closeDelivery window) it stays settleable indefinitely.
       //
       // Contract under test: `backfill()` discovers the position from
       // history AND its trailing `sweep()` settles it on the same boot —
@@ -859,39 +856,39 @@ describe("DeliveryCoordinator (live RPC)", () => {
   );
 
   it(
-    "refuses to start when the keeper signer is not the futures validator",
+    "settles with a non-validator signer (settlePosition is permissionless)",
     { timeout: 60_000 },
     async () => {
-      // Operator-safety contract: if `DELIVERY_KEEPER_ENABLED=true` is set
-      // but `LIQUIDATOR_PRIVATE_KEY` does not derive to
-      // `Futures.validatorAddress()`, the coordinator must throw at start.
-      // Bubbles up to `main().catch` → `process.exit(1)`; the orchestrator
-      // (k8s, systemd) sees the crash, healthcheck flips to 503, and
-      // standard infra alerting (CrashLoopBackOff etc.) pages on-call.
-      // The alternative — silent `simulateContract` reverts at debug level —
-      // is invisible at the default `info` log level and was the actual
-      // production failure mode that motivated this check.
+      // settlePosition has no validator/participant gate, so a stock keeper
+      // running the DEFAULT liquidator key (account #3, NOT the validator #4)
+      // must still be able to cash-settle matured positions. This is the
+      // whole point of the cash-settlement migration: no special role needed.
       const ctx = await loadFixture(futuresLongCrashFixture, testClient);
-      const k = buildKeeper(ctx, {
-        // Default liquidator key (account #3), NOT the validator (#4).
+      keeper = buildKeeper(ctx, {
+        // Note: no `liquidatorPrivateKey` override → default account #3.
         delivery: true,
       });
-      keeper = k;
-      await assert.rejects(
-        () => k.start(),
-        /signer is not the futures validator/i,
-        "boot must fail loudly so the operator cannot miss the misconfig",
-      );
+      await keeper.start();
+      assert.ok(keeper.delivery);
 
-      // Sanity: nothing was indexed and no positions were settled.
       const alice = ctx.accounts.alice.account.address;
       const positionsBefore = await readFuturesPositionIds(ctx, alice);
       assert.ok(positionsBefore.length > 0, "fixture should have created positions");
+
+      await keeper.delivery.backfill(0n, 10_000n);
+
+      const deliveryAt = ctx.config.futuresFirstDeliveryDate;
+      await testClient.setNextBlockTimestamp({ timestamp: deliveryAt + 60n });
+      await testClient.mine({ blocks: 1 });
+      await ctx.bumpHashprice(ctx.config.initialHashprice);
+
+      await keeper.delivery.sweep();
+
+      await expectFuturesClosed(ctx, alice);
       for (const id of positionsBefore) {
-        assert.equal(
-          await readLotClosedBlock(ctx, id),
-          null,
-          `position ${id} must not be settled by a misconfigured keeper`,
+        assert.ok(
+          (await readLotClosedBlock(ctx, id)) !== null,
+          `position ${id} should be settled by a permissionless (non-validator) signer`,
         );
       }
     },

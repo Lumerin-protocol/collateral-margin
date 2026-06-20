@@ -16,20 +16,22 @@ import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
 import { formatGasCost } from "../tx/gasCost.ts";
 
 /**
- * Optional keeper module that calls `Futures.closeDelivery(positionId, blameSeller)`
- * on every active futures position the moment its `deliveryAt` is reached.
- * Settlement happens at the *current* market price for the full delivery
- * window (positionElapsedTime = 0 → the entire position cash-settles at
- * `getMarketPrice()`), avoiding the need for any physical hashrate delivery.
+ * Optional keeper module that calls `Futures.settlePosition(positionId)` on
+ * every active futures position the moment its `deliveryAt` (maturity) is
+ * reached. Settlement marks the entire position to the expiration's pinned
+ * settlement price (recorded once per `deliveryAt` from the oracle; the first
+ * settle lazily pins it) and cash-settles PnL through the insurance fund —
+ * there is no physical hashrate delivery, escrow, breach penalty, or validator
+ * involvement. Pinning the price per expiration makes settlement deterministic:
+ * every position at a `deliveryAt` settles at the same price no matter when its
+ * tx lands.
  *
- * Authorization: `closeDelivery` is gated by either
- *   1. `_msgSender() == validatorAddress`  (this module's path), or
- *   2. `_msgSender() == position.{buyer,seller}`
- *
- * The keeper's signer must therefore equal the Futures contract's
- * `validatorAddress` for this module to do anything. If it doesn't, every
- * settlement attempt simulates as `OnlyValidatorOrPositionParticipant` and
- * the module logs the skip without crashing — useful in dev / dry-run setups.
+ * Authorization: `settlePosition` is permissionless — any address may settle
+ * any matured position. The keeper needs no special role; its signer only has
+ * to hold enough gas to broadcast. (Contrast the retired validator-gated
+ * `closeDelivery`, which required `_msgSender() == validatorAddress` or a
+ * position participant.) Because settlement has no upper time bound, a matured
+ * position can always be settled later — there are no permanently stuck lots.
  *
  * Hot path is event-driven:
  *
@@ -66,7 +68,7 @@ import { formatGasCost } from "../tx/gasCost.ts";
  *
  * Single source of truth for "is this position alive": the contract emits
  * `LotClosed` at the end of every `_removePosition`, including the
- * cash-settlement path inside `closeDelivery` itself. The module never has
+ * cash-settlement path inside `settlePosition` itself. The module never has
  * to track its own settled-set across restarts — once settled, the contract
  * removes the position and `getPositionById(id).seller == 0` permanently.
  */
@@ -77,14 +79,6 @@ export class DeliveryCoordinator {
   private readonly timers = new Map<Hex, NodeJS.Timeout>();
   /** Set of positions with an in-flight `settle()` — coalesces duplicate triggers. */
   private readonly inflight = new Set<Hex>();
-  /**
-   * Per-revert "we've already warned about this once" set so persistent
-   * operational misconfigs (wrong validator key, missed delivery window)
-   * surface loudly on first hit but don't flood the log on every sweep.
-   * Keyed by `<revert>:<positionId>` so each position warns once per type
-   * per process — clears nothing across restarts, which is what we want.
-   */
-  private readonly warned = new Set<string>();
   /**
    * Serialized broadcast chain: every `attemptSettle` awaits the previous
    * one before sending its own tx. The keeper has a single signer, so two
@@ -97,8 +91,6 @@ export class DeliveryCoordinator {
   /** Disposers returned by `watchContractEvent`. */
   private unwatchers: Array<() => void> = [];
   private sweepTimer: NodeJS.Timeout | undefined;
-  /** Cached `deliveryDurationDays` (read once at start). */
-  private deliveryDurationSeconds: bigint | undefined;
   private running = false;
 
   private readonly chain: Chain;
@@ -117,7 +109,7 @@ export class DeliveryCoordinator {
     this.logger = logger.child({ component: "deliveryCoordinator" });
     // Optional — see FuturesVenue for the rationale. Used only to enrich
     // the two confirmed-tx logs (batched `multicall` and single
-    // `closeDelivery`) with a `gasCostUsd` field.
+    // `settlePosition`) with a `gasCostUsd` field.
     this.ethUsdFeed = ethUsdFeed;
   }
 
@@ -133,34 +125,10 @@ export class DeliveryCoordinator {
     if (this.running) return;
     this.running = true;
 
-    const days = (await this.chain.publicClient.readContract({
-      address: this.config.futures.address,
-      abi: FuturesAbi,
-      functionName: "deliveryDurationDays",
-    })) as number;
-    this.deliveryDurationSeconds = BigInt(days) * 86_400n;
     this.logger.info(
-      {
-        deliveryDurationDays: days,
-        blameSeller: this.config.delivery.blameSeller,
-      },
-      "delivery coordinator starting",
+      { signer: this.chain.account.address },
+      "delivery coordinator starting (permissionless settlePosition)",
     );
-
-    // Pre-flight: verify the keeper signer is actually authorised to call
-    // `closeDelivery`. If not, every settle attempt will silently revert
-    // `OnlyValidatorOrPositionParticipant` inside simulate, and the only
-    // operator-visible signal is "no settlements happen" — easy to miss
-    // until a user reports a stuck position. We fail fast instead: throw,
-    // bubble up to `main().catch` → `process.exit(1)`. The orchestrator
-    // (k8s, systemd, docker restart-policy) sees the crash, cycles the
-    // pod, and standard infra alerting (CrashLoopBackOff, healthcheck
-    // 503, sentry on-error) pages on-call without any keeper-specific
-    // notification plumbing. A code restart is not required to recover —
-    // just rotate `LIQUIDATOR_PRIVATE_KEY` to match
-    // `Futures.validatorAddress()` (or unset `DELIVERY_KEEPER_ENABLED`)
-    // and the next pod will start cleanly.
-    await this.assertValidatorAuthorised();
 
     this.unwatchers.push(
       this.chain.publicClient.watchContractEvent({
@@ -205,44 +173,6 @@ export class DeliveryCoordinator {
       }
     }
     this.unwatchers = [];
-  }
-
-  /**
-   * Reads `Futures.validatorAddress()` and compares it to the keeper's
-   * signer. Throws when they don't match — caller (`start()`) propagates
-   * the throw up to `main().catch` so the process exits non-zero.
-   *
-   * The check is mandatory because the alternative (silent skip on every
-   * `closeDelivery` revert) is invisible to operators at the default
-   * `info` log level. A crash makes the misconfiguration impossible to
-   * miss: the orchestrator restart loop and healthcheck 503 are the
-   * existing operator-alert path; we don't need a parallel notification
-   * channel just for delivery.
-   */
-  private async assertValidatorAuthorised(): Promise<void> {
-    const validator = (await this.chain.publicClient.readContract({
-      address: this.config.futures.address,
-      abi: FuturesAbi,
-      functionName: "validatorAddress",
-    })) as Address;
-    const signer = this.chain.account.address;
-    if (validator.toLowerCase() === signer.toLowerCase()) {
-      this.logger.info(
-        { signer, validator, futures: this.config.futures.address },
-        "delivery: validator alignment OK",
-      );
-      return;
-    }
-    const message =
-      "DELIVERY_KEEPER_ENABLED=true but the keeper signer is not the futures validator. " +
-      `Futures.validatorAddress()=${validator} but LIQUIDATOR_PRIVATE_KEY → ${signer}. ` +
-      "Either rotate LIQUIDATOR_PRIVATE_KEY to match the validator, or unset " +
-      "DELIVERY_KEEPER_ENABLED. Refusing to start so this is impossible to miss.";
-    this.logger.error(
-      { signer, validator, futures: this.config.futures.address },
-      message,
-    );
-    throw new Error(message);
   }
 
   /**
@@ -521,45 +451,26 @@ export class DeliveryCoordinator {
   }
 
   /**
-   * Scan all tracked positions; settle any whose `deliveryAt` is past and
-   * whose settlement window has not yet expired. Skips positions with an
-   * in-flight settle to avoid duplicate sends. Public for tests.
+   * Scan all tracked positions; settle any whose `deliveryAt` (maturity) is
+   * past. Skips positions with an in-flight settle to avoid duplicate sends.
+   * Public for tests.
    *
-   * Uses the chain's latest `block.timestamp` rather than `Date.now()` so
-   * the sweep agrees with the contract's `_msgSender == validator` window
-   * checks (`block.timestamp >= deliveryAt`, `block.timestamp <= deliveryAt
-   * + duration`). On hardhat with `evm_setNextBlockTimestamp`, chain time
-   * and wall-clock can diverge by years; in production they're within
-   * one block of each other so this read is essentially free.
+   * Uses the chain's latest `block.timestamp` rather than `Date.now()` so the
+   * sweep agrees with the contract's maturity check (`block.timestamp >=
+   * deliveryAt`). `settlePosition` has no upper time bound, so there is no
+   * "window expired" case — a matured position stays settleable indefinitely.
+   * On hardhat with `evm_setNextBlockTimestamp`, chain time and wall-clock can
+   * diverge by years; in production they're within one block of each other so
+   * this read is essentially free.
    */
   async sweep(): Promise<void> {
     const latestBlock = await this.chain.publicClient.getBlock();
     const nowSec = latestBlock.timestamp;
     const candidates: TrackedPosition[] = [];
-    const window = this.deliveryDurationSeconds ?? 0n;
 
     for (const pos of this.tracked.values()) {
       if (this.inflight.has(pos.positionId)) continue;
       if (nowSec < pos.deliveryAt) continue;
-      // After `deliveryAt + duration` the contract reverts `PositionDeliveryExpired`.
-      // Skip — there's no entry point that can settle the position any more.
-      if (window > 0n && nowSec > pos.deliveryAt + window) {
-        this.logger.warn(
-          {
-            positionId: pos.positionId,
-            deliveryAt: pos.deliveryAt.toString(),
-            now: nowSec.toString(),
-          },
-          "delivery: settlement window expired — position abandoned",
-        );
-        this.tracked.delete(pos.positionId);
-        const t = this.timers.get(pos.positionId);
-        if (t !== undefined) {
-          clearTimeout(t);
-          this.timers.delete(pos.positionId);
-        }
-        continue;
-      }
       candidates.push(pos);
     }
 
@@ -624,19 +535,16 @@ export class DeliveryCoordinator {
   }
 
   /**
-   * Bundles up to `maxBatchSize` `closeDelivery` calls into a single
+   * Bundles up to `maxBatchSize` `settlePosition` calls into a single
    * `Futures.multicall(bytes[])` transaction. OZ `MulticallUpgradeable`
-   * uses `delegatecall` per entry, so `msg.sender` is preserved and the
-   * contract's `_msgSender == validator || _msgSender == participant`
-   * auth check is satisfied identically to a direct call.
+   * uses `delegatecall` per entry, so `msg.sender` is preserved — though
+   * `settlePosition` is permissionless, so no auth depends on the sender.
    *
    * Two-phase to keep one bad apple from spoiling the batch:
    *   1. Per-id `simulateContract` in parallel — drops candidates that
-   *      would revert (already-settled, expired window, oracle stale, etc).
+   *      would revert (already-settled, not yet matured, oracle stale, etc).
    *      Each revert is reported through the same severity taxonomy as
-   *      individual settles, so an operator-actionable revert
-   *      (`OnlyValidatorOrPositionParticipant`) still surfaces at error
-   *      level even when discovered as part of a batch.
+   *      individual settles.
    *   2. One `multicall` write tx for the survivors. If the *write*
    *      reverts (rare — simulate-then-write race), we fall back to
    *      per-id `attemptSettle` so a single newly-poisoned id can't
@@ -670,8 +578,6 @@ export class DeliveryCoordinator {
    * per-id retries if the batch tx itself fails.
    */
   private async attemptBatch(positionIds: readonly Hex[]): Promise<void> {
-    const blameSeller = this.config.delivery.blameSeller;
-
     type SimParams = Parameters<
       typeof this.chain.publicClient.simulateContract
     >[0];
@@ -680,8 +586,8 @@ export class DeliveryCoordinator {
         this.chain.publicClient.simulateContract({
           address: this.config.futures.address,
           abi: FuturesAbi,
-          functionName: "closeDelivery",
-          args: [id, blameSeller],
+          functionName: "settlePosition",
+          args: [id],
           account: this.chain.account,
         } as unknown as SimParams),
       ),
@@ -697,11 +603,8 @@ export class DeliveryCoordinator {
       }
       const decoded = decodeRecoverableRevert(r.reason);
       if (decoded !== undefined) {
-        this.logRecoverableRevert(decoded, id, blameSeller);
-        if (
-          decoded === "PositionNotExists" ||
-          decoded === "PositionDeliveryExpired"
-        ) {
+        this.logRecoverableRevert(decoded, id);
+        if (decoded === "PositionNotExists") {
           this.tracked.delete(id);
           const t = this.timers.get(id);
           if (t !== undefined) {
@@ -729,13 +632,13 @@ export class DeliveryCoordinator {
     if (this.config.keeper.dryRun) {
       this.logger.info(
         { batchSize: settleable.length },
-        "[dryRun] would call Futures.multicall(closeDelivery × N)",
+        "[dryRun] would call Futures.multicall(settlePosition × N)",
       );
       for (const id of settleable) this.tracked.delete(id);
       return;
     }
 
-    // Encode each closeDelivery into bytes for OZ multicall(bytes[]).
+    // Encode each settlePosition into bytes for OZ multicall(bytes[]).
     // Encoding can only fail on a malformed positionId (e.g. wrong
     // bytes32 width from a corrupted RPC read). We isolate that
     // per-position rather than letting one bad id swallow the whole
@@ -746,8 +649,8 @@ export class DeliveryCoordinator {
       try {
         const data = encodeFunctionData({
           abi: FuturesAbi,
-          functionName: "closeDelivery",
-          args: [id, blameSeller],
+          functionName: "settlePosition",
+          args: [id],
         });
         calldatas.push(data);
         encodableIds.push(id);
@@ -840,8 +743,7 @@ export class DeliveryCoordinator {
   }
 
   private async attemptSettle(positionId: Hex): Promise<void> {
-    const blameSeller = this.config.delivery.blameSeller;
-    const args = [positionId, blameSeller] as const;
+    const args = [positionId] as const;
 
     type SimParams = Parameters<
       typeof this.chain.publicClient.simulateContract
@@ -854,7 +756,7 @@ export class DeliveryCoordinator {
       const sim = (await this.chain.publicClient.simulateContract({
         address: this.config.futures.address,
         abi: FuturesAbi,
-        functionName: "closeDelivery",
+        functionName: "settlePosition",
         args,
         account: this.chain.account,
       } as unknown as SimParams)) as SimReturn;
@@ -862,13 +764,10 @@ export class DeliveryCoordinator {
     } catch (err) {
       const decoded = decodeRecoverableRevert(err);
       if (decoded !== undefined) {
-        this.logRecoverableRevert(decoded, positionId, blameSeller);
-        // PositionNotExists / PositionDeliveryExpired → contract no longer
-        // accepts settlement. Drop from the index so we don't keep retrying.
-        if (
-          decoded === "PositionNotExists" ||
-          decoded === "PositionDeliveryExpired"
-        ) {
+        this.logRecoverableRevert(decoded, positionId);
+        // PositionNotExists → contract no longer accepts settlement (already
+        // settled). Drop from the index so we don't keep retrying.
+        if (decoded === "PositionNotExists") {
           this.tracked.delete(positionId);
           const t = this.timers.get(positionId);
           if (t !== undefined) {
@@ -882,10 +781,7 @@ export class DeliveryCoordinator {
     }
 
     if (this.config.keeper.dryRun) {
-      this.logger.info(
-        { positionId, blameSeller },
-        "[dryRun] would call closeDelivery",
-      );
+      this.logger.info({ positionId }, "[dryRun] would call settlePosition");
       this.tracked.delete(positionId);
       return;
     }
@@ -903,12 +799,11 @@ export class DeliveryCoordinator {
     this.logger.info(
       {
         positionId,
-        blameSeller,
         hash,
         blockNumber: receipt.blockNumber.toString(),
         ...formatGasCost(receipt, this.ethUsdFeed),
       },
-      "delivery: closeDelivery confirmed",
+      "delivery: settlePosition confirmed",
     );
     this.tracked.delete(positionId);
     const t = this.timers.get(positionId);
@@ -990,68 +885,30 @@ export class DeliveryCoordinator {
   }
 
   /**
-   * Differentiated logging for the recoverable-revert taxonomy. Three buckets:
+   * Differentiated logging for the recoverable-revert taxonomy. Two buckets:
    *
-   *   debug — transient, will retry on the next sweep with no operator
-   *           action needed (pre-window, oracle stale, oracle invalid).
    *   info  — terminal but benign: the contract no longer accepts settlement
-   *           because someone else already did it. We drop and move on.
-   *   error — operational red flag that should page. Deduped per
-   *           `(revert, positionId)` so a stuck signer doesn't flood every
-   *           sweep tick — the first hit per position is the loud one,
-   *           subsequent ones drop to debug. Restart of the keeper resets
-   *           the dedupe set, so a fix-and-restart re-enables the error
-   *           for any new occurrences. We use `error` rather than `warn`
-   *           because both are unrecoverable without operator action: the
-   *           position will *never* be cash-settled by this keeper unless
-   *           the cause is fixed:
-   *             - signer != validator → keeper has no way to authorize
-   *               `closeDelivery`; rotate LIQUIDATOR_PRIVATE_KEY to match
-   *               `Futures.validatorAddress()` or have the position
-   *               participant call `closeDelivery` themselves.
-   *             - past `deliveryAt + duration` → the contract has hard-
-   *               coded the window closed; the position is permanently
-   *               stuck open from a settlement standpoint.
+   *           because someone else already settled it (`PositionNotExists`).
+   *           We drop and move on.
+   *   debug — transient, will retry on the next sweep with no operator action
+   *           needed (not yet matured, oracle stale, oracle invalid).
+   *
+   * Since `settlePosition` is permissionless and has no upper time bound, the
+   * old operator-paging cases (wrong validator key, expired settlement window)
+   * no longer exist — every revert here is either benign or self-healing.
    */
-  private logRecoverableRevert(
-    revert: RecoverableRevert,
-    positionId: Hex,
-    blameSeller: boolean,
-  ): void {
+  private logRecoverableRevert(revert: RecoverableRevert, positionId: Hex): void {
     if (revert === "PositionNotExists") {
       this.logger.info(
         { positionId, revert },
-        "delivery: position already closed by someone else — dropping from index",
-      );
-      return;
-    }
-    if (
-      revert === "OnlyValidatorOrPositionParticipant" ||
-      revert === "PositionDeliveryExpired"
-    ) {
-      const key = `${revert}:${positionId}`;
-      if (this.warned.has(key)) {
-        this.logger.debug(
-          { positionId, blameSeller, revert },
-          "delivery: closeDelivery skipped (already-reported recoverable revert)",
-        );
-        return;
-      }
-      this.warned.add(key);
-      const message =
-        revert === "OnlyValidatorOrPositionParticipant"
-          ? "delivery: closeDelivery rejected — keeper signer is not Futures.validatorAddress(); position will not be settled until LIQUIDATOR_PRIVATE_KEY is rotated or the position participant calls closeDelivery"
-          : "delivery: closeDelivery rejected — settlement window already expired; position is permanently stuck open and can no longer be cash-settled by the contract";
-      this.logger.error(
-        { positionId, blameSeller, revert, signer: this.chain.account.address },
-        message,
+        "delivery: position already settled by someone else — dropping from index",
       );
       return;
     }
     // PositionDeliveryNotStartedYet, OracleStale, InvalidOracle — sweep retries.
     this.logger.debug(
-      { positionId, blameSeller, revert },
-      "delivery: closeDelivery skipped (transient revert, will retry)",
+      { positionId, revert },
+      "delivery: settlePosition skipped (transient revert, will retry)",
     );
   }
 
@@ -1111,8 +968,6 @@ const MAX_TIMEOUT_MS = 2_147_483_647;
 type RecoverableRevert =
   | "PositionNotExists"
   | "PositionDeliveryNotStartedYet"
-  | "PositionDeliveryExpired"
-  | "OnlyValidatorOrPositionParticipant"
   // Hashprice oracle hasn't ticked within `MAX_ORACLE_STALENESS` (1h). The
   // periodic sweep keeps the position queued; the next attempt succeeds as
   // soon as the oracle posts a fresh round.
@@ -1123,8 +978,6 @@ type RecoverableRevert =
 const RECOVERABLE_REVERTS = new Set<RecoverableRevert>([
   "PositionNotExists",
   "PositionDeliveryNotStartedYet",
-  "PositionDeliveryExpired",
-  "OnlyValidatorOrPositionParticipant",
   "OracleStale",
   "InvalidOracle",
 ]);
