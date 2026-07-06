@@ -33,9 +33,23 @@ export type LiquidateOrdersOutcome =
   | { feeEarned: bigint }
   | { skipped: "notLiquidatable" };
 
-export type LiquidatePositionOutcome =
-  | { feeEarned: bigint }
-  | { skipped: "unprofitable" | "notLiquidatable" | "ordersStillOpen" };
+/**
+ * Result of a batched `reduceToTarget` call.
+ *
+ *   - `feeEarned` / `positionsClosed`: the batch executed; `positionsClosed`
+ *     is the number of lots (futures) or `1` (perps partial/full close) that
+ *     closed, for planner telemetry.
+ *   - `skipped`:
+ *       - `nothingToClose`  — the off-chain sizing found the account already
+ *         at/above the IM buffer (no lots to close).
+ *       - `notLiquidatable` — the venue's on-chain predicate rejected the batch
+ *         (healthy, or a stale snapshot / `OverLiquidation` race). Planner
+ *         re-snapshots and retries.
+ *       - `ordersStillOpen` — resting orders must be cleared first.
+ */
+export type ReduceToTargetOutcome =
+  | { feeEarned: bigint; positionsClosed: number }
+  | { skipped: "nothingToClose" | "notLiquidatable" | "ordersStillOpen" };
 
 /**
  * Cross-product abstraction the coordinator and planner consume. Each venue
@@ -74,11 +88,20 @@ export interface Venue {
   liquidateOrders(user: Address, ids?: readonly Hex[]): Promise<LiquidateOrdersOutcome>;
 
   /**
-   * Calls `liquidatePosition(user, id)` on the venue. `id` is unique within the
-   * venue across all markets. Reverts on-chain with `OrdersStillOpen` if any
-   * orders remain — the venue surface translates that into
-   * `{ skipped: "ordersStillOpen" }` so the coordinator can re-run
-   * `liquidateOrders` without crashing the plan.
+   * Liquidate `user`'s positions at this venue down to the IM buffer in a
+   * SINGLE batched transaction (the anti-churn "close-to-IM" path):
+   *
+   *   1. Read a fresh account snapshot + engine params.
+   *   2. Size the worst-first close off-chain so the account lands inside the
+   *      `[MM, IM]` band (futures: a lot-id subset; perps: a partial
+   *      `closeQty`). Deep-underwater accounts with no in-band partial size to
+   *      a full close.
+   *   3. Submit ONE tx — futures `liquidatePositions(user, ids[])`, perps
+   *      `liquidatePosition(user, closeQty)`.
+   *
+   * Reverts on-chain with `OrdersStillOpen` (orders must be cleared first) or
+   * `OverLiquidation` (a price race made the sizing overshoot IM) are
+   * translated into `{ skipped }` so the planner re-plans without crashing.
    */
-  liquidatePosition(user: Address, id: Hex): Promise<LiquidatePositionOutcome>;
+  reduceToTarget(user: Address): Promise<ReduceToTargetOutcome>;
 }

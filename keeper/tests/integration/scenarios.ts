@@ -102,6 +102,50 @@ export interface MultiFuturesFixture extends BaseFixture {
   makeLiquidatable(): Promise<void>;
 }
 
+/**
+ * Alice holds many futures lots and takes a *moderate* crash — deep enough
+ * to break MM but shallow enough that closing a strict subset of lots
+ * restores the IM buffer. Contrast with `futuresLongCrashFixtureBuilder`
+ * (a 99.8% crash that fully liquidates into bad debt). This is the anti-churn
+ * scenario: one batched `liquidatePositions` call should land the account in
+ * the `[MM, IM]` band with lots still open.
+ */
+export interface FuturesPartialCrashFixture extends BaseFixture {
+  aliceDeposit: bigint;
+  aliceFuturesQty: number;
+  makeLiquidatable(): Promise<void>;
+}
+
+/**
+ * Alice holds one perps net position and takes a *moderate* crash — below MM
+ * but recoverable by a partial-qty close back into the `[MM, IM]` band. The
+ * mirror of `FuturesPartialCrashFixture` for the perps `liquidatePosition(user,
+ * closeQty)` partial path.
+ */
+export interface PerpsPartialCrashFixture extends BaseFixture {
+  aliceDeposit: bigint;
+  aliceQty: bigint;
+  makeLiquidatable(): Promise<void>;
+}
+
+/**
+ * Alice holds equal-size futures long books on TWO delivery dates (separate
+ * markets) and takes the same *moderate* crash as `FuturesPartialCrashFixture`.
+ * A subset close restores the IM buffer — and because every lot carries the
+ * same global `deliveryDurationDays` risk weight, the aggregate margin matches
+ * the single-expiry 12-lot case. Used to prove the keeper's ONE
+ * `liquidatePositions` tx spreads the close *across both expirations* instead
+ * of draining one book first.
+ */
+export interface MultiExpiryFuturesPartialCrashFixture extends BaseFixture {
+  aliceDeposit: bigint;
+  /** The two delivery dates Alice holds lots on. */
+  deliveryDates: readonly [bigint, bigint];
+  /** Lots per delivery date (equal split). */
+  perExpiryQty: number;
+  makeLiquidatable(): Promise<void>;
+}
+
 /** Alice holds a futures long AND has a resting (unmatched) buy order. */
 export interface FuturesOrdersAndPositionFixture extends FuturesLongFixture {
   /** Count of resting orders held by alice at fixture time. */
@@ -457,6 +501,278 @@ export function multiFuturesFixtureBuilder(rpcUrl: string) {
 }
 
 /**
+ * Alice holds 12 long futures lots at the first delivery date; a moderate
+ * hashprice crash (4.21 → 3.90 / 100 TH/s / day) drives her below MM while
+ * leaving enough headroom that closing a worst-first subset of lots restores
+ * `balance >= IM`. Sizing (deliveryDurationDays = 7, PME shocks 10% IM / 5%
+ * MM, $1 flat liquidation fee):
+ *   - unrealized loss / lot after crash ≈ (4.21 − 3.90) · 7 = $2.17
+ *   - MM stress / lot ≈ 0.05 · 3.90 · 7 = $1.365, IM stress ≈ $2.73
+ *   - MM_req₀ ≈ 12 · (1.365 + 2.17) = $42.42 > $40 deposit ⇒ underwater
+ *   - closing ~7–10 lots frees enough MM stress to re-cross MM while staying
+ *     at/under IM (the rest stay open) — a genuine partial liquidation.
+ * Deposit $40 also clears the entry IM (12 · 0.10 · 4.21 · 7 ... perp-free
+ * futures IM ≈ $35.36) so Alice can open the position pre-crash.
+ */
+export function futuresPartialCrashFixtureBuilder(rpcUrl: string) {
+  return async (): Promise<FuturesPartialCrashFixture> => {
+    const base = await baseFixture(rpcUrl);
+    const aliceDeposit = parseUnits("40", base.config.tokenDecimals);
+    const bobDeposit = parseUnits("3000", base.config.tokenDecimals);
+    const aliceFuturesQty = 12;
+
+    // Zero the futures taker fee for this fixture only. Opening 12 lots costs
+    // an entry IM of 84·(0.1·$4.21) = $35.36, which fits the $40 deposit — but
+    // the default $1/lot taker fee ($12) would drop the post-match balance to
+    // $28 < IM and revert `InsufficientMarginBalance`. Zeroing it keeps the
+    // [MM, IM] band math clean; the $1/lot *liquidation* fee still applies to
+    // the sweep (so the solver's fee-aware sizing is still exercised).
+    await setFuturesTakerFee(base, 0n);
+
+    await base.deposit(base.accounts.alice.account.address, aliceDeposit);
+    await base.deposit(base.accounts.bob.account.address, bobDeposit);
+
+    await matchFuturesTrade(base, {
+      buyer: base.accounts.alice,
+      seller: base.accounts.bob,
+      price: base.config.initialHashprice,
+      deliveryAt: base.config.futuresFirstDeliveryDate,
+      quantity: aliceFuturesQty,
+    });
+
+    return {
+      ...base,
+      aliceDeposit,
+      aliceFuturesQty,
+      // Moderate crash: 4.21 → 3.90. Deep enough to break MM, shallow enough
+      // that a subset of lots restores the IM buffer.
+      makeLiquidatable: () =>
+        base.crashOracles(parseUnits("3.90", base.config.oracleDecimals)),
+    };
+  };
+}
+
+/**
+ * Alice holds 6 long futures lots on EACH of two delivery dates (12 total),
+ * then takes the same moderate crash (4.21 → 3.90) as
+ * `futuresPartialCrashFixtureBuilder`. Because the on-chain futures risk model
+ * weights every lot by the single global `deliveryDurationDays` (7) regardless
+ * of which date it delivers on, the aggregate MM/IM and unrealized loss are
+ * identical to the single-expiry 12-lot fixture — so the same $40 deposit
+ * breaks MM and a worst-first subset restores the IM buffer. The distinction
+ * under test: the keeper's ONE `liquidatePositions` sweep must close lots from
+ * BOTH expirations (balanced), not empty the first book before touching the
+ * second.
+ */
+export function futuresMultiExpiryPartialCrashFixtureBuilder(rpcUrl: string) {
+  return async (): Promise<MultiExpiryFuturesPartialCrashFixture> => {
+    const base = await baseFixture(rpcUrl);
+    const aliceDeposit = parseUnits("40", base.config.tokenDecimals);
+    const bobDeposit = parseUnits("3000", base.config.tokenDecimals);
+    const perExpiryQty = 6;
+    const firstDeliveryAt = base.config.futuresFirstDeliveryDate;
+    const secondDeliveryAt = firstDeliveryAt + BigInt(7 * 24 * 3600); // FUTURES_DELIVERY_INTERVAL_DAYS
+
+    // Zero the taker fee (see `futuresPartialCrashFixtureBuilder`) so the 12-lot
+    // entry IM (~$35.36) fits the $40 deposit; the liquidation-fee payout is
+    // already disabled contract-side.
+    await setFuturesTakerFee(base, 0n);
+
+    await base.deposit(base.accounts.alice.account.address, aliceDeposit);
+    await base.deposit(base.accounts.bob.account.address, bobDeposit);
+
+    for (const deliveryAt of [firstDeliveryAt, secondDeliveryAt]) {
+      await matchFuturesTrade(base, {
+        buyer: base.accounts.alice,
+        seller: base.accounts.bob,
+        price: base.config.initialHashprice,
+        deliveryAt,
+        quantity: perExpiryQty,
+      });
+    }
+
+    return {
+      ...base,
+      aliceDeposit,
+      deliveryDates: [firstDeliveryAt, secondDeliveryAt] as const,
+      perExpiryQty,
+      makeLiquidatable: () =>
+        base.crashOracles(parseUnits("3.90", base.config.oracleDecimals)),
+    };
+  };
+}
+
+/**
+ * Alice holds a single 40-qty perps long; a moderate crash (4.21 → 3.00)
+ * puts her below MM but a *partial* qty close restores `balance >= IM`.
+ * Sizing (PME 10% IM / 5% MM, $1 perps liquidation fee):
+ *   - loss / qty after crash = (4.21 − 3.00) = $1.21
+ *   - MM stress / qty = 0.05 · 3.00 = $0.15, IM stress = $0.30
+ *   - MM_req₀ ≈ 40 · (0.15 + 1.21) = $54.4 > $52 deposit ⇒ underwater
+ *   - closing ~23–31 qty re-crosses MM while staying at/under IM (residual
+ *     long stays open) — the partial-close path under test.
+ */
+export function perpsPartialCrashFixtureBuilder(rpcUrl: string) {
+  return async (): Promise<PerpsPartialCrashFixture> => {
+    const base = await baseFixture(rpcUrl);
+    const aliceDeposit = parseUnits("52", base.config.tokenDecimals);
+    const bobDeposit = parseUnits("3000", base.config.tokenDecimals);
+    const aliceQty = parseUnits("40", base.config.quantityDecimals);
+
+    await base.deposit(base.accounts.alice.account.address, aliceDeposit);
+    await base.deposit(base.accounts.bob.account.address, bobDeposit);
+
+    await matchPerpsTrade(base, {
+      buyer: base.accounts.alice,
+      seller: base.accounts.bob,
+      price: base.config.initialHashprice,
+      quantity: aliceQty,
+    });
+
+    return {
+      ...base,
+      aliceDeposit,
+      aliceQty,
+      makeLiquidatable: () =>
+        base.crashOracles(parseUnits("3.00", base.config.oracleDecimals)),
+    };
+  };
+}
+
+/**
+ * Cross-venue *partial* crash — the reduce-to-IM-buffer path spanning both
+ * venues. Alice holds a dominant 40-qty perps long plus a small 1-lot futures
+ * long. A moderate crash (4.21 → 3.00) puts the *combined* portfolio below MM,
+ * but the account is recoverable by a partial close. Because both legs are long
+ * at the same entry, the portfolio behaves like one net-long book of size
+ * `perpQty + deliveryDays·futuresLots` (= 40 + 7 = 47 delta units) for margin
+ * purposes.
+ *
+ * Sizing (PME 10% IM / 5% MM, deliveryDays = 7, fee payout disabled):
+ *   - mmReq(3.00) = 47 · (4.21 − 3.00·0.95) = 47 · 1.36 = $63.92
+ *   - imReq(3.00) = 47 · (4.21 − 3.00·0.90) = 47 · 1.51 = $70.97
+ *   - $61 deposit < $63.92 ⇒ underwater by ~$2.92
+ *   - each closed delta unit lifts mmSurplus by mmShock·P = $0.15, imSurplus by
+ *     $0.30, so the deepest in-band close is δ ≈ (70.97−61)/0.30 ≈ 33.2 delta
+ *     units — a PARTIAL perps close (≈6.8 units of the 40 stay open), suppliable
+ *     by the perps leg alone so the futures leg is never touched.
+ *
+ * The flat $1/lot futures taker fee is zeroed for this fixture (as in
+ * `futuresPartialCrashFixtureBuilder`) so it doesn't eat into the narrow
+ * partial-close band and flip the dominant-leg close from partial to full.
+ *
+ * Contract under test: the planner reduces the *dominant* venue (perps, by
+ * unrealized loss) down to the portfolio `[MM, IM]` band in one sweep. Because
+ * the perps solver sizes against whole-portfolio margin (the futures leg's loss
+ * AND stress are folded in), a perps-only partial close suffices — the futures
+ * leg is left fully intact. This is the cross-venue analogue of the single-venue
+ * partial tests, and distinct from the deep-crash cross-venue tests that fully
+ * wipe both books.
+ */
+export function crossVenuePartialCrashFixtureBuilder(rpcUrl: string) {
+  return async (): Promise<CrossVenueFixture> => {
+    const base = await baseFixture(rpcUrl);
+    const aliceDeposit = parseUnits("61", base.config.tokenDecimals);
+    const bobDeposit = parseUnits("5000", base.config.tokenDecimals);
+    const alicePerpsQty = parseUnits("40", base.config.quantityDecimals);
+    const aliceFuturesQty = 1;
+
+    await setFuturesTakerFee(base, 0n);
+
+    await base.deposit(base.accounts.alice.account.address, aliceDeposit);
+    await base.deposit(base.accounts.bob.account.address, bobDeposit);
+
+    await matchPerpsTrade(base, {
+      buyer: base.accounts.alice,
+      seller: base.accounts.bob,
+      price: base.config.initialHashprice,
+      quantity: alicePerpsQty,
+    });
+    await matchFuturesTrade(base, {
+      buyer: base.accounts.alice,
+      seller: base.accounts.bob,
+      price: base.config.initialHashprice,
+      deliveryAt: base.config.futuresFirstDeliveryDate,
+      quantity: aliceFuturesQty,
+    });
+
+    return {
+      ...base,
+      aliceDeposit,
+      alicePerpsQty,
+      aliceFuturesQty,
+      makeLiquidatable: () =>
+        base.crashOracles(parseUnits("3.00", base.config.oracleDecimals)),
+    };
+  };
+}
+
+/**
+ * Cross-venue *deep-but-recoverable* crash — the account is substantially
+ * underwater, so reducing the single worst venue to EMPTY still leaves it below
+ * MM and the planner must sweep the SECOND venue too before landing in the
+ * `[MM, IM]` band. This exercises the planner's multi-iteration cross-venue loop
+ * in the partial regime (distinct from both the single-venue-suffices partial
+ * test and the 99.8% deep-crash test that wipes everything into bad debt).
+ *
+ * Alice holds a dominant 6-lot futures long + a 25-qty perps long (delta units:
+ * futures 6·7 = 42, perps 25; S = 67). Moderate crash 4.21 → 3.00:
+ *   - mmReq(3.00) = 67 · 1.36 = $91.12 ; imReq = 67 · 1.51 = $101.17
+ *   - $83 deposit ⇒ underwater by ~$8.12 (substantial)
+ *   - futures is worst by loss ($50.82 > $30.25), so it's reduced first — but
+ *     even fully closing all 6 futures lots only lifts mmSurplus by 6·0.15·7 =
+ *     $6.30, short of the $8.12 deficit, so the account is STILL under MM (the
+ *     futures leg simply doesn't have the lots to close the gap alone).
+ *   - the planner then takes a SECOND iteration and reduces the perps leg. Perps
+ *     closes by a *continuous* quantity, so the solver lands the account
+ *     precisely on the IM boundary — a robust in-band result (residual perps
+ *     ~6.4 qty stays open), unlike the discrete futures-lot granularity.
+ *
+ * Net effect the test asserts: BOTH venues carry liquidation activity in the
+ * one sweep (futures fully closed, perps partially closed), the account lands in
+ * `[MM, IM]`, and it is not fully wiped (the perps leg keeps a residual long).
+ * The futures taker fee is zeroed (as elsewhere) so the $1/lot open cost doesn't
+ * shift the sizing.
+ */
+export function crossVenueBothLegsCrashFixtureBuilder(rpcUrl: string) {
+  return async (): Promise<CrossVenueFixture> => {
+    const base = await baseFixture(rpcUrl);
+    const aliceDeposit = parseUnits("83", base.config.tokenDecimals);
+    const bobDeposit = parseUnits("5000", base.config.tokenDecimals);
+    const alicePerpsQty = parseUnits("25", base.config.quantityDecimals);
+    const aliceFuturesQty = 6;
+
+    await setFuturesTakerFee(base, 0n);
+
+    await base.deposit(base.accounts.alice.account.address, aliceDeposit);
+    await base.deposit(base.accounts.bob.account.address, bobDeposit);
+
+    await matchPerpsTrade(base, {
+      buyer: base.accounts.alice,
+      seller: base.accounts.bob,
+      price: base.config.initialHashprice,
+      quantity: alicePerpsQty,
+    });
+    await matchFuturesTrade(base, {
+      buyer: base.accounts.alice,
+      seller: base.accounts.bob,
+      price: base.config.initialHashprice,
+      deliveryAt: base.config.futuresFirstDeliveryDate,
+      quantity: aliceFuturesQty,
+    });
+
+    return {
+      ...base,
+      aliceDeposit,
+      alicePerpsQty,
+      aliceFuturesQty,
+      makeLiquidatable: () =>
+        base.crashOracles(parseUnits("3.00", base.config.oracleDecimals)),
+    };
+  };
+}
+
+/**
  * Alice holds simultaneous perps + futures longs. A single oracle move
  * puts both legs underwater at once, exercising the planner's coordinated
  * cross-venue ranking.
@@ -686,6 +1002,19 @@ async function placeFuturesOrder(
     account: wallet.account,
   });
   await base.publicClient.waitForTransactionReceipt({ hash });
+}
+
+/** Owner-only: set the futures per-lot taker fee (token decimals). */
+async function setFuturesTakerFee(stack: DeployedStack, fee: bigint): Promise<void> {
+  const hash = await stack.accounts.owner.client.writeContract({
+    address: stack.addresses.futures,
+    abi: stack.abis.futures,
+    functionName: "setTakerFee",
+    args: [fee],
+    chain: hardhat,
+    account: stack.accounts.owner.account,
+  });
+  await stack.publicClient.waitForTransactionReceipt({ hash });
 }
 
 async function writeOracle(stack: DeployedStack, oracle: Address, price: bigint): Promise<void> {

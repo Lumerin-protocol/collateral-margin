@@ -145,7 +145,7 @@ describe("predict/solve: solveLiquidationThresholds", () => {
     const snap = emptySnapshot({
       balance: 200n,
       futures: {
-        positions: [{ id: "0xaa", isBuyer: true, entryPricePerDay: 50n }],
+        positions: [{ id: "0xaa", isBuyer: true, entryPricePerDay: 50n, deliveryAt: 1_756_416_000n }],
         orderMargin: 0n,
         deliveryDays: 30n,
       },

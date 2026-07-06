@@ -41,6 +41,15 @@ export interface AccountSnapshot {
       isBuyer: boolean;
       /** Token decimals. */
       entryPricePerDay: bigint;
+      /**
+       * Expiration timestamp (unix seconds) this lot delivers at. Lots sharing
+       * a `deliveryAt` are the same market/order-book; the liquidation solver
+       * groups on it to balance closures across expirations rather than
+       * draining one expiry's book. It does NOT affect PnL/margin math — every
+       * lot is valued with the single global `deliveryDays` (mirroring the
+       * on-chain `deliveryDurationDays`).
+       */
+      deliveryAt: bigint;
     }>;
     /** Constant in P: `getFuturesOrderMargin(user)`. */
     orderMargin: bigint;

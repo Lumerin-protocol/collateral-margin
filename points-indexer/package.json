@@ -7,7 +7,6 @@
   "type": "module",
   "scripts": {
     "clean": "rm -rf data generated build subgraph.yaml",
-    "postinstall": "node scripts/patch-matchstick-ts.mjs",
     "prepare:env": "envsubst < subgraph.template.yaml > subgraph.yaml",
     "prepare-local": "set -a && source ../.env && set +a && pnpm prepare:env",
     "codegen": "graph codegen",
@@ -35,9 +34,9 @@
     "assemblyscript": "^0.19.23",
     "collateral-margin-contracts": "link:../contracts",
     "hardhat": "^3.4.0",
-    "hardhat-matchstick-ts": "github:lsheva/matchstick-ts#main&path:packages/hardhat-matchstick-ts",
+    "hardhat-matchstick-ts": "github:lsheva/matchstick-ts#6c7e4b5d584a9fc75b66d1f6c03820e20313c9ad&path:packages/hardhat-matchstick-ts",
     "matchstick-as": "0.6.0",
-    "matchstick-ts": "github:lsheva/matchstick-ts#main&path:packages/matchstick-ts",
+    "matchstick-ts": "github:lsheva/matchstick-ts#6c7e4b5d584a9fc75b66d1f6c03820e20313c9ad&path:packages/matchstick-ts",
     "typescript": "^5.9.3",
     "viem": "^2.42.1"
   },

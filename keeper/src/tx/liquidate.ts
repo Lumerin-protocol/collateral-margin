@@ -27,6 +27,7 @@ export type LiquidateOutcome<S extends string> =
 type KnownRevert =
   | "NotLiquidatable"
   | "OrdersStillOpen"
+  | "OverLiquidation"
   | "OrderNotBelongToUser"
   | "OrderNotBelongToParticipant"
   | "PositionNotBelongToParticipant"
@@ -35,6 +36,10 @@ type KnownRevert =
 const RECOVERABLE_REVERTS = new Set<KnownRevert>([
   "NotLiquidatable",
   "OrdersStillOpen",
+  // A mis-sized batch (off-chain snapshot raced a price move) that overshoots
+  // the IM buffer reverts `OverLiquidation` — recoverable: the planner
+  // re-snapshots and re-sizes on the next iteration rather than crashing.
+  "OverLiquidation",
   "OrderNotBelongToUser",
   "OrderNotBelongToParticipant",
   "PositionNotBelongToParticipant",

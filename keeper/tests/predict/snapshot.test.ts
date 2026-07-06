@@ -30,7 +30,10 @@ function makeConfig(): Config {
  */
 function makeChain(scripted: {
   futuresPositionIds?: readonly string[];
-  futuresPositions?: Record<string, { buyer: string; seller: string; buyPricePerDay: bigint; sellPricePerDay: bigint }>;
+  futuresPositions?: Record<
+    string,
+    { buyer: string; seller: string; buyPricePerDay: bigint; sellPricePerDay: bigint; deliveryAt: bigint }
+  >;
   perpNetQty?: bigint;
   perpEntry?: bigint;
   perpOrderMargin?: bigint;
@@ -135,12 +138,14 @@ describe("predict/snapshot: readAccountSnapshot", () => {
           seller: "0x000000000000000000000000000000000000feed",
           buyPricePerDay: 50n,
           sellPricePerDay: 51n,
+          deliveryAt: 1_756_416_000n,
         },
         [SELLER_POS_ID]: {
           buyer: "0x000000000000000000000000000000000000feed",
           seller: USER,
           buyPricePerDay: 60n,
           sellPricePerDay: 59n,
+          deliveryAt: 1_759_008_000n,
         },
       },
     });
@@ -150,7 +155,9 @@ describe("predict/snapshot: readAccountSnapshot", () => {
     const seller = snap.futures.positions.find((p) => p.id === SELLER_POS_ID);
     assert.equal(buyer?.isBuyer, true);
     assert.equal(buyer?.entryPricePerDay, 50n);
+    assert.equal(buyer?.deliveryAt, 1_756_416_000n);
     assert.equal(seller?.isBuyer, false);
     assert.equal(seller?.entryPricePerDay, 59n);
+    assert.equal(seller?.deliveryAt, 1_759_008_000n);
   });
 });

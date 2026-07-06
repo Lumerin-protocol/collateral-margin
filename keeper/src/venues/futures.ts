@@ -4,11 +4,14 @@ import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
 import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
 import { sendLiquidate } from "../tx/liquidate.ts";
+import { readAccountSnapshot, readMMParams } from "../predict/snapshot.ts";
+import { solveFuturesLotsToTarget } from "../predict/solve.ts";
+import type { MMParams } from "../predict/types.ts";
 import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
 import type {
   LiquidateOrdersOutcome,
-  LiquidatePositionOutcome,
   MarketId,
+  ReduceToTargetOutcome,
   Venue,
   VenueOrder,
   VenuePosition,
@@ -31,6 +34,7 @@ export class FuturesVenue implements Venue {
   private readonly logger: pino.Logger;
   private readonly ethUsdFeed: EthUsdFeed | undefined;
   private deliveryDurationDays: bigint | undefined;
+  private mmParams: MMParams | undefined;
 
   constructor(
     chain: Chain,
@@ -161,18 +165,56 @@ export class FuturesVenue implements Venue {
       : { feeEarned: result.feeEarned };
   }
 
-  async liquidatePosition(
-    user: Address,
-    id: Hex,
-  ): Promise<LiquidatePositionOutcome> {
+  async reduceToTarget(user: Address): Promise<ReduceToTargetOutcome> {
+    // Size the worst-first lot subset off-chain against a fresh snapshot so the
+    // account lands inside the [MM, IM] band (or a full close on a deep crash).
+    const [snapshot, params, marketPrice] = await Promise.all([
+      readAccountSnapshot(this.chain, this.config, user),
+      this.getMMParams(),
+      this.chain.publicClient.readContract({
+        address: this.config.futures.address,
+        abi: FuturesAbi,
+        functionName: "getMarketPrice",
+      }) as Promise<bigint>,
+    ]);
+
+    // The contract's liquidation-fee payout is disabled, so each closed lot realizes
+    // no fee — pass 0 to the solver so its balance projection matches on-chain reality.
+    const ids = solveFuturesLotsToTarget(snapshot, params, marketPrice, 0n);
+    if (ids.length === 0) {
+      // Off-chain sizing says the account is already at/above the IM buffer.
+      return { skipped: "nothingToClose" };
+    }
+
+    // Gas-bounded chunking ("Option A"): send at most `maxLotsPerLiquidationTx`
+    // of the worst-first ids in this batch. `ids` is already ordered
+    // worst-first (highest unrealized loss), and a chunk shorter than the
+    // solver's full target closes FEWER lots than needed — so the leftover
+    // balance stays below IM and the on-chain `OverLiquidation` guard can't
+    // trip. The planner loop re-invokes `reduceToTarget` on a fresh snapshot to
+    // drain the remaining lots across successive txs (adapting to price drift).
+    const cap = this.config.futures.maxLotsPerLiquidationTx;
+    const chunk = cap > 0 && ids.length > cap ? ids.slice(0, cap) : ids;
+
+    this.logger.info(
+      {
+        user,
+        lotsInChunk: chunk.length,
+        lotsToClose: ids.length,
+        ofTotal: snapshot.futures.positions.length,
+        chunked: chunk.length < ids.length,
+      },
+      "Futures reduceToTarget: closing worst-first lot chunk in one batch",
+    );
+
     const result = await sendLiquidate({
       chain: this.chain,
       config: this.config,
       logger: this.logger,
       address: this.config.futures.address,
       abi: FuturesAbi,
-      functionName: "liquidatePosition",
-      args: [user, id],
+      functionName: "liquidatePositions",
+      args: [user, chunk],
       feeEventName: "LotLiquidated",
       mapSkip: (errorName) => {
         if (errorName === "OrdersStillOpen") return "ordersStillOpen";
@@ -183,7 +225,14 @@ export class FuturesVenue implements Venue {
 
     return "skipped" in result
       ? { skipped: result.skipped }
-      : { feeEarned: result.feeEarned };
+      : { feeEarned: result.feeEarned, positionsClosed: chunk.length };
+  }
+
+  /** Read + cache the PME engine params (shocks / decimals). Immutable per epoch. */
+  private async getMMParams(): Promise<MMParams> {
+    if (this.mmParams !== undefined) return this.mmParams;
+    this.mmParams = await readMMParams(this.chain, this.config);
+    return this.mmParams;
   }
 
   /**
