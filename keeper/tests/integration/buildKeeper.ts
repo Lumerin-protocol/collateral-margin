@@ -216,7 +216,7 @@ function buildConfig(
     },
     vault: { address: stack.addresses.vault },
     perps: { address: stack.addresses.perps },
-    futures: { address: stack.addresses.futures },
+    futures: { address: stack.addresses.futures, maxLotsPerLiquidationTx: 50 },
     pme: { address: stack.addresses.pme },
     oracle: {
       hashpriceUsdcAddress: stack.addresses.hashpriceOracle,

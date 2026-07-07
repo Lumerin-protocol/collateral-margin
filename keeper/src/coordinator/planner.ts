@@ -1,7 +1,7 @@
-import type { Address, Hex } from "viem";
+import type { Address } from "viem";
 import type pino from "pino";
 import type { Chain } from "../chain.ts";
-import type { Venue, VenuePosition } from "../venues/types.ts";
+import type { Venue } from "../venues/types.ts";
 import type { Config } from "../config.ts";
 import type { AccountHealth } from "../pme/health.ts";
 import { readAccountHealthBatch } from "../pme/health.ts";
@@ -25,7 +25,7 @@ interface StepReport {
   venue: Venue["name"];
   feeEarned: bigint;
   ordersClosed?: number;
-  positionId?: Hex;
+  positionsClosed?: number;
   skipped?: string;
 }
 
@@ -39,14 +39,16 @@ interface StepReport {
  *   2. If `mmSurplus >= 0`: account is healthy — emit `done`.
  *   3. Else: call `liquidateOrders` on every venue that has open orders.
  *      Re-snapshot health.
- *   4. If still unhealthy: pick the most-underwater single position across
- *      all venues (max `unrealizedLoss`, tiebreak on `notional`) and call
- *      `liquidatePosition` on that venue. The on-chain `OrdersStillOpen`
- *      revert is treated as a recoverable race — re-run step 3 then retry.
- *      Re-snapshot health.
- *   5. Repeat step 4 until healthy OR no positions remain. If no positions
- *      remain and the account is still unhealthy, emit a `BadDebt` log and
- *      a critical alert (the insurance fund must absorb the residual).
+ *   4. If still unhealthy: pick the most-underwater venue (max summed
+ *      `unrealizedLoss` across its positions) and call `reduceToTarget(user)`
+ *      — ONE batched tx that closes the venue's worst-first positions down to
+ *      the IM buffer (futures: a lot subset; perps: a partial `closeQty`). The
+ *      on-chain `OrdersStillOpen` revert is treated as a recoverable race —
+ *      re-run step 3 then retry. Re-snapshot health.
+ *   5. Repeat step 4 until healthy OR no venue can close any more (all
+ *      positions gone, or every venue reports `nothingToClose`). If positions
+ *      are gone and the account is still unhealthy, emit a `BadDebt` log and a
+ *      critical alert (the insurance fund must absorb the residual).
  *
  * The planner is purely orchestration — venues encapsulate calldata,
  * Multicall3 batching, gas estimation, and the unprofitable / not-liquidatable
@@ -54,14 +56,17 @@ interface StepReport {
  */
 export class Planner {
   /**
-   * Hard cap on the position-leg loop. Each iteration closes at least one
-   * position OR retries an `ordersLeg` after an `OrdersStillOpen` race —
-   * looping forever shouldn't be possible, but this is a defense-in-depth
-   * cap so a venue bug can't pin the executor on one user. Set generously:
-   * 16 iterations × ~50 positions per venue ≈ 800 closures, far above any
-   * realistic single-user portfolio.
+   * Hard cap on the position-leg loop. Each iteration issues ONE gas-bounded
+   * `reduceToTarget` chunk (Futures closes up to `maxLotsPerLiquidationTx`
+   * lots; Perps closes any quantity in one tx) OR retries an `ordersLeg` after
+   * an `OrdersStillOpen` race. With chunking, a large book drains across
+   * SUCCESSIVE iterations, so this must be generous enough to cover
+   * `ceil(largestBook / chunkSize)` per venue plus a few order replays.
+   * 64 iterations × ~50 lots per Futures chunk ≈ 3,200 lot closures — far
+   * above any realistic single-user portfolio — while still being a firm
+   * defense-in-depth cap so a venue bug can't pin the executor on one user.
    */
-  private static readonly MAX_POSITION_ITERATIONS = 16;
+  private static readonly MAX_POSITION_ITERATIONS = 64;
 
   // Explicit fields — Node's TypeScript strip-only mode does not support
   // parameter properties (the `private readonly chain: Chain` shortcut).
@@ -127,41 +132,54 @@ export class Planner {
       };
     }
 
-    // Step 4–5: position loop, one position at a time, picking the worst
-    // across all venues. We re-snapshot health after every closure since
-    // closing one position can flip the account healthy or change the
-    // ranking of the remaining positions.
+    // Step 4–5: position loop. Each iteration picks the most-underwater venue
+    // and issues ONE batched `reduceToTarget` that closes it down to the IM
+    // buffer, then re-snapshots health. Venues that report `nothingToClose`
+    // (their leg is already at/above IM but the portfolio is still under MM)
+    // are parked in `exhausted` so we don't spin on them.
+    const exhausted = new Set<Venue["name"]>();
     for (let iter = 0; iter < Planner.MAX_POSITION_ITERATIONS; iter++) {
-      const ranked = await this.rankPositions(user);
-      if (ranked.length === 0) {
-        // No positions left to close but still unhealthy → bad debt.
+      const rankedVenues = await this.rankVenuesByLoss(user);
+      const actionable = rankedVenues.filter((v) => !exhausted.has(v.venue.name));
+
+      if (rankedVenues.length === 0) {
+        // No positions left to close anywhere but still unhealthy → bad debt.
         log.error(
           { mmSurplus: health.mmSurplus, totalFee, positionsClosed, ordersClosed },
           "BadDebt: no positions remain but account still under MM",
         );
         return { kind: "badDebt", mmSurplus: health.mmSurplus, feeEarned: totalFee };
       }
+      if (actionable.length === 0) {
+        // Every venue with positions reported `nothingToClose` — the account
+        // is under MM on-chain but no venue's off-chain sizing found a close
+        // (a snapshot/price race). Re-queue rather than force a full close.
+        log.warn(
+          { mmSurplus: health.mmSurplus, totalFee, positionsClosed, ordersClosed },
+          "Position-leg: all venues report nothingToClose — stalling",
+        );
+        return { kind: "stalled", reason: "nothingToClose", mmSurplus: health.mmSurplus };
+      }
 
-      const worst = ranked[0];
+      const worst = actionable[0];
       log.info(
         {
           venue: worst.venue.name,
-          marketLabel: worst.venue.marketLabel(worst.position.marketId),
-          unrealizedLoss: worst.position.unrealizedLoss,
-          notional: worst.position.notional,
+          unrealizedLoss: worst.totalLoss,
+          positionCount: worst.positionCount,
         },
-        "Position-leg: liquidating worst position",
+        "Position-leg: reducing worst venue down to the IM buffer",
       );
-      const result = await worst.venue.liquidatePosition(user, worst.position.id);
+      const result = await worst.venue.reduceToTarget(user);
 
       if ("feeEarned" in result) {
-        positionsClosed++;
+        positionsClosed += result.positionsClosed;
         totalFee += result.feeEarned;
         reports.push({
           kind: "positionLeg",
           venue: worst.venue.name,
           feeEarned: result.feeEarned,
-          positionId: worst.position.id,
+          positionsClosed: result.positionsClosed,
         });
       } else if (result.skipped === "ordersStillOpen") {
         // A new order appeared between the orders-leg and now (race with the
@@ -178,24 +196,15 @@ export class Planner {
           ordersClosed += r.ordersClosed ?? 0;
         }
       } else {
-        // Either `notLiquidatable` (this position is no longer liquidatable
-        // — likely already-closed; loop to re-rank), or `unprofitable` (gas
-        // cost exceeds reward — bail rather than burn money).
+        // `nothingToClose` (park the venue) or `notLiquidatable` (stale
+        // snapshot / `OverLiquidation` race — re-rank from a fresh snapshot).
         reports.push({
           kind: "positionLeg",
           venue: worst.venue.name,
           feeEarned: 0n,
-          positionId: worst.position.id,
           skipped: result.skipped,
         });
-        if (result.skipped === "unprofitable") {
-          log.warn(
-            { mmSurplus: health.mmSurplus, totalFee, positionsClosed },
-            "Position-leg unprofitable — stalling",
-          );
-          return { kind: "stalled", reason: "unprofitable", mmSurplus: health.mmSurplus };
-        }
-        // notLiquidatable → loop and re-rank from a fresh snapshot.
+        if (result.skipped === "nothingToClose") exhausted.add(worst.venue.name);
       }
 
       health = await this.readHealth(user);
@@ -275,28 +284,38 @@ export class Planner {
   }
 
   /**
-   * Returns every (venue, position) pair across all venues, sorted
-   * most-underwater first. Primary key is `unrealizedLoss` DESC; tiebreak is
-   * `notional` DESC (closing the bigger position frees more margin).
+   * Ranks venues that hold at least one position for `user`, most-underwater
+   * first. Per venue we sum `unrealizedLoss` across its positions (primary key
+   * DESC); tiebreak is summed `notional` DESC (the bigger book frees more
+   * margin when reduced). Venues with no positions are omitted — the position
+   * leg only ever calls `reduceToTarget` on venues that have something to close.
    */
-  private async rankPositions(
+  private async rankVenuesByLoss(
     user: Address,
-  ): Promise<Array<{ venue: Venue; position: VenuePosition }>> {
-    const all: Array<{ venue: Venue; position: VenuePosition }> = [];
+  ): Promise<Array<{ venue: Venue; totalLoss: bigint; totalNotional: bigint; positionCount: number }>> {
+    const ranked: Array<{
+      venue: Venue;
+      totalLoss: bigint;
+      totalNotional: bigint;
+      positionCount: number;
+    }> = [];
     for (const venue of this.venues) {
       const positions = await venue.readPositions(user);
-      for (const p of positions) all.push({ venue, position: p });
+      if (positions.length === 0) continue;
+      let totalLoss = 0n;
+      let totalNotional = 0n;
+      for (const p of positions) {
+        totalLoss += p.unrealizedLoss;
+        totalNotional += p.notional;
+      }
+      ranked.push({ venue, totalLoss, totalNotional, positionCount: positions.length });
     }
-    all.sort((a, b) => {
-      if (a.position.unrealizedLoss !== b.position.unrealizedLoss) {
-        return a.position.unrealizedLoss < b.position.unrealizedLoss ? 1 : -1;
-      }
-      if (a.position.notional !== b.position.notional) {
-        return a.position.notional < b.position.notional ? 1 : -1;
-      }
+    ranked.sort((a, b) => {
+      if (a.totalLoss !== b.totalLoss) return a.totalLoss < b.totalLoss ? 1 : -1;
+      if (a.totalNotional !== b.totalNotional) return a.totalNotional < b.totalNotional ? 1 : -1;
       return 0;
     });
-    return all;
+    return ranked;
   }
 
   private async readHealth(user: Address): Promise<AccountHealth> {

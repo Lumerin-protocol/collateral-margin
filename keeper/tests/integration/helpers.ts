@@ -112,6 +112,31 @@ export async function readFuturesPositionIds(
   })) as readonly Hex[];
 }
 
+/**
+ * Reads the `deliveryAt` (expiration timestamp) of each supplied futures lot
+ * id via `getPositionById`. Must be called *before* the lots are liquidated —
+ * the contract deletes a position from storage on close, so the mapping has to
+ * be snapshotted while every lot is still alive. Used by the multi-expiry
+ * balancing test to attribute each closed lot back to its book.
+ */
+export async function readFuturesLotExpiries(
+  stack: DeployedStack,
+  ids: readonly Hex[],
+): Promise<Map<Hex, bigint>> {
+  const entries = await Promise.all(
+    ids.map(async (id) => {
+      const pos = (await stack.publicClient.readContract({
+        address: stack.addresses.futures,
+        abi: stack.abis.futures,
+        functionName: "getPositionById",
+        args: [id],
+      })) as { deliveryAt: bigint };
+      return [id, pos.deliveryAt] as const;
+    }),
+  );
+  return new Map(entries);
+}
+
 export async function readFuturesOrderIds(
   stack: DeployedStack,
   user: Address,
@@ -140,6 +165,126 @@ export async function expectFuturesClosed(
   timeoutMs = 30_000,
 ): Promise<void> {
   await waitFor(async () => (await readFuturesPositionIds(stack, user)).length === 0, timeoutMs);
+}
+
+export interface AccountMargins {
+  balance: bigint;
+  imRequired: bigint;
+  mmRequired: bigint;
+}
+
+/**
+ * Reads `(balanceOf, computePortfolioIM, computePortfolioMM)` for `user` — the
+ * on-chain source of truth the liquidation predicates (and the new
+ * `liquidatePositions` / partial-perps `OverLiquidation` guard) resolve back
+ * to. Used by `expectReducedToImBuffer` to assert the account landed inside the
+ * `[MM, IM]` band after a batched liquidation. Uses three parallel
+ * `readContract` calls (the test's public client has no multicall3 configured,
+ * matching every other reader in this file).
+ */
+export async function readAccountMargins(
+  stack: DeployedStack,
+  user: Address,
+): Promise<AccountMargins> {
+  const [balance, imRequired, mmRequired] = await Promise.all([
+    stack.publicClient.readContract({
+      address: stack.addresses.vault,
+      abi: stack.abis.vault,
+      functionName: "balanceOf",
+      args: [user],
+    }) as Promise<bigint>,
+    stack.publicClient.readContract({
+      address: stack.addresses.pme,
+      abi: stack.abis.pme,
+      functionName: "computePortfolioIM",
+      args: [user],
+    }) as Promise<bigint>,
+    stack.publicClient.readContract({
+      address: stack.addresses.pme,
+      abi: stack.abis.pme,
+      functionName: "computePortfolioMM",
+      args: [user],
+    }) as Promise<bigint>,
+  ]);
+  return { balance, imRequired, mmRequired };
+}
+
+/**
+ * Asserts the account was liquidated *down to the IM buffer* — i.e. it now
+ * sits inside the `[MM, IM]` band:
+ *
+ *   - `balance >= computePortfolioMM(user)`  → healthy (not re-liquidatable)
+ *   - `balance <= computePortfolioIM(user)`  → NOT over-liquidated (the
+ *     contract's `OverLiquidation` guard tolerates landing at/under IM while
+ *     positions remain; closing so much that balance exceeds IM would have
+ *     reverted on-chain)
+ *
+ * Polls until the batched liquidation tx has confirmed (balance drops into or
+ * below the IM band) and then makes the hard band assertions with BigInt-safe
+ * diagnostics. This is the core acceptance predicate for the close-to-IM
+ * behaviour — a subset liquidation must leave the account healthy with a real
+ * buffer, not scraping the MM floor and not blown past IM.
+ */
+export async function expectReducedToImBuffer(
+  stack: DeployedStack,
+  user: Address,
+  timeoutMs = 30_000,
+): Promise<AccountMargins> {
+  await waitFor(async () => {
+    const m = await readAccountMargins(stack, user);
+    return m.balance >= m.mmRequired && m.balance <= m.imRequired;
+  }, timeoutMs);
+
+  const m = await readAccountMargins(stack, user);
+  assert.ok(
+    m.balance >= m.mmRequired,
+    `expected balance >= MM (healthy after liquidation), got balance=${m.balance}n mm=${m.mmRequired}n`,
+  );
+  assert.ok(
+    m.balance <= m.imRequired,
+    `expected balance <= IM (not over-liquidated past the buffer), got balance=${m.balance}n im=${m.imRequired}n`,
+  );
+  return m;
+}
+
+/**
+ * Every block a `Futures.LotLiquidated` event was emitted at for `participant`.
+ * Unlike the `earliestEventBlock` readers this keeps the full list so tests can
+ * assert a batched liquidation collapses all lots into a single block (the
+ * anti-churn regression guard) — reusing the `Set<block>` pattern from the
+ * delivery-coordinator multicall test.
+ */
+export async function readFuturesLotLiquidatedBlocks(
+  stack: DeployedStack,
+  user: Address,
+): Promise<bigint[]> {
+  const logs = await stack.publicClient.getContractEvents({
+    address: stack.addresses.futures,
+    abi: stack.abis.futures,
+    eventName: "LotLiquidated",
+    args: { participant: user },
+    fromBlock: 0n,
+  });
+  const blocks: bigint[] = [];
+  for (const log of logs) {
+    if (log.blockNumber !== null) blocks.push(log.blockNumber);
+  }
+  return blocks;
+}
+
+/**
+ * Asserts every supplied block number is identical — i.e. the events all rode
+ * a single transaction/block. `label` names the batched call for diagnostics.
+ * Mirrors the multicall batching invariant asserted in the delivery test.
+ */
+export function assertSingleBlock(blocks: readonly bigint[], label: string): void {
+  assert.ok(blocks.length > 0, `${label}: expected at least one event block`);
+  const unique = new Set(blocks.map((b) => b.toString()));
+  assert.equal(
+    unique.size,
+    1,
+    `${label}: expected all events in a single block (batched), got ${unique.size} distinct blocks: ${[...unique].join(", ")}`,
+  );
 }
 
 /** Resolves to true once `user` has no open orders on either venue. */

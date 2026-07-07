@@ -145,6 +145,7 @@ export async function readAccountSnapshot(
         id,
         isBuyer,
         entryPricePerDay: isBuyer ? pos.buyPricePerDay : pos.sellPricePerDay,
+        deliveryAt: pos.deliveryAt,
       });
     }
   }

@@ -67,6 +67,17 @@ export interface Config {
     address: Address;
     /** Optional fast pre-filter (token decimals). */
     minNotional?: bigint;
+    /**
+     * Max futures lots closed per `liquidatePositions` tx (gas-bounded
+     * chunking, "Option A"). `reduceToTarget` sends ONE worst-first chunk of
+     * at most this many lots; the planner loop re-invokes it (re-snapshotting
+     * each time) until the account is healthy. Each `_liquidateOnePosition` is
+     * roughly 150-250k gas, so 50 keeps a full chunk (~12M) well under Base's
+     * 30M block limit. Lower it for chains with tighter blocks or unusually
+     * expensive settlement paths. Must stay ≤ `MAX_POSITION_ITERATIONS × this`
+     * worth of headroom for the largest realistic single-user book.
+     */
+    maxLotsPerLiquidationTx: number;
   };
   pme: { address: Address };
   oracle: {
@@ -360,6 +371,9 @@ export function loadConfig(): Config {
     futures: {
       address: requireAddress("FUTURES_ADDRESS"),
       minNotional: optionalBigInt("FUTURES_MIN_NOTIONAL"),
+      maxLotsPerLiquidationTx: Number(
+        process.env.FUTURES_MAX_LOTS_PER_LIQUIDATION_TX ?? "50",
+      ),
     },
     pme: { address: requireAddress("PME_ADDRESS") },
     oracle: {

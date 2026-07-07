@@ -18,23 +18,23 @@ importers:
         version: 1.1.10
       collateral-margin-abi:
         specifier: github:Lumerin-protocol/collateral-margin#dev&path:/contracts/abi
-        version: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/332350e6dc4bc2e65b40bc0aec6745ea8002f11b#path:/contracts/abi(patch_hash=7c97e1895133c2310ee81b6c24248a113d66b141bfa49a51d5b3ed468df4045d)
+        version: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/4ba5a84b54a01c37f4a92e9f30fa0ff2281c6855#path:/contracts/abi(patch_hash=7c97e1895133c2310ee81b6c24248a113d66b141bfa49a51d5b3ed468df4045d)
       derivatives-marketplace-abi:
-        specifier: github:Lumerin-protocol/derivatives-marketplace#dev&path:/contracts/abi
-        version: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/724763fc656bb871acadcca828c0b8bb905a39ec#path:/contracts/abi(patch_hash=96cf5481d03a402c55577d18ce7e4576a0252323c61d0b1f48f6fec7d7001c2d)
+        specifier: github:Lumerin-protocol/derivatives-marketplace#feat/liquidate-to-im-buffer&path:/contracts/abi
+        version: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/085d5a87d5bd7e5ee5a18e9dfd1315230c4d268c#path:/contracts/abi(patch_hash=96cf5481d03a402c55577d18ce7e4576a0252323c61d0b1f48f6fec7d7001c2d)
       futures-marketplace-abi:
-        specifier: github:Lumerin-protocol/futures-marketplace#0aae92cd86a01b187ea20544b6e65784b067d118&path:/contracts/abi
-        version: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/0aae92cd86a01b187ea20544b6e65784b067d118#path:/contracts/abi(patch_hash=834111deab90972a9bdd88062197b2e3b180844df8a46e300657b1160df2723a)
+        specifier: github:Lumerin-protocol/futures-marketplace#feat/liquidate-to-im-buffer&path:/contracts/abi
+        version: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/a6484385fc64dee9be9bad992e9c6fa4e6013175#path:/contracts/abi(patch_hash=834111deab90972a9bdd88062197b2e3b180844df8a46e300657b1160df2723a)
       pino:
         specifier: ^10.3.1
         version: 10.3.1
       viem:
         specifier: ^2.48.8
-        version: 2.52.2
+        version: 2.54.6
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
-        version: 22.19.21
+        version: 22.20.0
       '@typescript/native-preview':
         specifier: 7.0.0-dev.20260511.1
         version: 7.0.0-dev.20260511.1
@@ -71,8 +71,8 @@ packages:
   '@scure/bip39@1.6.0':
     resolution: {integrity: sha512-+lF0BbLiJNwVlev4eKelw1WWLaiKXw7sSl8T6FvBlWkdX+94aGJ4o8XjUdlyhTCjd8c+B3KT3JfS8P0bLRNU6A==}
 
-  '@types/node@22.19.21':
-    resolution: {integrity: sha512-VMeFBSCKQKmm2swI2kW51SFusDqekC6q9trBCvJ/JliDchFSuoYYKN7yVNjPthP1HKZcx3U1gI/wTcEBjEFKTA==}
+  '@types/node@22.20.0':
+    resolution: {integrity: sha512-QWlFW2wf3nTjC13/DqRnBpR4ZO36VJH/JVBkA/vcnmbTBNQIlnObqyqZE1tUR7+Ni23Lda8R1BxMfbXRpCUx5g==}
 
   '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260511.1':
     resolution: {integrity: sha512-SYrqVOlapDxDG7FzHBIJbfgaix+mXPkYzYGqwpz/TAhoPA7sgbfAoGLaqi3ut9N88C/OYNhEX4tjz/0PC9i1nw==}
@@ -140,8 +140,8 @@ packages:
     resolution: {integrity: sha512-kNOjDqAh7px0XWNI+4QbzoiR/nTkHAWNud2uvnJquD1/x5a7EQZMJT0AczqK0Qn67oY/TTQ1LbUKajZpp3I9tQ==}
     engines: {node: '>=8.0.0'}
 
-  collateral-margin-abi@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/332350e6dc4bc2e65b40bc0aec6745ea8002f11b#path:/contracts/abi:
-    resolution: {gitHosted: true, path: /contracts/abi, tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/332350e6dc4bc2e65b40bc0aec6745ea8002f11b}
+  collateral-margin-abi@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/4ba5a84b54a01c37f4a92e9f30fa0ff2281c6855#path:/contracts/abi:
+    resolution: {gitHosted: true, path: /contracts/abi, tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/4ba5a84b54a01c37f4a92e9f30fa0ff2281c6855}
     version: 0.0.0
 
   colorette@2.0.20:
@@ -150,8 +150,8 @@ packages:
   dateformat@4.6.3:
     resolution: {integrity: sha512-2P0p0pFGzHS5EMnhdxQi7aJN+iMheud0UhG4dlE1DLAlvL8JHjJJTX/CSm4JXwV0Ka5nGk3zC5mcb5bUQUxxMA==}
 
-  derivatives-marketplace-abi@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/724763fc656bb871acadcca828c0b8bb905a39ec#path:/contracts/abi:
-    resolution: {gitHosted: true, path: /contracts/abi, tarball: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/724763fc656bb871acadcca828c0b8bb905a39ec}
+  derivatives-marketplace-abi@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/085d5a87d5bd7e5ee5a18e9dfd1315230c4d268c#path:/contracts/abi:
+    resolution: {gitHosted: true, path: /contracts/abi, tarball: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/085d5a87d5bd7e5ee5a18e9dfd1315230c4d268c}
     version: 0.0.0
 
   end-of-stream@1.4.5:
@@ -166,8 +166,8 @@ packages:
   fast-safe-stringify@2.1.1:
     resolution: {integrity: sha512-W+KJc2dmILlPplD/H4K9l9LcAHAfPtP6BY84uVLXQ6Evcz9Lcg33Y2z1IVblT6xdY54PXYVHEv+0Wpq8Io6zkA==}
 
-  futures-marketplace-abi@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/0aae92cd86a01b187ea20544b6e65784b067d118#path:/contracts/abi:
-    resolution: {gitHosted: true, path: /contracts/abi, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/0aae92cd86a01b187ea20544b6e65784b067d118}
+  futures-marketplace-abi@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/a6484385fc64dee9be9bad992e9c6fa4e6013175#path:/contracts/abi:
+    resolution: {gitHosted: true, path: /contracts/abi, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/a6484385fc64dee9be9bad992e9c6fa4e6013175}
     version: 0.0.0
 
   help-me@5.0.0:
@@ -192,8 +192,8 @@ packages:
   once@1.4.0:
     resolution: {integrity: sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w==}
 
-  ox@0.14.29:
-    resolution: {integrity: sha512-M5j87Ec4V99MQdRct/g09eWXW60g6zhHTUs1lr4deUtrPDnezBdCJTgKd7pxqTpSZBFveV0ALi9jMMuT1qKyNg==}
+  ox@0.14.30:
+    resolution: {integrity: sha512-LI11uu+8iiM1B3CLckgd++YF1a0A2k5wDoM9ZeQMiL21BOzQs6L//BLS6hb1HSEKCyycdDIQLsVQx9MjpcC0hA==}
     peerDependencies:
       typescript: '>=5.4.0'
     peerDependenciesMeta:
@@ -255,8 +255,8 @@ packages:
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
-  viem@2.52.2:
-    resolution: {integrity: sha512-HSU12p5aD/kAPZfrlbCUqdiP4P/c6hQ9AhfTS51VbLUQIjkWd1d5EjrCx/SCxZ0zhZVRn4Iv5X5WDqXPG8Ubew==}
+  viem@2.54.6:
+    resolution: {integrity: sha512-OfybECKJYVmhiNqz+SHhed+O2h6niQ+0Wjg9J0b4bV+/QrvLgjxhfKO7hZqsuK1YtZ/0BErBKy708Zp+cU5T0Q==}
     peerDependencies:
       typescript: '>=5.0.4'
     peerDependenciesMeta:
@@ -266,8 +266,8 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
-  ws@8.20.1:
-    resolution: {integrity: sha512-It4dO0K5v//JtTXuPkfEOaI3uUN87iYPnqo/ZzqCoG3g8uhA66QUMs/SrM0YK7/NAu+r4LMh/9dq2A7k+rHs+w==}
+  ws@8.21.0:
+    resolution: {integrity: sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -305,7 +305,7 @@ snapshots:
       '@noble/hashes': 1.8.0
       '@scure/base': 1.2.6
 
-  '@types/node@22.19.21':
+  '@types/node@22.20.0':
     dependencies:
       undici-types: 6.21.0
 
@@ -346,13 +346,13 @@ snapshots:
 
   atomic-sleep@1.0.0: {}
 
-  collateral-margin-abi@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/332350e6dc4bc2e65b40bc0aec6745ea8002f11b#path:/contracts/abi(patch_hash=7c97e1895133c2310ee81b6c24248a113d66b141bfa49a51d5b3ed468df4045d): {}
+  collateral-margin-abi@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/4ba5a84b54a01c37f4a92e9f30fa0ff2281c6855#path:/contracts/abi(patch_hash=7c97e1895133c2310ee81b6c24248a113d66b141bfa49a51d5b3ed468df4045d): {}
 
   colorette@2.0.20: {}
 
   dateformat@4.6.3: {}
 
-  derivatives-marketplace-abi@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/724763fc656bb871acadcca828c0b8bb905a39ec#path:/contracts/abi(patch_hash=96cf5481d03a402c55577d18ce7e4576a0252323c61d0b1f48f6fec7d7001c2d): {}
+  derivatives-marketplace-abi@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/085d5a87d5bd7e5ee5a18e9dfd1315230c4d268c#path:/contracts/abi(patch_hash=96cf5481d03a402c55577d18ce7e4576a0252323c61d0b1f48f6fec7d7001c2d): {}
 
   end-of-stream@1.4.5:
     dependencies:
@@ -364,13 +364,13 @@ snapshots:
 
   fast-safe-stringify@2.1.1: {}
 
-  futures-marketplace-abi@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/0aae92cd86a01b187ea20544b6e65784b067d118#path:/contracts/abi(patch_hash=834111deab90972a9bdd88062197b2e3b180844df8a46e300657b1160df2723a): {}
+  futures-marketplace-abi@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/a6484385fc64dee9be9bad992e9c6fa4e6013175#path:/contracts/abi(patch_hash=834111deab90972a9bdd88062197b2e3b180844df8a46e300657b1160df2723a): {}
 
   help-me@5.0.0: {}
 
-  isows@1.0.7(ws@8.20.1):
+  isows@1.0.7(ws@8.21.0):
     dependencies:
-      ws: 8.20.1
+      ws: 8.21.0
 
   joycon@3.1.1: {}
 
@@ -382,7 +382,7 @@ snapshots:
     dependencies:
       wrappy: 1.0.2
 
-  ox@0.14.29:
+  ox@0.14.30:
     dependencies:
       '@adraffy/ens-normalize': 1.11.1
       '@noble/ciphers': 1.3.0
@@ -462,16 +462,16 @@ snapshots:
 
   undici-types@6.21.0: {}
 
-  viem@2.52.2:
+  viem@2.54.6:
     dependencies:
       '@noble/curves': 1.9.1
       '@noble/hashes': 1.8.0
       '@scure/bip32': 1.7.0
       '@scure/bip39': 1.6.0
       abitype: 1.2.3
-      isows: 1.0.7(ws@8.20.1)
-      ox: 0.14.29
-      ws: 8.20.1
+      isows: 1.0.7(ws@8.21.0)
+      ox: 0.14.30
+      ws: 8.21.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -479,4 +479,4 @@ snapshots:
 
   wrappy@1.0.2: {}
 
-  ws@8.20.1: {}
+  ws@8.21.0: {}

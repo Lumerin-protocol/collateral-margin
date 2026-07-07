@@ -21,9 +21,14 @@ import {
   futuresLongCrashFixtureBuilder,
   futuresOrdersAndPositionFixtureBuilder,
   multiFuturesFixtureBuilder,
+  futuresPartialCrashFixtureBuilder,
+  futuresMultiExpiryPartialCrashFixtureBuilder,
+  perpsPartialCrashFixtureBuilder,
   crossVenuePerpsDominantFixtureBuilder,
   crossVenueFuturesDominantFixtureBuilder,
   crossVenueOrdersAndPositionsFixtureBuilder,
+  crossVenuePartialCrashFixtureBuilder,
+  crossVenueBothLegsCrashFixtureBuilder,
 } from "./scenarios.ts";
 import {
   discoverUser,
@@ -38,10 +43,15 @@ import {
   readFuturesOrderLiquidationBlock,
   readLotClosedBlock,
   readPerpsPosition,
+  readAccountMargins,
   expectPerpsClosed,
   expectFuturesClosed,
   expectNoOpenOrders,
   expectHealthy,
+  expectReducedToImBuffer,
+  readFuturesLotLiquidatedBlocks,
+  readFuturesLotExpiries,
+  assertSingleBlock,
   isCriticalAlert,
   waitFor,
 } from "./helpers.ts";
@@ -83,9 +93,16 @@ let twoUnderwaterUsersFixture: ReturnType<typeof twoUnderwaterUsersFixtureBuilde
 let futuresLongCrashFixture: ReturnType<typeof futuresLongCrashFixtureBuilder>;
 let futuresOrdersAndPositionFixture: ReturnType<typeof futuresOrdersAndPositionFixtureBuilder>;
 let multiFuturesFixture: ReturnType<typeof multiFuturesFixtureBuilder>;
+let futuresPartialCrashFixture: ReturnType<typeof futuresPartialCrashFixtureBuilder>;
+let futuresMultiExpiryPartialCrashFixture: ReturnType<
+  typeof futuresMultiExpiryPartialCrashFixtureBuilder
+>;
+let perpsPartialCrashFixture: ReturnType<typeof perpsPartialCrashFixtureBuilder>;
 let crossVenuePerpsDominantFixture: ReturnType<typeof crossVenuePerpsDominantFixtureBuilder>;
 let crossVenueFuturesDominantFixture: ReturnType<typeof crossVenueFuturesDominantFixtureBuilder>;
 let crossVenueOrdersAndPositionsFixture: ReturnType<typeof crossVenueOrdersAndPositionsFixtureBuilder>;
+let crossVenuePartialCrashFixture: ReturnType<typeof crossVenuePartialCrashFixtureBuilder>;
+let crossVenueBothLegsCrashFixture: ReturnType<typeof crossVenueBothLegsCrashFixtureBuilder>;
 
 before(
   async () => {
@@ -105,9 +122,15 @@ before(
     futuresLongCrashFixture = futuresLongCrashFixtureBuilder(node.rpcUrl);
     futuresOrdersAndPositionFixture = futuresOrdersAndPositionFixtureBuilder(node.rpcUrl);
     multiFuturesFixture = multiFuturesFixtureBuilder(node.rpcUrl);
+    futuresPartialCrashFixture = futuresPartialCrashFixtureBuilder(node.rpcUrl);
+    futuresMultiExpiryPartialCrashFixture =
+      futuresMultiExpiryPartialCrashFixtureBuilder(node.rpcUrl);
+    perpsPartialCrashFixture = perpsPartialCrashFixtureBuilder(node.rpcUrl);
     crossVenuePerpsDominantFixture = crossVenuePerpsDominantFixtureBuilder(node.rpcUrl);
     crossVenueFuturesDominantFixture = crossVenueFuturesDominantFixtureBuilder(node.rpcUrl);
     crossVenueOrdersAndPositionsFixture = crossVenueOrdersAndPositionsFixtureBuilder(node.rpcUrl);
+    crossVenuePartialCrashFixture = crossVenuePartialCrashFixtureBuilder(node.rpcUrl);
+    crossVenueBothLegsCrashFixture = crossVenueBothLegsCrashFixtureBuilder(node.rpcUrl);
   },
   { timeout: 60_000 },
 );
@@ -345,6 +368,318 @@ describe("Futures liquidation", () => {
       await expectFuturesClosed(ctx, alice);
       // Bonus: no straggler orders left in the book either.
       assert.equal((await readFuturesOrderIds(ctx, alice)).length, 0);
+    },
+  );
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// Close-to-IM-buffer (partial liquidation — the anti-churn acceptance spec)
+// ─────────────────────────────────────────────────────────────────────────
+
+describe("Liquidate down to the IM buffer", () => {
+  it(
+    "futures: one batched sweep closes a strict subset of lots into the [MM, IM] band",
+    { timeout: 60_000 },
+    async () => {
+      // Precondition: alice holds 12 long futures lots; a moderate crash
+      // (4.21 → 3.90) breaks MM but a subset close restores the IM buffer.
+      // Contract under test (the screenshot bug fix): the planner must NOT
+      // fan out into one-lot-per-tx churn. Instead a single
+      // `liquidatePositions(user, ids[])` closes the worst-first subset in
+      // ONE block, leaves ≥1 lot open, and lands `MM <= balance <= IM`.
+      const ctx = await loadFixture(futuresPartialCrashFixture, testClient);
+      keeper = buildKeeper(ctx);
+      await keeper.start();
+
+      const alice = ctx.accounts.alice.account.address;
+      const lotsBefore = await readFuturesPositionIds(ctx, alice);
+      assert.equal(
+        lotsBefore.length,
+        ctx.aliceFuturesQty,
+        "precondition: alice should hold one lot per matched contract",
+      );
+
+      await ctx.makeLiquidatable();
+      await runOneSweep(keeper, alice);
+
+      // Landed in the buffer band — healthy but not over-liquidated.
+      await expectReducedToImBuffer(ctx, alice);
+
+      // A strict subset closed: at least one lot remains open.
+      const lotsAfter = await readFuturesPositionIds(ctx, alice);
+      assert.ok(
+        lotsAfter.length > 0,
+        `expected a strict subset closed (>=1 lot open), got ${lotsAfter.length} remaining`,
+      );
+      assert.ok(
+        lotsAfter.length < lotsBefore.length,
+        `expected some lots closed, before=${lotsBefore.length} after=${lotsAfter.length}`,
+      );
+
+      // Anti-churn regression guard: every closed lot rides a SINGLE block.
+      const liqBlocks = await readFuturesLotLiquidatedBlocks(ctx, alice);
+      assert.equal(
+        liqBlocks.length,
+        lotsBefore.length - lotsAfter.length,
+        "expected one LotLiquidated event per closed lot",
+      );
+      assertSingleBlock(liqBlocks, "futures liquidatePositions batch");
+    },
+  );
+
+  it(
+    "futures: one batched sweep balances the subset close across two expirations",
+    { timeout: 60_000 },
+    async () => {
+      // Precondition: alice holds 6 long futures lots on EACH of two delivery
+      // dates (12 total). The moderate crash (4.21 → 3.90) breaks MM; because
+      // the risk model weights every lot by the same global
+      // `deliveryDurationDays`, the aggregate margin equals the single-expiry
+      // 12-lot case, so a worst-first subset restores the IM buffer.
+      //
+      // Contract under test (the balancing feature): the ONE
+      // `liquidatePositions(user, ids[])` call must draw its closed lots from
+      // BOTH books — not empty the first expiry before touching the second.
+      // We snapshot each lot's `deliveryAt` *before* the close (positions are
+      // deleted on liquidation), diff the surviving ids to find what closed,
+      // and assert the per-expiry counts are balanced (differ by ≤ 1) with at
+      // least one lot closed on each date.
+      const ctx = await loadFixture(futuresMultiExpiryPartialCrashFixture, testClient);
+      keeper = buildKeeper(ctx);
+      await keeper.start();
+
+      const alice = ctx.accounts.alice.account.address;
+      const lotsBefore = await readFuturesPositionIds(ctx, alice);
+      assert.equal(
+        lotsBefore.length,
+        ctx.perExpiryQty * ctx.deliveryDates.length,
+        "precondition: alice holds perExpiryQty lots per delivery date",
+      );
+
+      // Snapshot id → expiry while every lot is still alive on-chain.
+      const expiryById = await readFuturesLotExpiries(ctx, lotsBefore);
+      const [firstDelivery, secondDelivery] = ctx.deliveryDates;
+
+      await ctx.makeLiquidatable();
+      await runOneSweep(keeper, alice);
+
+      // Landed in the buffer band — healthy but not over-liquidated.
+      await expectReducedToImBuffer(ctx, alice);
+
+      const lotsAfter = await readFuturesPositionIds(ctx, alice);
+      const survivors = new Set<string>(lotsAfter.map((id) => id.toLowerCase()));
+      const closed = lotsBefore.filter((id) => !survivors.has(id.toLowerCase()));
+
+      assert.ok(
+        lotsAfter.length > 0 && lotsAfter.length < lotsBefore.length,
+        `expected a strict subset closed, before=${lotsBefore.length} after=${lotsAfter.length}`,
+      );
+
+      // Attribute every closed lot back to its book.
+      let closedFirst = 0;
+      let closedSecond = 0;
+      for (const id of closed) {
+        const expiry = expiryById.get(id);
+        assert.ok(expiry !== undefined, `missing pre-close expiry for lot ${id}`);
+        if (expiry === firstDelivery) closedFirst += 1;
+        else if (expiry === secondDelivery) closedSecond += 1;
+        else assert.fail(`lot ${id} has an unexpected expiry ${expiry}`);
+      }
+
+      // The balancing invariant: both books contributed, and the split is even
+      // (the round-robin worst-first selection differs by at most one lot).
+      assert.ok(
+        closedFirst >= 1 && closedSecond >= 1,
+        `expected the close to span BOTH expirations, got first=${closedFirst} second=${closedSecond}`,
+      );
+      const skew = closedFirst > closedSecond ? closedFirst - closedSecond : closedSecond - closedFirst;
+      assert.ok(
+        skew <= 1,
+        `expected a balanced split across expirations (skew <= 1), got first=${closedFirst} second=${closedSecond}`,
+      );
+
+      // Anti-churn guard: the whole balanced subset rides a single block.
+      const liqBlocks = await readFuturesLotLiquidatedBlocks(ctx, alice);
+      assert.equal(
+        liqBlocks.length,
+        closed.length,
+        "expected one LotLiquidated event per closed lot",
+      );
+      assertSingleBlock(liqBlocks, "futures multi-expiry liquidatePositions batch");
+    },
+  );
+
+  it(
+    "perps: one sweep partially closes the net position into the [MM, IM] band",
+    { timeout: 60_000 },
+    async () => {
+      // Precondition: alice is long 40 perps; a moderate crash (4.21 → 3.00)
+      // breaks MM but a partial-qty close restores the IM buffer. The perps
+      // venue must call `liquidatePosition(user, closeQty)` with an
+      // off-chain-sized `closeQty` so the residual long stays open and the
+      // account lands `MM <= balance <= IM` (not fully closed, not over-closed).
+      const ctx = await loadFixture(perpsPartialCrashFixture, testClient);
+      keeper = buildKeeper(ctx);
+      await keeper.start();
+
+      const alice = ctx.accounts.alice.account.address;
+      const posBefore = await readPerpsPosition(ctx, alice);
+      assert.equal(posBefore.netQuantity, ctx.aliceQty, "precondition: alice long 40");
+
+      await ctx.makeLiquidatable();
+      await runOneSweep(keeper, alice);
+
+      await expectReducedToImBuffer(ctx, alice);
+
+      const posAfter = await readPerpsPosition(ctx, alice);
+      assert.notEqual(posAfter.netQuantity, 0n, "expected a partial close, not a full close");
+      assert.ok(
+        posAfter.netQuantity > 0n && posAfter.netQuantity < posBefore.netQuantity,
+        `expected reduced long, before=${posBefore.netQuantity} after=${posAfter.netQuantity}`,
+      );
+    },
+  );
+
+  it(
+    "cross-venue: one sweep reduces the dominant perps leg into the [MM, IM] band, leaving the futures leg open",
+    { timeout: 60_000 },
+    async () => {
+      // Precondition: alice is long 40 perps AND long 1 futures lot; a moderate
+      // crash (4.21 → 3.00) puts the *combined* portfolio below MM. The perps
+      // leg dominates by unrealized loss ($48.40 vs $8.47), so the planner
+      // reduces it first.
+      //
+      // Contract under test: the perps `reduceToTarget` sizes its partial
+      // `closeQty` against WHOLE-portfolio margin — the still-open futures leg's
+      // loss and stress are folded into the [MM, IM] band it targets. A
+      // perps-only partial close therefore suffices; the account lands in the
+      // band and the futures leg is left fully intact (never touched). This is
+      // the cross-venue partial-liquidation path, distinct from the deep-crash
+      // cross-venue tests that wipe both books.
+      const ctx = await loadFixture(crossVenuePartialCrashFixture, testClient);
+      keeper = buildKeeper(ctx);
+      await keeper.start();
+
+      const alice = ctx.accounts.alice.account.address;
+      const perpsBefore = await readPerpsPosition(ctx, alice);
+      assert.equal(perpsBefore.netQuantity, ctx.alicePerpsQty, "precondition: alice long 40 perps");
+      const futuresBefore = await readFuturesPositionIds(ctx, alice);
+      assert.equal(
+        futuresBefore.length,
+        ctx.aliceFuturesQty,
+        "precondition: alice holds the futures lot(s)",
+      );
+
+      await ctx.makeLiquidatable();
+      await runOneSweep(keeper, alice);
+
+      // Landed in the buffer band across the combined portfolio.
+      await expectReducedToImBuffer(ctx, alice);
+
+      // The dominant perps leg was partially closed — residual long still open.
+      const perpsAfter = await readPerpsPosition(ctx, alice);
+      assert.ok(
+        perpsAfter.netQuantity > 0n && perpsAfter.netQuantity < perpsBefore.netQuantity,
+        `expected a partial perps close, before=${perpsBefore.netQuantity} after=${perpsAfter.netQuantity}`,
+      );
+
+      // The futures leg was folded into the perps sizing math but never closed —
+      // reducing the dominant venue alone restored the whole-portfolio buffer.
+      const futuresAfter = await readFuturesPositionIds(ctx, alice);
+      assert.equal(
+        futuresAfter.length,
+        futuresBefore.length,
+        `expected the futures leg untouched, before=${futuresBefore.length} after=${futuresAfter.length}`,
+      );
+    },
+  );
+
+  it(
+    "cross-venue: a substantially underwater account is swept on BOTH venues into the [MM, IM] band",
+    { timeout: 60_000 },
+    async () => {
+      // Precondition: alice is long 6 futures lots AND long 25 perps; a moderate
+      // crash (4.21 → 3.00) leaves the combined portfolio SUBSTANTIALLY under MM
+      // (~$8.12 deficit). The futures leg dominates by loss, so it's reduced
+      // first — but fully closing all 6 lots only frees ~$6.30 of MM stress,
+      // short of the deficit, so the account is still under MM.
+      //
+      // Contract under test: the planner's position loop must then take a
+      // SECOND iteration and reduce the perps leg (partial, continuous qty) to
+      // finish the job. End state: liquidation activity on BOTH venues in the
+      // one sweep, the account lands in the [MM, IM] band, and it is NOT fully
+      // wiped (a residual perps long stays open — this is the partial regime,
+      // not the bad-debt full-deleverage path).
+      const ctx = await loadFixture(crossVenueBothLegsCrashFixture, testClient);
+      keeper = buildKeeper(ctx);
+      await keeper.start();
+
+      const alice = ctx.accounts.alice.account.address;
+      const perpsBefore = await readPerpsPosition(ctx, alice);
+      assert.equal(perpsBefore.netQuantity, ctx.alicePerpsQty, "precondition: alice long 25 perps");
+      const futuresBefore = await readFuturesPositionIds(ctx, alice);
+      assert.equal(
+        futuresBefore.length,
+        ctx.aliceFuturesQty,
+        "precondition: alice holds 6 futures lots",
+      );
+
+      await ctx.makeLiquidatable();
+
+      // Substantially underwater: even the whole perps leg's stress relief can't
+      // close the gap on its own (a single-venue sweep would be insufficient).
+      const pre = await readAccountMargins(ctx, alice);
+      assert.ok(
+        pre.balance < pre.mmRequired,
+        `precondition: expected underwater, balance=${pre.balance}n mm=${pre.mmRequired}n`,
+      );
+
+      await runOneSweep(keeper, alice);
+
+      // Landed in the buffer band across the combined portfolio.
+      await expectReducedToImBuffer(ctx, alice);
+
+      // BOTH venues were liquidated in the sweep.
+      const perpsBlock = await readPerpsPositionLiquidationBlock(ctx, alice);
+      const futuresBlock = await readFuturesPositionLiquidationBlock(ctx, alice);
+      assert.ok(perpsBlock !== null, "expected a perps PositionLiquidated event (perps leg swept)");
+      assert.ok(futuresBlock !== null, "expected a futures LotLiquidated event (futures leg swept)");
+
+      // Both legs reduced; the account is not fully wiped (partial regime).
+      const perpsAfter = await readPerpsPosition(ctx, alice);
+      const futuresAfter = await readFuturesPositionIds(ctx, alice);
+      assert.ok(
+        perpsAfter.netQuantity < perpsBefore.netQuantity,
+        `expected the perps leg reduced, before=${perpsBefore.netQuantity} after=${perpsAfter.netQuantity}`,
+      );
+      assert.ok(
+        futuresAfter.length < futuresBefore.length,
+        `expected the futures leg reduced, before=${futuresBefore.length} after=${futuresAfter.length}`,
+      );
+      assert.ok(
+        perpsAfter.netQuantity > 0n || futuresAfter.length > 0,
+        "expected a strict subset closed (some position remains — landed in band, not bad debt)",
+      );
+    },
+  );
+
+  it(
+    "deep futures crash still fully closes (bad-debt path — guard skipped)",
+    { timeout: 60_000 },
+    async () => {
+      // Regression: the close-to-IM change must NOT strand deep-crash
+      // accounts. A 99.8% crash leaves no in-band subset, so the batch
+      // closes every lot (the end-of-batch OverLiquidation guard is skipped
+      // once no positions remain). This keeps the existing bad-debt path green.
+      const ctx = await loadFixture(futuresLongCrashFixture, testClient);
+      keeper = buildKeeper(ctx);
+      await keeper.start();
+
+      const alice = ctx.accounts.alice.account.address;
+      await ctx.makeLiquidatable();
+      await runOneSweep(keeper, alice);
+
+      await expectFuturesClosed(ctx, alice);
     },
   );
 });

@@ -7,7 +7,7 @@ import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
 import type {
   LiquidateOrdersOutcome,
-  LiquidatePositionOutcome,
+  ReduceToTargetOutcome,
   Venue,
   VenueOrder,
   VenuePosition,
@@ -31,7 +31,7 @@ const silentLogger = {
 interface FakeVenue extends Venue {
   // Counters for assertions:
   ordersCalls: number;
-  positionCalls: Array<{ id: Hex }>;
+  reduceCalls: number;
 }
 
 function makeFakeVenue(name: Venue["name"], opts: {
@@ -39,23 +39,26 @@ function makeFakeVenue(name: Venue["name"], opts: {
   ordersByCall?: VenueOrder[][];
   positionsByCall?: VenuePosition[][];
   ordersOutcomeByCall?: LiquidateOrdersOutcome[];
-  positionOutcomeByCall?: LiquidatePositionOutcome[];
+  reduceOutcomeByCall?: ReduceToTargetOutcome[];
 }): FakeVenue {
   let openOrdersCall = 0;
   let positionsCall = 0;
   let liqOrdersCall = 0;
-  let liqPositionCall = 0;
+  let reduceCall = 0;
   const venue: FakeVenue = {
     name,
     ordersCalls: 0,
-    positionCalls: [],
+    reduceCalls: 0,
     marketLabel: () => `${name}-market`,
     async readOpenOrders(_user) {
       const list = opts.ordersByCall?.[openOrdersCall++] ?? [];
       return list;
     },
     async readPositions(_user) {
-      const list = opts.positionsByCall?.[positionsCall++] ?? [];
+      // Positions are read once per rank pass; when the script runs out we
+      // repeat the last snapshot so ranking stays stable across extra passes.
+      const list = opts.positionsByCall?.[positionsCall] ?? opts.positionsByCall?.at(-1) ?? [];
+      positionsCall++;
       return list;
     },
     async liquidateOrders(_user, _ids) {
@@ -63,10 +66,10 @@ function makeFakeVenue(name: Venue["name"], opts: {
       const out = opts.ordersOutcomeByCall?.[liqOrdersCall++];
       return out ?? { feeEarned: 0n };
     },
-    async liquidatePosition(_user, id) {
-      venue.positionCalls.push({ id });
-      const out = opts.positionOutcomeByCall?.[liqPositionCall++];
-      return out ?? { feeEarned: 0n };
+    async reduceToTarget(_user) {
+      venue.reduceCalls++;
+      const out = opts.reduceOutcomeByCall?.[reduceCall++];
+      return out ?? { feeEarned: 0n, positionsClosed: 1 };
     },
   };
   void opts.marketId; // marketId is informational — used by readOpenOrders/readPositions inputs
@@ -108,7 +111,7 @@ describe("Planner.run: healthy account on entry", () => {
     const outcome = await planner.run(USER);
     assert.equal(outcome.kind, "healthy");
     assert.equal(venue.ordersCalls, 0, "no liquidate calls when healthy");
-    assert.equal(venue.positionCalls.length, 0);
+    assert.equal(venue.reduceCalls, 0);
   });
 });
 
@@ -135,7 +138,7 @@ describe("Planner.run: orders-leg only", () => {
       assert.equal(outcome.positionsClosed, 0);
     }
     assert.equal(venue.ordersCalls, 1);
-    assert.equal(venue.positionCalls.length, 0);
+    assert.equal(venue.reduceCalls, 0);
   });
 
   it("skips a venue's liquidateOrders call when readOpenOrders returns empty", async () => {
@@ -181,7 +184,7 @@ describe("Planner.run: orders-leg only", () => {
 });
 
 describe("Planner.run: position-leg ranking and execution", () => {
-  it("targets the most-underwater position across venues (max unrealizedLoss)", async () => {
+  it("reduces the most-underwater venue first (max summed unrealizedLoss)", async () => {
     const chain = makeChainStub([
       { balance: 1000n, im: 950n, mm: 1200n }, // entry: under
       { balance: 1000n, im: 800n, mm: 1100n }, // after orders-leg: still under
@@ -198,25 +201,62 @@ describe("Planner.run: position-leg ranking and execution", () => {
     const futures = makeFakeVenue("futures", {
       marketId: MARKET_FUT_A,
       ordersByCall: [[]],
-      // Heavy loss → must be picked first.
+      // Heavy loss → must be reduced first, and one batched call heals the account.
       positionsByCall: [[{ id: heavyPosId, marketId: MARKET_FUT_A, unrealizedLoss: 500n, notional: 2000n }]],
-      positionOutcomeByCall: [{ feeEarned: 12n }],
+      reduceOutcomeByCall: [{ feeEarned: 12n, positionsClosed: 3 }],
     });
 
     const planner = new Planner(chain, makeConfigStub(), [perps, futures], silentLogger);
     const outcome = await planner.run(USER);
 
-    assert.equal(perps.positionCalls.length, 0, "perps light position never touched");
-    assert.deepEqual(futures.positionCalls.map((c) => c.id), [heavyPosId]);
+    assert.equal(perps.reduceCalls, 0, "perps light book never touched");
+    assert.equal(futures.reduceCalls, 1, "futures heavy book reduced once");
     if (outcome.kind === "liquidated") {
-      assert.equal(outcome.positionsClosed, 1);
+      assert.equal(outcome.positionsClosed, 3, "batched close reports its lot count");
       assert.equal(outcome.feeEarned, 12n);
     } else {
       assert.fail(`expected liquidated, got ${outcome.kind}`);
     }
   });
 
-  it("tiebreaks equal unrealizedLoss by larger notional", async () => {
+  it("drains a gas-chunked book across successive reduceToTarget iterations", async () => {
+    // Futures venue returns one worst-first CHUNK per call (gas-bounded), each
+    // reporting partial progress while the account stays under MM, until the
+    // final chunk restores health. The planner must loop, re-snapshot, and sum
+    // the per-chunk lot counts + fees.
+    const chain = makeChainStub([
+      { balance: 1000n, im: 950n, mm: 1200n }, // entry under
+      { balance: 1000n, im: 950n, mm: 1200n }, // after orders-leg still under
+      { balance: 1000n, im: 950n, mm: 1200n }, // after chunk #1 still under
+      { balance: 1000n, im: 950n, mm: 1200n }, // after chunk #2 still under
+      { balance: 1000n, im: 600n, mm: 800n }, //  after chunk #3 healthy
+    ]);
+    const posId: Hex = "0x" + "77".repeat(32) as Hex;
+    const futures = makeFakeVenue("futures", {
+      marketId: MARKET_FUT_A,
+      ordersByCall: [[]],
+      // Positions still present through the run (FakeVenue repeats the last
+      // snapshot), so the venue stays actionable across all three chunks.
+      positionsByCall: [[{ id: posId, marketId: MARKET_FUT_A, unrealizedLoss: 500n, notional: 5000n }]],
+      reduceOutcomeByCall: [
+        { feeEarned: 1n, positionsClosed: 50 },
+        { feeEarned: 1n, positionsClosed: 50 },
+        { feeEarned: 1n, positionsClosed: 20 },
+      ],
+    });
+    const planner = new Planner(chain, makeConfigStub(), [futures], silentLogger);
+    const outcome = await planner.run(USER);
+
+    assert.equal(futures.reduceCalls, 3, "one reduceToTarget per gas-bounded chunk");
+    if (outcome.kind === "liquidated") {
+      assert.equal(outcome.positionsClosed, 120, "summed lot count across the three chunks");
+      assert.equal(outcome.feeEarned, 3n, "summed fees across the three chunks");
+    } else {
+      assert.fail(`expected liquidated, got ${outcome.kind}`);
+    }
+  });
+
+  it("tiebreaks equal summed unrealizedLoss by larger notional venue", async () => {
     const chain = makeChainStub([
       { balance: 1000n, im: 950n, mm: 1100n },
       { balance: 1000n, im: 950n, mm: 1100n }, // still under after orders-leg
@@ -224,26 +264,29 @@ describe("Planner.run: position-leg ranking and execution", () => {
     ]);
     const smallId: Hex = "0x" + "0a".repeat(32) as Hex;
     const bigId: Hex = "0x" + "0b".repeat(32) as Hex;
-    const venue = makeFakeVenue("perps", {
+    const perps = makeFakeVenue("perps", {
       marketId: MARKET_PERPS,
       ordersByCall: [[]],
-      positionsByCall: [[
-        { id: smallId, marketId: MARKET_PERPS, unrealizedLoss: 100n, notional: 500n },
-        { id: bigId, marketId: MARKET_PERPS, unrealizedLoss: 100n, notional: 5000n },
-      ]],
-      positionOutcomeByCall: [{ feeEarned: 2n }],
+      positionsByCall: [[{ id: smallId, marketId: MARKET_PERPS, unrealizedLoss: 100n, notional: 500n }]],
     });
-    const planner = new Planner(chain, makeConfigStub(), [venue], silentLogger);
+    const futures = makeFakeVenue("futures", {
+      marketId: MARKET_FUT_A,
+      ordersByCall: [[]],
+      positionsByCall: [[{ id: bigId, marketId: MARKET_FUT_A, unrealizedLoss: 100n, notional: 5000n }]],
+      reduceOutcomeByCall: [{ feeEarned: 2n, positionsClosed: 1 }],
+    });
+    const planner = new Planner(chain, makeConfigStub(), [perps, futures], silentLogger);
     await planner.run(USER);
-    assert.deepEqual(venue.positionCalls.map((c) => c.id), [bigId]);
+    assert.equal(futures.reduceCalls, 1, "bigger-notional venue reduced first");
+    assert.equal(perps.reduceCalls, 0);
   });
 
   it("on OrdersStillOpen, replays orders-leg and retries on the next iteration", async () => {
     // Sequence of health snapshots:
     //   1. entry           — under
     //   2. after 1st orders-leg — still under
-    //   3. after stale position attempt — still under (no-op since revert)
-    //   4. after replayed orders-leg + 2nd position-leg attempt — healthy
+    //   3. after stale reduce attempt — still under (no-op since revert)
+    //   4. after replayed orders-leg + 2nd reduce attempt — healthy
     const chain = makeChainStub([
       { balance: 1000n, im: 950n, mm: 1100n },
       { balance: 1000n, im: 950n, mm: 1100n },
@@ -254,7 +297,7 @@ describe("Planner.run: position-leg ranking and execution", () => {
     const replayedOrderId: Hex = "0x" + "44".repeat(32) as Hex;
     const venue = makeFakeVenue("perps", {
       marketId: MARKET_PERPS,
-      // orders-leg #1 (initial), rank #1, replayed orders-leg, rank #2
+      // orders-leg #1 (initial, empty), then race-injected order for the replay.
       ordersByCall: [
         [], // initial: no open orders
         [{ id: replayedOrderId, marketId: MARKET_PERPS }], // race-injected
@@ -264,15 +307,15 @@ describe("Planner.run: position-leg ranking and execution", () => {
         [{ id: positionId, marketId: MARKET_PERPS, unrealizedLoss: 200n, notional: 1000n }],
         [{ id: positionId, marketId: MARKET_PERPS, unrealizedLoss: 200n, notional: 1000n }],
       ],
-      positionOutcomeByCall: [
+      reduceOutcomeByCall: [
         { skipped: "ordersStillOpen" },
-        { feeEarned: 7n },
+        { feeEarned: 7n, positionsClosed: 1 },
       ],
     });
     const planner = new Planner(chain, makeConfigStub(), [venue], silentLogger);
     const outcome = await planner.run(USER);
 
-    assert.equal(venue.positionCalls.length, 2, "retried position-leg after orders replay");
+    assert.equal(venue.reduceCalls, 2, "retried reduceToTarget after orders replay");
     assert.equal(venue.ordersCalls, 1, "only the replayed orders-leg called liquidateOrders (initial was empty)");
     if (outcome.kind === "liquidated") {
       assert.equal(outcome.positionsClosed, 1);
@@ -283,24 +326,26 @@ describe("Planner.run: position-leg ranking and execution", () => {
     }
   });
 
-  it("returns `stalled: unprofitable` when the worst position is unprofitable", async () => {
+  it("returns `stalled: nothingToClose` when every venue can't size a close", async () => {
     const chain = makeChainStub([
-      { balance: 1000n, im: 950n, mm: 1100n },
-      { balance: 1000n, im: 950n, mm: 1100n },
+      { balance: 1000n, im: 950n, mm: 1100n }, // entry under
+      { balance: 1000n, im: 950n, mm: 1100n }, // after orders-leg still under
+      { balance: 1000n, im: 950n, mm: 1100n }, // after parked reduce still under
     ]);
     const id: Hex = "0x" + "55".repeat(32) as Hex;
     const venue = makeFakeVenue("perps", {
       marketId: MARKET_PERPS,
       ordersByCall: [[]],
       positionsByCall: [[{ id, marketId: MARKET_PERPS, unrealizedLoss: 50n, notional: 100n }]],
-      positionOutcomeByCall: [{ skipped: "unprofitable" }],
+      reduceOutcomeByCall: [{ skipped: "nothingToClose" }],
     });
     const planner = new Planner(chain, makeConfigStub(), [venue], silentLogger);
     const outcome = await planner.run(USER);
     assert.equal(outcome.kind, "stalled");
     if (outcome.kind === "stalled") {
-      assert.equal(outcome.reason, "unprofitable");
+      assert.equal(outcome.reason, "nothingToClose");
     }
+    assert.equal(venue.reduceCalls, 1, "parked after one nothingToClose");
   });
 
   it("returns `badDebt` when no positions remain but mmSurplus stays negative", async () => {

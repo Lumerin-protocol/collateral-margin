@@ -37,14 +37,14 @@ importers:
         specifier: ^3.4.0
         version: 3.9.0
       hardhat-matchstick-ts:
-        specifier: github:lsheva/matchstick-ts#main&path:packages/hardhat-matchstick-ts
-        version: https://codeload.github.com/lsheva/matchstick-ts/tar.gz/b62ffee63eb770a039e88ca2a759dcfcd2fb8302#path:packages/hardhat-matchstick-ts(@nomicfoundation/hardhat-network-helpers@3.0.10(hardhat@3.9.0))(@nomicfoundation/hardhat-viem@3.0.9(hardhat@3.9.0)(viem@2.52.2(typescript@5.9.3)(zod@3.25.76)))(hardhat@3.9.0)
+        specifier: github:lsheva/matchstick-ts#6c7e4b5d584a9fc75b66d1f6c03820e20313c9ad&path:packages/hardhat-matchstick-ts
+        version: https://codeload.github.com/lsheva/matchstick-ts/tar.gz/6c7e4b5d584a9fc75b66d1f6c03820e20313c9ad#path:packages/hardhat-matchstick-ts(@nomicfoundation/hardhat-network-helpers@3.0.10(hardhat@3.9.0))(@nomicfoundation/hardhat-viem@3.0.9(hardhat@3.9.0)(viem@2.52.2(typescript@5.9.3)(zod@3.25.76)))(hardhat@3.9.0)
       matchstick-as:
         specifier: 0.6.0
         version: 0.6.0
       matchstick-ts:
-        specifier: github:lsheva/matchstick-ts#main&path:packages/matchstick-ts
-        version: https://codeload.github.com/lsheva/matchstick-ts/tar.gz/b62ffee63eb770a039e88ca2a759dcfcd2fb8302#path:packages/matchstick-ts(@graphprotocol/graph-cli@0.98.1(@types/node@25.9.2)(typescript@5.9.3)(zod@3.25.76))(@graphprotocol/graph-ts@0.38.2)(matchstick-as@0.6.0)(viem@2.52.2(typescript@5.9.3)(zod@3.25.76))
+        specifier: github:lsheva/matchstick-ts#6c7e4b5d584a9fc75b66d1f6c03820e20313c9ad&path:packages/matchstick-ts
+        version: https://codeload.github.com/lsheva/matchstick-ts/tar.gz/6c7e4b5d584a9fc75b66d1f6c03820e20313c9ad#path:packages/matchstick-ts(@graphprotocol/graph-cli@0.98.1(@types/node@25.9.2)(typescript@5.9.3)(zod@3.25.76))(@graphprotocol/graph-ts@0.38.2)(matchstick-as@0.6.0)(viem@2.52.2(typescript@5.9.3)(zod@3.25.76))
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -1255,9 +1255,9 @@ packages:
     resolution: {integrity: sha512-mS1lbMsxgQj6hge1XZ6p7GPhbrtFwUFYi3wRzXAC/FmYnyXMTvvI3td3rjmQ2u8ewXueaSvRPWaEcgVVOT9Jnw==}
     engines: {node: ^12.22.0 || ^14.16.0 || ^16.0.0 || >=17.0.0}
 
-  hardhat-matchstick-ts@https://codeload.github.com/lsheva/matchstick-ts/tar.gz/b62ffee63eb770a039e88ca2a759dcfcd2fb8302#path:packages/hardhat-matchstick-ts:
-    resolution: {path: packages/hardhat-matchstick-ts, tarball: https://codeload.github.com/lsheva/matchstick-ts/tar.gz/b62ffee63eb770a039e88ca2a759dcfcd2fb8302}
-    version: 0.4.0
+  hardhat-matchstick-ts@https://codeload.github.com/lsheva/matchstick-ts/tar.gz/6c7e4b5d584a9fc75b66d1f6c03820e20313c9ad#path:packages/hardhat-matchstick-ts:
+    resolution: {path: packages/hardhat-matchstick-ts, tarball: https://codeload.github.com/lsheva/matchstick-ts/tar.gz/6c7e4b5d584a9fc75b66d1f6c03820e20313c9ad}
+    version: 0.4.1
     engines: {node: '>=22.6'}
     peerDependencies:
       '@nomicfoundation/hardhat-network-helpers': ^3
@@ -1609,9 +1609,9 @@ packages:
   matchstick-as@0.6.0:
     resolution: {integrity: sha512-E36fWsC1AbCkBFt05VsDDRoFvGSdcZg6oZJrtIe/YDBbuFh8SKbR5FcoqDhNWqSN+F7bN/iS2u8Md0SM+4pUpw==}
 
-  matchstick-ts@https://codeload.github.com/lsheva/matchstick-ts/tar.gz/b62ffee63eb770a039e88ca2a759dcfcd2fb8302#path:packages/matchstick-ts:
-    resolution: {path: packages/matchstick-ts, tarball: https://codeload.github.com/lsheva/matchstick-ts/tar.gz/b62ffee63eb770a039e88ca2a759dcfcd2fb8302}
-    version: 0.4.0
+  matchstick-ts@https://codeload.github.com/lsheva/matchstick-ts/tar.gz/6c7e4b5d584a9fc75b66d1f6c03820e20313c9ad#path:packages/matchstick-ts:
+    resolution: {path: packages/matchstick-ts, tarball: https://codeload.github.com/lsheva/matchstick-ts/tar.gz/6c7e4b5d584a9fc75b66d1f6c03820e20313c9ad}
+    version: 0.4.1
     engines: {node: '>=22.6'}
     hasBin: true
     peerDependencies:
@@ -3571,7 +3571,7 @@ snapshots:
 
   graphql@16.11.0: {}
 
-  hardhat-matchstick-ts@https://codeload.github.com/lsheva/matchstick-ts/tar.gz/b62ffee63eb770a039e88ca2a759dcfcd2fb8302#path:packages/hardhat-matchstick-ts(@nomicfoundation/hardhat-network-helpers@3.0.10(hardhat@3.9.0))(@nomicfoundation/hardhat-viem@3.0.9(hardhat@3.9.0)(viem@2.52.2(typescript@5.9.3)(zod@3.25.76)))(hardhat@3.9.0):
+  hardhat-matchstick-ts@https://codeload.github.com/lsheva/matchstick-ts/tar.gz/6c7e4b5d584a9fc75b66d1f6c03820e20313c9ad#path:packages/hardhat-matchstick-ts(@nomicfoundation/hardhat-network-helpers@3.0.10(hardhat@3.9.0))(@nomicfoundation/hardhat-viem@3.0.9(hardhat@3.9.0)(viem@2.52.2(typescript@5.9.3)(zod@3.25.76)))(hardhat@3.9.0):
     dependencies:
       '@nomicfoundation/hardhat-network-helpers': 3.0.10(hardhat@3.9.0)
       '@nomicfoundation/hardhat-viem': 3.0.9(hardhat@3.9.0)(viem@2.52.2(typescript@5.9.3)(zod@3.25.76))
@@ -3943,7 +3943,7 @@ snapshots:
     dependencies:
       wabt: 1.0.24
 
-  matchstick-ts@https://codeload.github.com/lsheva/matchstick-ts/tar.gz/b62ffee63eb770a039e88ca2a759dcfcd2fb8302#path:packages/matchstick-ts(@graphprotocol/graph-cli@0.98.1(@types/node@25.9.2)(typescript@5.9.3)(zod@3.25.76))(@graphprotocol/graph-ts@0.38.2)(matchstick-as@0.6.0)(viem@2.52.2(typescript@5.9.3)(zod@3.25.76)):
+  matchstick-ts@https://codeload.github.com/lsheva/matchstick-ts/tar.gz/6c7e4b5d584a9fc75b66d1f6c03820e20313c9ad#path:packages/matchstick-ts(@graphprotocol/graph-cli@0.98.1(@types/node@25.9.2)(typescript@5.9.3)(zod@3.25.76))(@graphprotocol/graph-ts@0.38.2)(matchstick-as@0.6.0)(viem@2.52.2(typescript@5.9.3)(zod@3.25.76)):
     dependencies:
       '@graphprotocol/graph-cli': 0.98.1(@types/node@25.9.2)(typescript@5.9.3)(zod@3.25.76)
       '@graphprotocol/graph-ts': 0.38.2
