@@ -63,18 +63,23 @@ jobs:
         working-directory: ./contracts
         run: pnpm install --frozen-lockfile
 
+      # TEMPORARY: pinned to feat/liquidate-to-im-buffer because the keeper's
+      # liquidate-to-IM-buffer orchestration calls contract functions
+      # (`liquidatePositions` on futures, `liquidatePosition(user, closeQty)` on
+      # perps) that only exist on those feature branches. Revert both refs back
+      # to `dev` once derivatives-marketplace#73 and futures-marketplace#203 merge.
       - name: Checkout derivatives-marketplace (perps contracts)
         uses: actions/checkout@v5
         with:
           repository: Lumerin-protocol/derivatives-marketplace
-          ref: dev
+          ref: feat/liquidate-to-im-buffer
           path: perps
 
       - name: Checkout futures-marketplace
         uses: actions/checkout@v5
         with:
           repository: Lumerin-protocol/futures-marketplace
-          ref: dev
+          ref: feat/liquidate-to-im-buffer
           path: futures-marketplace
 
       - name: Install perps contracts dependencies
