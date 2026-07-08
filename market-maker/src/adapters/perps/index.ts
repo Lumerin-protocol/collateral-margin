@@ -29,7 +29,10 @@ export interface CreatePerpsVenueOpts {
 export async function createPerpsVenue(
   opts: CreatePerpsVenueOpts,
 ): Promise<VenueAdapter> {
-  return new PerpsVenueAdapter(opts);
+  const venue = new PerpsVenueAdapter(opts);
+  // Fail fast if the compiled quantity scale drifts from the deployed venue.
+  await venue.validateQuantityDecimals();
+  return venue;
 }
 
 export { PerpsVenueAdapter } from "./venue.ts";

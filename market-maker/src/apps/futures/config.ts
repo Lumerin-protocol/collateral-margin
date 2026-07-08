@@ -54,7 +54,7 @@ const futuresVenueSchema = Type.Object(
   },
 );
 
-const futuresPricingSchema = Type.Object(
+export const futuresPricingSchema = Type.Object(
   {
     strategy: Type.Literal("reservation-price", {
       description:
@@ -93,7 +93,7 @@ const futuresPricingSchema = Type.Object(
 // `baseQuantity` is venue-native (futures: contract base units). Bigint
 // expressed as a decimal string; numbers accepted but use strings if values
 // exceed Number.MAX_SAFE_INTEGER.
-const futuresSizingSchema = Type.Object(
+export const futuresSizingSchema = Type.Object(
   {
     strategy: Type.Literal("geometric-taper", {
       description:

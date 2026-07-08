@@ -8,20 +8,27 @@
   },
   "scripts": {
     "test": "pnpm node --test --test-force-exit --test-concurrency=1 'tests/**/*.test.ts'",
+    "test:coverage": "pnpm node --test --test-force-exit --test-concurrency=1 --experimental-test-coverage --test-coverage-include='src/**' 'tests/**/*.test.ts'",
+    "test:coverage:lcov": "mkdir -p coverage && pnpm node --test --test-force-exit --test-concurrency=1 --experimental-test-coverage --test-coverage-include='src/**' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info 'tests/**/*.test.ts'",
     "gen:schemas": "pnpm node scripts/gen-schemas.ts",
     "pretypecheck": "pnpm gen:schemas",
     "typecheck": "tsgo --noEmit",
     "node": "node --import=amaro/strip --conditions=typescript",
     "perps": "pnpm node --watch src/apps/perps/main.ts",
     "futures": "pnpm node --watch src/apps/futures/main.ts",
+    "portfolio": "pnpm node --watch src/apps/portfolio/main.ts",
     "local:perps": "pnpm perps --config configs/perps.local.yml | pino-pretty",
     "local:futures": "pnpm futures --config configs/futures.local.yml | pino-pretty",
+    "local:portfolio": "pnpm portfolio --config configs/portfolio.local.yml | pino-pretty",
     "dev:perps": "pnpm perps --config configs/perps.dev.yml | pino-pretty",
     "dev:futures": "pnpm futures --config configs/futures.dev.yml | pino-pretty",
+    "dev:portfolio": "pnpm portfolio --config configs/portfolio.dev.yml | pino-pretty",
     "stg:perps": "pnpm perps --config configs/perps.stg.yml",
     "stg:futures": "pnpm futures --config configs/futures.stg.yml",
+    "stg:portfolio": "pnpm portfolio --config configs/portfolio.stg.yml",
     "prd:perps": "pnpm perps --config configs/perps.prd.yml",
-    "prd:futures": "pnpm futures --config configs/futures.prd.yml"
+    "prd:futures": "pnpm futures --config configs/futures.prd.yml",
+    "prd:portfolio": "pnpm portfolio --config configs/portfolio.prd.yml"
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.49",

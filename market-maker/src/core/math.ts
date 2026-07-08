@@ -8,6 +8,10 @@
 import Fraction from "fraction.js";
 import { ln, sqrt } from "./rational.ts";
 
+// Perps quantity scale. Mirrors `HashPowerPerpsDEX.QUANTITY_DECIMALS()` (an on-chain
+// `uint8 public constant`). The value is hardcoded here so the hot-path sizing/notional
+// math stays synchronous, but it is the CHAIN that is authoritative: the perps venue
+// asserts this matches on-chain at startup (`validateQuantityDecimals`) and aborts on drift.
 export const QUANTITY_DECIMALS = 6;
 export const QUANTITY_SCALE = 10n ** BigInt(QUANTITY_DECIMALS);
 export const BPS_SCALE = 10_000n;

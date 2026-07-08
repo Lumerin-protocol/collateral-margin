@@ -113,6 +113,81 @@ describe("GasTracker cost calculations", () => {
   });
 });
 
+describe("GasTracker ETH price feed", () => {
+  function feedClient(opts: {
+    answer: bigint;
+    decimals: number;
+    multicallThrows?: boolean;
+  }): PublicClient {
+    return {
+      getGasPrice: async () => 1_000_000_000n,
+      multicall: async () => {
+        if (opts.multicallThrows) throw new Error("feed down");
+        return [[0n, opts.answer, 0n, 0n, 0n], opts.decimals];
+      },
+    } as unknown as PublicClient;
+  }
+
+  const feedCfg = makeConfig({
+    ethPriceFeedAddress: "0x0000000000000000000000000000000000000fee",
+  });
+
+  it("scales an 8-decimal feed answer down to 6-decimal USDC terms", async () => {
+    const tracker = new GasTracker(
+      feedClient({ answer: 2000_00000000n, decimals: 8 }),
+      feedCfg,
+      makeLogger(),
+    );
+    await tracker.update();
+    assert.equal(tracker.ethPriceUsd, 2000_000000n); // $2000 at 6 dp
+  });
+
+  it("scales a low-decimal feed answer up to 6-decimal USDC terms", async () => {
+    const tracker = new GasTracker(
+      feedClient({ answer: 2000_00n, decimals: 2 }),
+      feedCfg,
+      makeLogger(),
+    );
+    await tracker.update();
+    assert.equal(tracker.ethPriceUsd, 2000_000000n);
+  });
+
+  it("ignores a non-positive feed answer", async () => {
+    const tracker = new GasTracker(
+      feedClient({ answer: 0n, decimals: 8 }),
+      feedCfg,
+      makeLogger(),
+    );
+    await tracker.update();
+    assert.equal(tracker.ethPriceUsd, 0n);
+  });
+
+  it("swallows a feed read failure and leaves ethPriceUsd untouched", async () => {
+    const tracker = new GasTracker(
+      feedClient({ answer: 0n, decimals: 8, multicallThrows: true }),
+      feedCfg,
+      makeLogger(),
+    );
+    await assert.doesNotReject(tracker.update());
+    assert.equal(tracker.ethPriceUsd, 0n);
+  });
+
+  it("skips the feed entirely when no address is configured", async () => {
+    let called = false;
+    const client = {
+      getGasPrice: async () => 1_000_000_000n,
+      multicall: async () => {
+        called = true;
+        return [];
+      },
+    } as unknown as PublicClient;
+    const tracker = new GasTracker(client, makeConfig(), makeLogger());
+    await tracker.update();
+    assert.equal(called, false);
+    assert.equal(tracker.ethPriceUsd, 0n);
+  });
+});
+
 describe("GasTracker.cappedGasPrice", () => {
   it("uses cap when current < cap (median * multiplier)", () => {
     const tracker = new GasTracker(

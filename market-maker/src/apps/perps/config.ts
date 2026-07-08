@@ -54,7 +54,7 @@ const perpsVenueSchema = Type.Object(
   },
 );
 
-const perpsPricingSchema = Type.Object(
+export const perpsPricingSchema = Type.Object(
   {
     strategy: Type.Literal("effective-spread", {
       description:
@@ -87,7 +87,7 @@ const perpsPricingSchema = Type.Object(
 // `baseQuantity` is venue-native (perps: hashrate base units). It's a bigint
 // expressed as a decimal string; numbers are accepted but use strings if
 // values exceed Number.MAX_SAFE_INTEGER.
-const perpsSizingSchema = Type.Object(
+export const perpsSizingSchema = Type.Object(
   {
     strategy: Type.Literal("linear", {
       description:

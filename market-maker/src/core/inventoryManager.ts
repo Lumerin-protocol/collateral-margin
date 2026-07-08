@@ -64,4 +64,9 @@ export class InventoryManager {
   get absPosition(): bigint {
     return bigAbs(this.netQuantity);
   }
+
+  /** Configured position cap for this market (venue-native units). */
+  get maxPositionSize(): bigint {
+    return this.cfg.maxPositionSize;
+  }
 }

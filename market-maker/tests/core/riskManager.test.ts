@@ -169,6 +169,38 @@ describe("RiskManager", () => {
     assert.deepEqual(r.allowedSides(), { quoteBid: false, quoteAsk: false });
   });
 
+  it("allowedSides: uses the per-market inventory and cap over the shared ones", () => {
+    // Shared inventory is neutral with a large cap; the per-market override is
+    // at its own (smaller) long cap, so bids must be blocked for THIS market.
+    const r = new RiskManager(
+      makeConfig({ maxPositionSize: 1_000_000_000n }),
+      makeInventory({ netQuantity: 0n }),
+      makeCollateral({ utilizationPct: 10 }),
+      dummyGas,
+      dummyOracle,
+      makeLogger(),
+    );
+    const perMarket = makeInventory({ netQuantity: 5_000_000n });
+    assert.deepEqual(r.allowedSides(perMarket, 5_000_000n), {
+      quoteBid: false, // net == cap → cannot add more long
+      quoteAsk: true,
+    });
+    // Sanity: without the override it would use the shared neutral inventory.
+    assert.deepEqual(r.allowedSides(), { quoteBid: true, quoteAsk: true });
+  });
+
+  it("allowedSides: blocks both sides when there is no inventory to reason about", () => {
+    const r = new RiskManager(
+      makeConfig(),
+      null,
+      makeCollateral(),
+      dummyGas,
+      dummyOracle,
+      makeLogger(),
+    );
+    assert.deepEqual(r.allowedSides(), { quoteBid: false, quoteAsk: false });
+  });
+
   it("throttles when hourly gas budget exceeded", () => {
     const r = new RiskManager(
       makeConfig({ maxGasBudgetPerHourUsd: 10_000_000n }),

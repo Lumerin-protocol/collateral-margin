@@ -1,7 +1,7 @@
 import type pino from "pino";
 import type { NetworkClients } from "../../core/client.ts";
 import type { VenueAdapter, WalletContext } from "../../core/adapter.ts";
-import { FuturesVenueAdapter } from "./venue.ts";
+import { FuturesVenueAdapter, type FuturesMarketSelection } from "./venue.ts";
 
 export interface CreateFuturesVenueOpts {
   network: NetworkClients;
@@ -10,6 +10,8 @@ export interface CreateFuturesVenueOpts {
   multicall3Address?: `0x${string}`;
   readBatchSize: number;
   writeBatchSize: number;
+  /** Which delivery dates to quote. Defaults to nearest-only. */
+  marketSelection?: FuturesMarketSelection;
   logger: pino.Logger;
 }
 
@@ -25,4 +27,5 @@ export async function createFuturesVenue(
 }
 
 export { FuturesVenueAdapter } from "./venue.ts";
-export { FuturesInstrumentAdapter } from "./instrument.ts";
+export type { FuturesMarketSelection, FuturesMarketSet } from "./venue.ts";
+export { FuturesInstrumentAdapter, futuresInstrumentId } from "./instrument.ts";

@@ -1,6 +1,7 @@
 import type {
   Account,
   Chain,
+  ContractFunctionParameters,
   PublicClient,
   Transport,
   WalletClient,
@@ -137,13 +138,44 @@ export interface CollateralAccount {
   canPlace(additionalIM: bigint): Promise<boolean>;
 }
 
+/**
+ * A `snapshot()` decomposed into its underlying multicall reads so the
+ * portfolio account can batch every venue into a single RPC round trip.
+ *
+ * `shared` reads are portfolio-wide (vault balance, IM/MM, wallet token, native
+ * balance) and therefore **identical across venues** for a given wallet — the
+ * aggregator reads them once. `venue` reads are venue-specific (order margin,
+ * unrealized PnL). `decode` reconstructs the snapshot from the concatenated
+ * results in `[...shared, ...venue]` order.
+ */
+export interface MarginReadPlan {
+  shared: ContractFunctionParameters[];
+  venue: ContractFunctionParameters[];
+  decode(results: readonly unknown[]): CollateralSnapshot;
+}
+
+/**
+ * A collateral account that can expose its reads for batched aggregation.
+ * Implemented by the concrete venue accounts (perps, futures); the portfolio
+ * aggregator uses it to fuse all venues' reads into one multicall.
+ */
+export interface BatchableCollateralAccount extends CollateralAccount {
+  buildMarginReadPlan(): Promise<MarginReadPlan>;
+}
+
+export function isBatchableCollateralAccount(
+  account: CollateralAccount,
+): account is BatchableCollateralAccount {
+  return (
+    typeof (account as BatchableCollateralAccount).buildMarginReadPlan === "function"
+  );
+}
+
 // ─── Instrument context (venue-specific hints for pricing) ──────────────────
 
 export interface InstrumentContext {
   /** Unix seconds of delivery / expiry, if any. */
   deliveryDate?: number;
-  /** Contract multiplier (e.g. futures' deliveryDurationDays). */
-  contractMultiplier?: bigint;
   /** Strike price (options). */
   strike?: bigint;
   /** Call vs put (options). */
@@ -214,6 +246,8 @@ export type VenueEvent =
       side: Side;
       size: bigint;
       instrumentId?: string;
+      /** Futures expiry (unix seconds) the order belongs to; undefined for perps. */
+      deliveryDate?: bigint;
     }
   | {
       type: "order-updated";
@@ -291,10 +325,10 @@ export interface InstrumentAdapter {
    *
    * Mirrors the on-chain margin computation for the venue:
    *   - Perps:  imSpotShock × notional / 1e18
-   *   - Futures: pricePerDay × deliveryDurationDays × marginPct / 100
+   *   - Futures: pricePerDay × marginPct / 100 (one unit, no duration multiplier)
    *
    * Adapter computes synchronously from already-cached state (imSpotShock,
-   * deliveryDurationDays). Returns 0n if it can't be estimated yet.
+   * marginPct). Returns 0n if it can't be estimated yet.
    */
   estimateOrderMargin(intent: OrderIntent): bigint;
 
@@ -327,15 +361,29 @@ export interface VenueAdapter {
   readonly events: VenueEvents;
   readonly account: CollateralAccount;
 
-  /** The MM's instrument on this venue. */
+  /**
+   * The MM's primary instrument on this venue. For single-instrument venues
+   * (perps) this is the only book; for multi-instrument venues (futures across
+   * expiries) it is the nearest one. Kept for back-compat and single-market
+   * callers; prefer {@link listInstruments} for the portfolio runner.
+   */
   getInstrument(): Promise<InstrumentAdapter>;
 
   /**
+   * All instruments this venue currently wants quoted. Perps returns a single
+   * element; futures returns one `InstrumentAdapter` per selected delivery
+   * date. The set can change over time (futures roll) — callers re-invoke to
+   * pick up added/dropped markets.
+   */
+  listInstruments(): Promise<InstrumentAdapter[]>;
+
+  /**
    * Batch cancels/creates in one tx. Returns tx hash. Implementations route
-   * through the venue contract's multicall function.
+   * through the venue contract's multicall function. `nonce` is supplied by the
+   * shared NonceManager when the portfolio runner sequences multi-venue txs.
    */
   multicall(
     calls: `0x${string}`[],
-    opts: { maxFeePerGas?: bigint },
+    opts: { maxFeePerGas?: bigint; nonce?: number },
   ): Promise<`0x${string}`>;
 }

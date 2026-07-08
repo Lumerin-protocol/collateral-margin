@@ -70,10 +70,16 @@ export class OrderExecutor {
     });
   }
 
-  async reconcile(desired: OrderIntent[]): Promise<void> {
-    if (!this.shouldRequote(desired)) {
-      return;
-    }
+  /**
+   * Compute the diff (stale cancels + missing creates) for `desired` without
+   * submitting anything. Returns `null` when no requote should happen this
+   * cycle (cooldown, no drift, or gas-spike deferral). The portfolio runner
+   * feeds the returned intents to the shared `TxCoordinator`, which runs the
+   * aggregate pre-trade gate — so `plan()` deliberately does NOT call
+   * `canPlaceOrders` (that would under-count across markets).
+   */
+  plan(desired: OrderIntent[]): { cancels: OwnOrder[]; creates: OrderIntent[] } | null {
+    if (!this.shouldRequote(desired)) return null;
 
     if (this.gas.isGasSpiking) {
       const drift = this.priceDriftTicks();
@@ -86,18 +92,38 @@ export class OrderExecutor {
           },
           "requote skipped: gas spike, drift below urgent threshold",
         );
-        return;
+        return null;
       }
       this.logger.warn({ drift }, "proceeding with requote despite gas spike");
     }
 
-    const ordersToCancel = this.findStaleOrders(desired);
-    const ordersToPlace = this.findNewOrders(desired);
-
-    if (ordersToCancel.length === 0 && ordersToPlace.length === 0) {
+    const cancels = this.findStaleOrders(desired);
+    const creates = this.findNewOrders(desired);
+    if (cancels.length === 0 && creates.length === 0) {
       this.logger.debug("no order changes needed");
-      return;
+      return null;
     }
+    return { cancels, creates };
+  }
+
+  /**
+   * Update timing/stat bookkeeping after a submission (whether via this
+   * executor's own `reconcile` or the shared coordinator). Idempotent within a
+   * cycle; safe to call once per successful submit.
+   */
+  recordRequote(placed: number, cancelled: number): void {
+    this.stats.ordersCancelled += cancelled;
+    this.stats.ordersPlaced += placed;
+    this.lastRequoteAt = Date.now();
+    this.lastQuoteMidPrice = this.oracle.currentPrice;
+    this.stats.reconcileCount++;
+  }
+
+  async reconcile(desired: OrderIntent[]): Promise<void> {
+    const planned = this.plan(desired);
+    if (!planned) return;
+    const ordersToCancel = planned.cancels;
+    const ordersToPlace = planned.creates;
 
     // Pre-trade engine gate: ask whether the new orders' total IM still fits
     // the wallet's portfolio IM budget. If not, only cancel; don't add risk.
