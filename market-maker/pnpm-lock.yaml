@@ -21,20 +21,20 @@ importers:
         specifier: ^1.1.9
         version: 1.1.9
       collateral-margin-contracts:
-        specifier: github:Lumerin-protocol/collateral-margin.git#dev&path:/contracts
-        version: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/b8045fafcf7178928d414269e6d86d797b2e2cdc#path:/contracts(typescript@5.9.3)
+        specifier: github:Lumerin-protocol/collateral-margin#dev&path:/contracts
+        version: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/d335ea93b2052d8b66d654b3cdad51ce4e47615a#path:/contracts(typescript@5.9.3)
       fraction.js:
         specifier: ^5.2.2
         version: 5.3.4
       futures-contracts:
-        specifier: github:Lumerin-protocol/futures-marketplace#dev&path:/contracts
-        version: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/f3fa176dd95c456a91dccd4feee4e54f610af05c#path:/contracts(@types/node@22.19.17)(ethers@5.8.0)(typescript@5.9.3)
+        specifier: github:Lumerin-protocol/futures-marketplace#5e28bb346b125d90eb138370a8a78c69487d1c26&path:/contracts
+        version: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/5e28bb346b125d90eb138370a8a78c69487d1c26#path:/contracts(@types/node@22.19.17)(ethers@5.8.0)(typescript@5.9.3)
       js-yaml:
         specifier: ^4.1.0
         version: 4.1.1
       perps-contracts:
-        specifier: github:Lumerin-protocol/derivatives-marketplace#dev&path:/contracts
-        version: derivatives-contracts@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/ce6471c9e2b6b8058dd89a440c68a6e06ab082fc#path:/contracts(@nomicfoundation/hardhat-ethers@3.1.3(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3)))(@types/node@22.19.17)(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3))
+        specifier: github:Lumerin-protocol/derivatives-marketplace#c8078b9e430df8a5ec8bc64865d692b38cc69d8c&path:/contracts
+        version: derivatives-contracts@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/c8078b9e430df8a5ec8bc64865d692b38cc69d8c#path:/contracts(@nomicfoundation/hardhat-ethers@3.1.3(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3)))(@types/node@22.19.17)(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3))
       pino:
         specifier: ^10.3.1
         version: 10.3.1
@@ -1133,11 +1133,8 @@ packages:
   brace-expansion@1.1.14:
     resolution: {integrity: sha512-MWPGfDxnyzKU7rNOW9SP/c50vi3xrmrua/+6hfPbCS2ABNWfx24vPidzvC7krjU/RTo235sV776ymlsMtGKj8g==}
 
-  brace-expansion@2.1.0:
-    resolution: {integrity: sha512-TN1kCZAgdgweJhWWpgKYrQaMNHcDULHkWwQIspdtjV4Y5aurRdZpjAqn6yX3FPqTA9ngHCc4hJxMAMgGfve85w==}
-
-  brace-expansion@2.1.1:
-    resolution: {integrity: sha512-WR1cURNjuvBLMZBMbqM0UoE+WAfdUcEV1ccD8PVBVOI+Z3ND4+SZbN8RsfT2bMuG1qwz5RFvPukSZm5fF2D5eA==}
+  brace-expansion@2.1.2:
+    resolution: {integrity: sha512-w5JZcKgdhDOgOwm8H+KgbosopHMuGcl6qbulwjtz3SM7I7P3yW1eAjzMPLrIE+NQ9vjgANKHWeMHnrT0OXW1oA==}
 
   braces@3.0.3:
     resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
@@ -1239,13 +1236,13 @@ packages:
   cliui@7.0.4:
     resolution: {integrity: sha512-OcRE68cOsVMXp1Yvonl/fzkQOyjLSu/8bhPDfQt0e0/Eb283TKP20Fs2MqoPsr9SwA595rRCA+QMzYc9nBP+JQ==}
 
-  collateral-margin-contracts@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/b8045fafcf7178928d414269e6d86d797b2e2cdc#path:/contracts:
-    resolution: {path: /contracts, tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/b8045fafcf7178928d414269e6d86d797b2e2cdc}
+  collateral-margin-contracts@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/d335ea93b2052d8b66d654b3cdad51ce4e47615a#path:/contracts:
+    resolution: {path: /contracts, tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/d335ea93b2052d8b66d654b3cdad51ce4e47615a}
     version: 1.0.0
     engines: {node: 24.x}
 
-  collateral-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/ef77952259de3abc1b219e18618ef3fb49ebce79:
-    resolution: {tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/ef77952259de3abc1b219e18618ef3fb49ebce79}
+  collateral-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/a7f89b8fd167655d1157568230bc6779ce37d512:
+    resolution: {tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/a7f89b8fd167655d1157568230bc6779ce37d512}
     version: 1.0.0
 
   color-convert@2.0.1:
@@ -1331,8 +1328,8 @@ packages:
     resolution: {integrity: sha512-g7nH6P6dyDioJogAAGprGpCtVImJhpPk/roCzdb3fIh61/s/nPsfR6onyMwkCAR/OlC3yBC0lESvUoQEAssIrw==}
     engines: {node: '>= 0.8'}
 
-  derivatives-contracts@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/ce6471c9e2b6b8058dd89a440c68a6e06ab082fc#path:/contracts:
-    resolution: {path: /contracts, tarball: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/ce6471c9e2b6b8058dd89a440c68a6e06ab082fc}
+  derivatives-contracts@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/c8078b9e430df8a5ec8bc64865d692b38cc69d8c#path:/contracts:
+    resolution: {path: /contracts, tarball: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/c8078b9e430df8a5ec8bc64865d692b38cc69d8c}
     version: 1.0.0
     engines: {node: 24.x}
 
@@ -1545,8 +1542,8 @@ packages:
   function-bind@1.1.2:
     resolution: {integrity: sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==}
 
-  futures-contracts@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/f3fa176dd95c456a91dccd4feee4e54f610af05c#path:/contracts:
-    resolution: {path: /contracts, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/f3fa176dd95c456a91dccd4feee4e54f610af05c}
+  futures-contracts@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/5e28bb346b125d90eb138370a8a78c69487d1c26#path:/contracts:
+    resolution: {path: /contracts, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/5e28bb346b125d90eb138370a8a78c69487d1c26}
     version: 1.0.0
     engines: {node: 24.x}
 
@@ -1676,8 +1673,8 @@ packages:
     resolution: {integrity: sha512-hsBTNUqQTDwkWtcdYI2i06Y/nUBEsNEDJKjWdigLvegy8kDuJAS8uRlpkkcQpyEXL0Z/pjDy5HBmMjRCJ2gq+g==}
     engines: {node: '>= 4'}
 
-  immutable@4.3.8:
-    resolution: {integrity: sha512-d/Ld9aLbKpNwyl0KiM2CT1WYvkitQ1TSvmRtkcV8FKStiDoA7Slzgjmb/1G2yhKM1p0XeNOieaTbFZmU1d3Xuw==}
+  immutable@4.3.9:
+    resolution: {integrity: sha512-ObHy4YN7ycwZOUCLI1/6svfyAFu7vL8RhAvVu/bh/RZW9EPlOyDaQ9jDQWCtdqzaXUjgXZCW1migtHE7YI7UGQ==}
 
   import-fresh@3.3.1:
     resolution: {integrity: sha512-TR3KfrTZTYLPB6jUjfx6MF9WcWrHL9su5TObK4ZkYgBdWKPOFoSoQIdEuTuR82pmtxH2spWG9h6etwfr1pLBqQ==}
@@ -1789,14 +1786,18 @@ packages:
     resolution: {integrity: sha512-qQKT4zQxXl8lLwBtHMWwaTcGfFOZviOJet3Oy/xmGk2gZH677CJM9EvtfdSkgWcATZhj/55JZ0rmy3myCT5lsA==}
     hasBin: true
 
+  js-yaml@4.3.0:
+    resolution: {integrity: sha512-1td788aAnnZ5qs7V2QIRl1owjtYpbKt749Y3xauqQgwIIGF/xXWz1wMTEBx5O3LK3lXLVuqXPdPxj2BoFHaW9Q==}
+    hasBin: true
+
   json-schema-traverse@0.4.1:
     resolution: {integrity: sha512-xbbCH5dCYU5T8LcEhhuh7HJ88HXuW3qsI3Y0zOZFKfZEHcpWiHU/Jxzk629Brsab/mMiHQti9wMP+845RPe3Vg==}
 
   json-schema-traverse@1.0.0:
     resolution: {integrity: sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==}
 
-  json-stream-stringify@3.1.6:
-    resolution: {integrity: sha512-x7fpwxOkbhFCaJDJ8vb1fBY3DdSa4AlITaz+HHILQJzdPMnHEFjxPwVUi1ALIbcIxDE0PNe/0i7frnY8QnBQog==}
+  json-stream-stringify@3.1.7:
+    resolution: {integrity: sha512-F4MWetLtY42YMaAKw5cV4e47zMD5aOT+tjjQWjX18ACtdkQ5Y/vrcfbcQ107Rh+MXjOCIx4KhW0wPmOvG8iQ5w==}
     engines: {node: '>=7.10.1'}
 
   jsonfile@4.0.0:
@@ -2056,8 +2057,8 @@ packages:
     resolution: {integrity: sha512-V7+vQEJ06Z+c5tSye8S+nHUfI51xoXIXjHQ99cQtKUkQqqO1kO/KCJUfZXuB47h/YBlDhah2H3hdUGXn8ie0oA==}
     engines: {node: '>=8.6'}
 
-  picomatch@4.0.4:
-    resolution: {integrity: sha512-QP88BAKvMam/3NxH6vj2o21R6MjxZUAd6nlwAS/pnGvN9IVLocLHxGYIzFhg6fUQ+5th6P4dv4eW9jX3DSIj7A==}
+  picomatch@4.0.5:
+    resolution: {integrity: sha512-RvwwcruNjI1ncT5xRakeyS9Lf8lcItv34KD+aif+VH9kduAyfYBipGh12274xtenIPZ119/R9BdTBa8gAwSh0A==}
     engines: {node: '>=12'}
 
   pify@4.0.1:
@@ -2372,8 +2373,8 @@ packages:
     resolution: {integrity: sha512-4iMVL6HAINXWf1ZKZjIPcz5wYaOdPhtO8ATvZ+Xqp3BTdaqtAwQkNmKORqcIo5YkQqGXq5cwfswDwMqqQNrpJA==}
     engines: {node: '>=20'}
 
-  tinyglobby@0.2.16:
-    resolution: {integrity: sha512-pn99VhoACYR8nFHhxqix+uvsbXineAasWm5ojXoN8xEwK5Kd3/TrhNn1wByuD52UxWRLy8pu+kRMniEi6Eq9Zg==}
+  tinyglobby@0.2.17:
+    resolution: {integrity: sha512-wXR/dYpcqKmfWpEdZjiKJOwCNFndD0DMnrW/cYjVGttEkBfVgcLFHoNrlj47mjOVic9yyNu65alsgF4NQyTa2g==}
     engines: {node: '>=12.0.0'}
 
   tmp@0.0.33:
@@ -2559,8 +2560,8 @@ packages:
     resolution: {integrity: sha512-7pRTIA9Qc1caZ0bZ6RYRGbHJthJWuakf+WmHK0rVeLkNrrGhfoabBNdue6kdINI6r4if7ocq9aD/n7xwKOdzOA==}
     engines: {node: '>=10'}
 
-  yargs@16.2.0:
-    resolution: {integrity: sha512-D1mvvtDG0L5ft/jGWkLpG1+m0eQxOfaBvTNELraWj22wSVUMWxZUvYgJYcKh6jGGIkJFhH4IZPQhR4TKpc8mBw==}
+  yargs@16.2.2:
+    resolution: {integrity: sha512-Nt9ZJjXTv5R8MHbqby/wXQ6Gi0Bb3TcYZkR1bzuL4yB2OxWPkXknz513gEF0GoA6tn00UpbPvERW8rzCuWCA6w==}
     engines: {node: '>=10'}
 
   yocto-queue@0.1.0:
@@ -3108,7 +3109,7 @@ snapshots:
   '@changesets/parse@0.4.3':
     dependencies:
       '@changesets/types': 6.1.0
-      js-yaml: 4.1.1
+      js-yaml: 4.3.0
 
   '@changesets/pre@2.0.2':
     dependencies:
@@ -3151,7 +3152,7 @@ snapshots:
       globals: 14.0.0
       ignore: 5.3.2
       import-fresh: 3.3.1
-      js-yaml: 4.1.1
+      js-yaml: 4.3.0
       minimatch: 3.1.5
       strip-json-comments: 3.1.1
     transitivePeerDependencies:
@@ -4340,11 +4341,7 @@ snapshots:
       balanced-match: 1.0.2
       concat-map: 0.0.1
 
-  brace-expansion@2.1.0:
-    dependencies:
-      balanced-match: 1.0.2
-
-  brace-expansion@2.1.1:
+  brace-expansion@2.1.2:
     dependencies:
       balanced-match: 1.0.2
 
@@ -4469,7 +4466,7 @@ snapshots:
       strip-ansi: 6.0.1
       wrap-ansi: 7.0.0
 
-  collateral-margin-contracts@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/b8045fafcf7178928d414269e6d86d797b2e2cdc#path:/contracts(typescript@5.9.3):
+  collateral-margin-contracts@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/d335ea93b2052d8b66d654b3cdad51ce4e47615a#path:/contracts(typescript@5.9.3):
     dependencies:
       '@openzeppelin/contracts': 5.1.0
       '@openzeppelin/contracts-upgradeable': 5.1.0(@openzeppelin/contracts@5.1.0)
@@ -4481,7 +4478,7 @@ snapshots:
       - utf-8-validate
       - zod
 
-  collateral-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/ef77952259de3abc1b219e18618ef3fb49ebce79: {}
+  collateral-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/a7f89b8fd167655d1157568230bc6779ce37d512: {}
 
   color-convert@2.0.1:
     dependencies:
@@ -4564,14 +4561,14 @@ snapshots:
 
   depd@2.0.0: {}
 
-  derivatives-contracts@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/ce6471c9e2b6b8058dd89a440c68a6e06ab082fc#path:/contracts(@nomicfoundation/hardhat-ethers@3.1.3(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3)))(@types/node@22.19.17)(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3)):
+  derivatives-contracts@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/c8078b9e430df8a5ec8bc64865d692b38cc69d8c#path:/contracts(@nomicfoundation/hardhat-ethers@3.1.3(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3)))(@types/node@22.19.17)(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3)):
     dependencies:
       '@chainlink/contracts': 1.5.0(@types/node@22.19.17)(ethers@5.8.0)
       '@multicall/multicall3': multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012
       '@openzeppelin/contracts': 5.1.0
       '@openzeppelin/contracts-upgradeable': 5.1.0(@openzeppelin/contracts@5.1.0)
       '@openzeppelin/hardhat-upgrades': 3.9.1(@nomicfoundation/hardhat-ethers@3.1.3(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3)))(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3))
-      collateral-margin: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/ef77952259de3abc1b219e18618ef3fb49ebce79
+      collateral-margin: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/a7f89b8fd167655d1157568230bc6779ce37d512
       hashprice-oracle: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/b65adbfeb7e6c4417747bfd3d94b6e89e162ed50
       multicall3: https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012
       solidity-linked-list: 6.5.0
@@ -4777,9 +4774,9 @@ snapshots:
     dependencies:
       reusify: 1.1.0
 
-  fdir@6.5.0(picomatch@4.0.4):
+  fdir@6.5.0(picomatch@4.0.5):
     optionalDependencies:
-      picomatch: 4.0.4
+      picomatch: 4.0.5
 
   fill-range@7.1.1:
     dependencies:
@@ -4847,7 +4844,7 @@ snapshots:
 
   function-bind@1.1.2: {}
 
-  futures-contracts@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/f3fa176dd95c456a91dccd4feee4e54f610af05c#path:/contracts(@types/node@22.19.17)(ethers@5.8.0)(typescript@5.9.3):
+  futures-contracts@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/5e28bb346b125d90eb138370a8a78c69487d1c26#path:/contracts(@types/node@22.19.17)(ethers@5.8.0)(typescript@5.9.3):
     dependencies:
       '@chainlink/contracts': 1.5.0(@types/node@22.19.17)(ethers@5.8.0)
       '@noble/curves': 1.9.1
@@ -4856,7 +4853,7 @@ snapshots:
       '@safe-global/api-kit': 3.0.2(typescript@5.9.3)
       '@safe-global/protocol-kit': 6.1.2(typescript@5.9.3)
       '@safe-global/types-kit': 2.0.1(typescript@5.9.3)
-      collateral-margin: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/ef77952259de3abc1b219e18618ef3fb49ebce79
+      collateral-margin: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/a7f89b8fd167655d1157568230bc6779ce37d512
       hashprice-oracle: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/55776ca92c86c69e38e5210e9b63d77d9e4218d8
       multicall3: https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012
       solidity-linked-list: 6.5.0
@@ -4949,9 +4946,9 @@ snapshots:
       find-up: 5.0.0
       fp-ts: 1.19.3
       fs-extra: 7.0.1
-      immutable: 4.3.8
+      immutable: 4.3.9
       io-ts: 1.10.4
-      json-stream-stringify: 3.1.6
+      json-stream-stringify: 3.1.7
       keccak: 3.0.4
       lodash: 4.18.1
       micro-eth-signer: 0.14.0
@@ -4965,7 +4962,7 @@ snapshots:
       solc: 0.8.26(debug@4.4.3)
       source-map-support: 0.5.21
       stacktrace-parser: 0.1.11
-      tinyglobby: 0.2.16
+      tinyglobby: 0.2.17
       tsort: 0.0.1
       undici: 5.29.0
       uuid: 8.3.2
@@ -5048,7 +5045,7 @@ snapshots:
 
   ignore@5.3.2: {}
 
-  immutable@4.3.8: {}
+  immutable@4.3.9: {}
 
   import-fresh@3.3.1:
     dependencies:
@@ -5140,11 +5137,15 @@ snapshots:
     dependencies:
       argparse: 2.0.1
 
+  js-yaml@4.3.0:
+    dependencies:
+      argparse: 2.0.1
+
   json-schema-traverse@0.4.1: {}
 
   json-schema-traverse@1.0.0: {}
 
-  json-stream-stringify@3.1.6: {}
+  json-stream-stringify@3.1.7: {}
 
   jsonfile@4.0.0:
     optionalDependencies:
@@ -5234,11 +5235,11 @@ snapshots:
 
   minimatch@5.1.9:
     dependencies:
-      brace-expansion: 2.1.1
+      brace-expansion: 2.1.2
 
   minimatch@9.0.9:
     dependencies:
-      brace-expansion: 2.1.0
+      brace-expansion: 2.1.2
 
   minimist@1.2.8: {}
 
@@ -5257,7 +5258,7 @@ snapshots:
       find-up: 5.0.0
       glob: 8.1.0
       he: 1.2.0
-      js-yaml: 4.1.1
+      js-yaml: 4.3.0
       log-symbols: 4.1.0
       minimatch: 5.1.9
       ms: 2.1.3
@@ -5265,7 +5266,7 @@ snapshots:
       strip-json-comments: 3.1.1
       supports-color: 8.1.1
       workerpool: 6.5.1
-      yargs: 16.2.0
+      yargs: 16.2.2
       yargs-parser: 20.2.9
       yargs-unparser: 2.0.0
 
@@ -5405,7 +5406,7 @@ snapshots:
 
   picomatch@2.3.2: {}
 
-  picomatch@4.0.4: {}
+  picomatch@4.0.5: {}
 
   pify@4.0.1: {}
 
@@ -5710,10 +5711,10 @@ snapshots:
     dependencies:
       real-require: 0.2.0
 
-  tinyglobby@0.2.16:
+  tinyglobby@0.2.17:
     dependencies:
-      fdir: 6.5.0(picomatch@4.0.4)
-      picomatch: 4.0.4
+      fdir: 6.5.0(picomatch@4.0.5)
+      picomatch: 4.0.5
 
   tmp@0.0.33:
     dependencies:
@@ -5854,7 +5855,7 @@ snapshots:
       flat: 5.0.2
       is-plain-obj: 2.1.0
 
-  yargs@16.2.0:
+  yargs@16.2.2:
     dependencies:
       cliui: 7.0.4
       escalade: 3.2.0
