@@ -56,7 +56,7 @@ export async function readMMParams(
  * function of price. Two RPC round-trips:
  *
  *   1. Bulk multicall: balance, perp position/orderMargin/funding,
- *      futures orderMargin/positionIds, deliveryDurationDays.
+ *      futures orderMargin/positionIds.
  *   2. Per-position multicall: hydrate each futures position so we know its
  *      `(buyer, buyPricePerDay, sellPricePerDay)` for off-chain PnL.
  *
@@ -75,7 +75,6 @@ export async function readAccountSnapshot(
     perpFunding,
     futuresOrderMargin,
     futuresPositionIds,
-    deliveryDurationDays,
   ] = await chain.publicClient.multicall({
     contracts: [
       {
@@ -113,11 +112,6 @@ export async function readAccountSnapshot(
         abi: FuturesAbi,
         functionName: "getPositionIds" as const,
         args: [user] as const,
-      },
-      {
-        address: config.futures.address,
-        abi: FuturesAbi,
-        functionName: "deliveryDurationDays" as const,
       },
     ] as const,
     allowFailure: false,
@@ -164,7 +158,6 @@ export async function readAccountSnapshot(
     futures: {
       positions: futuresPositions,
       orderMargin: futuresOrderMargin as bigint,
-      deliveryDays: BigInt(deliveryDurationDays as number),
     },
   };
 }

@@ -92,7 +92,20 @@ export interface DeployedStack {
   config: {
     tokenDecimals: number;
     oracleDecimals: number;
+    /**
+     * Raw hashprice oracle answer (per 100 TH/s·day, i.e. `ORACLE_UNIT_HPS_DAY`).
+     * Both venues rebase this to a per-contract mark via
+     * `market = answer × CONTRACT_SIZE_HPS_DAY / ORACLE_UNIT_HPS_DAY` (= ×10),
+     * so this seed is `initialMarketPrice / 10`. Fixtures that need to re-post
+     * the oracle (e.g. delivery settlement) write this value directly.
+     */
     initialHashprice: bigint;
+    /**
+     * Per-contract mark at deploy time (= `initialHashprice × 10`). This is the
+     * unit orders and positions are denominated in — scenarios use it as the
+     * at-the-money entry price.
+     */
+    initialMarketPrice: bigint;
     initialBtcUsdc: bigint;
     minimumPriceIncrement: bigint;
     quantityDecimals: number;
@@ -101,7 +114,6 @@ export interface DeployedStack {
     perpsMakerFeeBps: bigint;
     futuresTakerFee: bigint;
     futuresLiquidationFee: bigint;
-    futuresDeliveryDurationDays: number;
     futuresFirstDeliveryDate: bigint;
     insuranceFund: bigint;
     initialUserBalance: bigint;
@@ -112,8 +124,25 @@ const TOKEN_DECIMALS = 6;
 const ORACLE_DECIMALS = 6;
 const QUANTITY_DECIMALS = 6;
 
-/** Hashprice = $4.21 / 100 TH/s / day (recent Braiins index), 6 decimals. */
-const INITIAL_HASHPRICE = parseUnits("4.21", ORACLE_DECIMALS);
+/**
+ * Ratio by which both venues rebase the oracle answer into a per-contract mark:
+ * `CONTRACT_SIZE_HPS_DAY / ORACLE_UNIT_HPS_DAY = 1e15 / 1e14 = 10`. The oracle
+ * quotes 100 TH/s·day; one contract settles 1 PH/s·day, so the mark is ×10 the
+ * raw answer. Exported so scenarios convert market prices → oracle answers in
+ * one place.
+ */
+export const ORACLE_TO_MARKET_MULTIPLIER = 10n;
+
+/**
+ * Per-contract mark at deploy time. Positions and orders are denominated in this
+ * (contract) unit; the oracle answer is seeded at `/ ORACLE_TO_MARKET_MULTIPLIER`
+ * so `getMarketPrice()` (answer × 10) lands back here. Kept at $4.21 so the
+ * pre-existing perps fixtures (which never carried the duration factor) keep
+ * their dollar sizing unchanged.
+ */
+const INITIAL_MARKET_PRICE = parseUnits("4.21", TOKEN_DECIMALS);
+/** Raw hashprice oracle answer (per 100 TH/s·day) — rebased ×10 into the mark above. */
+const INITIAL_HASHPRICE = INITIAL_MARKET_PRICE / ORACLE_TO_MARKET_MULTIPLIER;
 /** Reference BTC/USDC mid-price; only the *delta* matters for predictor tests. */
 const INITIAL_BTC_USDC = parseUnits("65000", ORACLE_DECIMALS);
 
@@ -124,10 +153,9 @@ const PERPS_MAKER_FEE_BPS = 0n;
 const FUTURES_TAKER_FEE = parseUnits("1", TOKEN_DECIMALS);
 const FUTURES_LIQUIDATION_FEE = parseUnits("1", TOKEN_DECIMALS);
 const FUTURES_LIQUIDATION_MARGIN_PCT = 20;
-const FUTURES_DELIVERY_DURATION_DAYS = 7;
-const FUTURES_DELIVERY_INTERVAL_DAYS = 7;
+/** Spacing, in days, between successive expiries (renamed from delivery interval). */
+const FUTURES_EXPIRATION_INTERVAL_DAYS = 7;
 const FUTURES_FUTURE_DELIVERY_DATES_COUNT = 10;
-const FUTURES_SPEED_HPS = parseUnits("100", 12);
 const INSURANCE_FUND = parseUnits("100000", TOKEN_DECIMALS);
 const INITIAL_USER_BALANCE = parseUnits("10000", TOKEN_DECIMALS);
 
@@ -223,8 +251,12 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     vault,
   ]);
   const latestBlock = await publicClient.getBlock();
+  // First expiry sits one interval out from now (the duration constant is gone —
+  // hashpower settles per-day, so only the expiry spacing schedules the book).
   const firstDeliveryDate =
-    latestBlock.timestamp + BigInt(FUTURES_DELIVERY_DURATION_DAYS * 24 * 3600);
+    latestBlock.timestamp + BigInt(FUTURES_EXPIRATION_INTERVAL_DAYS * 24 * 3600);
+  // initialize(hashrateOracle, liquidationMarginPercent, minimumPriceIncrement,
+  //            expirationIntervalDays, futureDeliveryDatesCount, firstFutureDeliveryDate)
   const futures = await deployProxy(
     publicClient,
     owner.client,
@@ -234,10 +266,8 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     [
       hashpriceOracle,
       FUTURES_LIQUIDATION_MARGIN_PCT,
-      FUTURES_SPEED_HPS,
       MIN_PRICE_INCREMENT,
-      FUTURES_DELIVERY_DURATION_DAYS,
-      FUTURES_DELIVERY_INTERVAL_DAYS,
+      FUTURES_EXPIRATION_INTERVAL_DAYS,
       FUTURES_FUTURE_DELIVERY_DATES_COUNT,
       firstDeliveryDate,
     ],
@@ -389,6 +419,7 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
       tokenDecimals: TOKEN_DECIMALS,
       oracleDecimals: ORACLE_DECIMALS,
       initialHashprice: INITIAL_HASHPRICE,
+      initialMarketPrice: INITIAL_MARKET_PRICE,
       initialBtcUsdc: INITIAL_BTC_USDC,
       minimumPriceIncrement: MIN_PRICE_INCREMENT,
       quantityDecimals: QUANTITY_DECIMALS,
@@ -397,7 +428,6 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
       perpsMakerFeeBps: PERPS_MAKER_FEE_BPS,
       futuresTakerFee: FUTURES_TAKER_FEE,
       futuresLiquidationFee: FUTURES_LIQUIDATION_FEE,
-      futuresDeliveryDurationDays: FUTURES_DELIVERY_DURATION_DAYS,
       futuresFirstDeliveryDate: firstDeliveryDate,
       insuranceFund: INSURANCE_FUND,
       initialUserBalance: INITIAL_USER_BALANCE,

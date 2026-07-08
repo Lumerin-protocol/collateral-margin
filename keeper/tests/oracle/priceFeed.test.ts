@@ -8,6 +8,7 @@ import type { Config } from "../../src/config.ts";
 
 const HASHPRICE = "0x000000000000000000000000000000000000aa01" as Address;
 const BTC_FEED = "0x000000000000000000000000000000000000aa02" as Address;
+const PERPS = "0x000000000000000000000000000000000000aa03" as Address;
 
 function makeConfig(): Config {
   return {
@@ -16,6 +17,7 @@ function makeConfig(): Config {
       btcUsdcFeedAddress: BTC_FEED,
       priceMoveTriggerBps: 0,
     },
+    perps: { address: PERPS },
   } as Config;
 }
 
@@ -44,6 +46,12 @@ function makeChainStub(initialAnswer: bigint, decimals: number): ChainStub {
     publicClient: {
       readContract: async ({ functionName }: { functionName: string }) => {
         if (functionName === "decimals") return decimals;
+        // Contract-size rebase reads. Returning equal values gives a 1×
+        // passthrough so these tests assert the pure decimals rebase without a
+        // contract-size multiplier (the x10 factor is exercised by the venue /
+        // integration paths that use the real 1e15 / 100e12 constants).
+        if (functionName === "CONTRACT_SIZE_HPS_DAY") return 100n * 10n ** 12n;
+        if (functionName === "ORACLE_UNIT_HPS_DAY") return 100n * 10n ** 12n;
         if (functionName === "latestRoundData") {
           reads++;
           return [1n, currentAnswer, 1_000n, 1_000n, 1n] as const;

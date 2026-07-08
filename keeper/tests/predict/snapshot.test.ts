@@ -44,7 +44,6 @@ function makeChain(scripted: {
   mmShock?: bigint;
   tokenDecimals?: number;
   perpQtyDecimals?: number;
-  deliveryDays?: number;
 }): Chain {
   return {
     publicClient: {
@@ -70,8 +69,6 @@ function makeChain(scripted: {
               return scripted.futuresOrderMargin ?? 0n;
             case "getPositionIds":
               return scripted.futuresPositionIds ?? [];
-            case "deliveryDurationDays":
-              return scripted.deliveryDays ?? 30;
             case "getPositionById": {
               const id = c.args?.[0] as string;
               const pos = scripted.futuresPositions?.[id];
@@ -114,7 +111,6 @@ describe("predict/snapshot: readAccountSnapshot", () => {
     assert.equal(snap.perp.netQty, 0n);
     assert.equal(snap.perp.fundingOwed, 0n);
     assert.equal(snap.futures.positions.length, 0);
-    assert.equal(snap.futures.deliveryDays, 30n);
   });
 
   it("clamps pending funding to >= 0 (PME treats credits as not-owed)", async () => {

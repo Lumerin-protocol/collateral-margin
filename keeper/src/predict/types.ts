@@ -31,9 +31,10 @@ export interface AccountSnapshot {
   };
 
   /**
-   * One entry per active futures position. Each contract is a single unit;
-   * PnL accrues `(P_perDay - entryPricePerDay) × deliveryDays` from the
-   * holder's perspective (`+` for buyers, `−` for sellers).
+   * One entry per active futures position. Each contract is a single unit that
+   * settles `pricePerDay` of notional (no duration multiplier); PnL accrues
+   * `(P_perDay - entryPricePerDay)` from the holder's perspective (`+` for
+   * buyers, `−` for sellers).
    */
   futures: {
     positions: Array<{
@@ -46,15 +47,12 @@ export interface AccountSnapshot {
        * a `deliveryAt` are the same market/order-book; the liquidation solver
        * groups on it to balance closures across expirations rather than
        * draining one expiry's book. It does NOT affect PnL/margin math — every
-       * lot is valued with the single global `deliveryDays` (mirroring the
-       * on-chain `deliveryDurationDays`).
+       * lot contributes a single unit.
        */
       deliveryAt: bigint;
     }>;
     /** Constant in P: `getFuturesOrderMargin(user)`. */
     orderMargin: bigint;
-    /** Same delivery duration applies to every active position. */
-    deliveryDays: bigint;
   };
 }
 

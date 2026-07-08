@@ -33,7 +33,7 @@ function emptySnapshot(overrides: Partial<AccountSnapshot> = {}): AccountSnapsho
     user: USER,
     balance: 0n,
     perp: { netQty: 0n, entryPrice: 0n, orderMargin: 0n, fundingOwed: 0n },
-    futures: { positions: [], orderMargin: 0n, deliveryDays: 0n },
+    futures: { positions: [], orderMargin: 0n },
     ...overrides,
   };
 }
@@ -58,16 +58,15 @@ describe("predict/mm: netDeltaWad", () => {
     assert.equal(netDeltaWad(snap, PARAMS), -2_000_000_000_000_000_000n);
   });
 
-  it("adds futures buyer delta scaled by deliveryDays", () => {
-    // Buyer of 1 contract over 30 days → +30 * 1e18 WAD delta.
+  it("adds futures buyer delta (±1 per contract, no duration factor)", () => {
+    // Buyer of 1 contract → +1 * 1e18 WAD delta.
     const snap = emptySnapshot({
       futures: {
         positions: [{ id: "0xaa", isBuyer: true, entryPricePerDay: 50n, deliveryAt: 1_756_416_000n }],
         orderMargin: 0n,
-        deliveryDays: 30n,
       },
     });
-    assert.equal(netDeltaWad(snap, PARAMS), 30n * 10n ** 18n);
+    assert.equal(netDeltaWad(snap, PARAMS), 1n * 10n ** 18n);
   });
 
   it("subtracts futures seller delta", () => {
@@ -75,10 +74,9 @@ describe("predict/mm: netDeltaWad", () => {
       futures: {
         positions: [{ id: "0xaa", isBuyer: false, entryPricePerDay: 50n, deliveryAt: 1_756_416_000n }],
         orderMargin: 0n,
-        deliveryDays: 30n,
       },
     });
-    assert.equal(netDeltaWad(snap, PARAMS), -30n * 10n ** 18n);
+    assert.equal(netDeltaWad(snap, PARAMS), -1n * 10n ** 18n);
   });
 
   it("sums perps + futures legs into one signed delta", () => {
@@ -90,10 +88,9 @@ describe("predict/mm: netDeltaWad", () => {
           { id: "0xbb", isBuyer: false, entryPricePerDay: 60n, deliveryAt: 1_756_416_000n },
         ],
         orderMargin: 0n,
-        deliveryDays: 30n,
       },
     });
-    // Perp +1e18; futures +30e18 - 30e18 = 0 → net = +1e18.
+    // Perp +1e18; futures +1e18 - 1e18 = 0 → net = +1e18.
     assert.equal(netDeltaWad(snap, PARAMS), 1n * 10n ** 18n);
   });
 });
@@ -168,16 +165,15 @@ describe("predict/mm: futuresUnrealizedLoss", () => {
     assert.equal(futuresUnrealizedLoss(emptySnapshot(), 100_000_000n), 0n);
   });
 
-  it("buyer loses when P drops below entry; loss scales by deliveryDays", () => {
+  it("buyer loses when P drops below entry (no duration factor)", () => {
     const snap = emptySnapshot({
       futures: {
         positions: [{ id: "0xaa", isBuyer: true, entryPricePerDay: 50n, deliveryAt: 1_756_416_000n }],
         orderMargin: 0n,
-        deliveryDays: 30n,
       },
     });
-    // diffPerDay = P - entry = 40 - 50 = -10. pnl = -10 * 30 = -300. loss = 300.
-    assert.equal(futuresUnrealizedLoss(snap, 40n), 300n);
+    // diffPerDay = P - entry = 40 - 50 = -10. pnl = -10. loss = 10.
+    assert.equal(futuresUnrealizedLoss(snap, 40n), 10n);
   });
 
   it("seller loses when P rises above entry", () => {
@@ -185,28 +181,26 @@ describe("predict/mm: futuresUnrealizedLoss", () => {
       futures: {
         positions: [{ id: "0xaa", isBuyer: false, entryPricePerDay: 50n, deliveryAt: 1_756_416_000n }],
         orderMargin: 0n,
-        deliveryDays: 30n,
       },
     });
-    assert.equal(futuresUnrealizedLoss(snap, 60n), 300n);
+    assert.equal(futuresUnrealizedLoss(snap, 60n), 10n);
   });
 
   it("sums losses across multiple positions; profitable legs do not net out", () => {
     const snap = emptySnapshot({
       futures: {
         positions: [
-          { id: "0xaa", isBuyer: true, entryPricePerDay: 50n, deliveryAt: 1_756_416_000n }, // P=40 → loses 300
-          { id: "0xbb", isBuyer: false, entryPricePerDay: 30n, deliveryAt: 1_756_416_000n }, // P=40 → loses 300
+          { id: "0xaa", isBuyer: true, entryPricePerDay: 50n, deliveryAt: 1_756_416_000n }, // P=40 → loses 10
+          { id: "0xbb", isBuyer: false, entryPricePerDay: 30n, deliveryAt: 1_756_416_000n }, // P=40 → loses 10
         ],
         orderMargin: 0n,
-        deliveryDays: 30n,
       },
     });
     // Loss is sum of *losing* legs only (consistent with `max(0, -pnl)` per leg
     // mirroring the on-chain `getFuturesUnrealizedPnl` aggregation, which
     // would be 0 net but PME treats them piecewise via stress + per-leg PnL).
     // Here both happen to be losing — buyer down, seller up.
-    assert.equal(futuresUnrealizedLoss(snap, 40n), 600n);
+    assert.equal(futuresUnrealizedLoss(snap, 40n), 20n);
   });
 });
 
@@ -215,7 +209,7 @@ describe("predict/mm: mmRequired / mmSurplus / imRequired / imSurplus", () => {
     const snap = emptySnapshot({
       balance: 1_000n,
       perp: { netQty: 0n, entryPrice: 0n, orderMargin: 100n, fundingOwed: 50n },
-      futures: { positions: [], orderMargin: 25n, deliveryDays: 0n },
+      futures: { positions: [], orderMargin: 25n },
     });
     // No delta → no stress, no PnL. orderMargin + funding = 175.
     assert.equal(mmRequired(snap, PARAMS, 100_000_000n), 175n);

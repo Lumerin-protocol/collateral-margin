@@ -94,8 +94,6 @@ function lotClosedLog(lotId: Hex): LotClosedLog {
 interface ChainStubOptions {
   /** Fixed `block.timestamp`-style number returned by `getBlockNumber`. */
   blockNumber?: bigint;
-  /** Value `deliveryDurationDays` returns (uint8 → number). Defaults to 7. */
-  deliveryDurationDays?: number;
   /** Recorded calls to `simulateContract`. The handler is per-call so tests can vary outcomes. */
   simulate?: (args: readonly unknown[]) => { request: { ok: true } } | { error: unknown };
   writeHash?: `0x${string}`;
@@ -148,7 +146,6 @@ function makeChain(opts: ChainStubOptions = {}): Chain & {
         functionName: string;
         args?: readonly unknown[];
       }) => {
-        if (functionName === "deliveryDurationDays") return opts.deliveryDurationDays ?? 7;
         // start()'s pre-flight asserts the keeper signer == validator. Default
         // matches `VALIDATOR` (the chain stub's account.address), so existing
         // tests don't need to opt into anything. Set `validator: 0x...other`
@@ -907,7 +904,7 @@ describe("DeliveryCoordinator: view-based discovery", () => {
     const coordinator = new DeliveryCoordinator(chain, makeConfig(), silentLogger);
     await coordinator.start();
     // Force getPositionIds to blow up *after* startup (which uses readContract
-    // for `deliveryDurationDays`). The listener path must never throw —
+    // for `validatorAddress`). The listener path must never throw —
     // bubbling out would crash the tracker's onAdded fan-out.
     chain.publicClient.readContract = (async () => {
       throw new Error("rpc down");

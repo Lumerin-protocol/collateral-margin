@@ -2,9 +2,11 @@ import { encodeFunctionData, erc20Abi } from "viem";
 import type { Chain, PublicClient, Transport } from "viem";
 import type pino from "pino";
 import type {
+  BatchableCollateralAccount,
   CollateralAccount,
   CollateralSnapshot,
   InstrumentAdapter,
+  MarginReadPlan,
   VenueAdapter,
   VenueEvents,
   WalletContext,
@@ -20,6 +22,17 @@ import { attachTenderlyUrl } from "../../core/tenderly.ts";
 import { FuturesInstrumentAdapter } from "./instrument.ts";
 import { FuturesVenueEvents } from "./events.ts";
 
+/**
+ * How the venue picks which delivery dates to quote out of the rolling window
+ * returned by `getDeliveryDates()` (ordered nearest-first).
+ *
+ *  - `nearest`: the first `count` dates (count=1 reproduces the legacy MVP).
+ *  - `indices`: explicit relative offsets into the window (0 = nearest).
+ */
+export type FuturesMarketSelection =
+  | { mode: "nearest"; count: number }
+  | { mode: "indices"; indices: number[] };
+
 export interface FuturesVenueOptions {
   network: NetworkClients;
   wallet: WalletContext;
@@ -29,7 +42,19 @@ export interface FuturesVenueOptions {
   readBatchSize: number;
   /** Max closeOrder calls per cancellation batch. Default 20. */
   writeBatchSize: number;
+  /** Which delivery dates to quote. Defaults to `{ mode: "nearest", count: 1 }`. */
+  marketSelection?: FuturesMarketSelection;
   logger: pino.Logger;
+}
+
+/** Outcome of a `resolveMarkets()` roll check. */
+export interface FuturesMarketSet {
+  /** Instruments the venue currently wants quoted, nearest-first. */
+  active: FuturesInstrumentAdapter[];
+  /** Instruments newly added since the previous resolve (need bootstrap). */
+  added: FuturesInstrumentAdapter[];
+  /** Instruments dropped since the previous resolve (matured / rolled off). */
+  dropped: FuturesInstrumentAdapter[];
 }
 
 /**
@@ -60,12 +85,15 @@ export class FuturesVenueAdapter implements VenueAdapter {
   private readonly multicall3Address: `0x${string}`;
   readonly readBatchSize: number;
   readonly writeBatchSize: number;
-  private instrumentSingleton: FuturesInstrumentAdapter | null = null;
+  private readonly marketSelection: FuturesMarketSelection;
+  /** deliveryDate → instrument, memoized so each expiry has one adapter. */
+  private readonly instruments = new Map<string, FuturesInstrumentAdapter>();
+  /** deliveryDates currently selected (as strings), from the last resolve. */
+  private activeKeys: string[] = [];
 
   private vaultAddressCache: `0x${string}` | null = null;
   private engineAddressCache: `0x${string}` | null = null;
   private collateralTokenCache: `0x${string}` | null = null;
-  private deliveryDurationDaysCache: bigint | null = null;
   private marginPercentCache: bigint | null = null;
   private readonly rawOracle: RawOracleReader;
 
@@ -85,6 +113,7 @@ export class FuturesVenueAdapter implements VenueAdapter {
     this.multicall3Address = mc3;
     this.readBatchSize = opts.readBatchSize;
     this.writeBatchSize = opts.writeBatchSize;
+    this.marketSelection = opts.marketSelection ?? { mode: "nearest", count: 1 };
 
     this.events = new FuturesVenueEvents(this.publicClient, this.address);
     this.account = new FuturesCollateralAccount(this);
@@ -96,7 +125,7 @@ export class FuturesVenueAdapter implements VenueAdapter {
       publicClient: this.publicClient,
       label: "futures",
       resolve: async () => {
-        const [oracle, divisor] = await this.publicClient.multicall({
+        const [oracle, divisor, contractSizeHpsDay, oracleUnitHpsDay] = await this.publicClient.multicall({
           allowFailure: false,
           contracts: [
             {
@@ -109,26 +138,113 @@ export class FuturesVenueAdapter implements VenueAdapter {
               abi: FuturesAbi,
               functionName: "hashpriceScalingDivisor",
             },
+            {
+              address: this.address,
+              abi: FuturesAbi,
+              functionName: "CONTRACT_SIZE_HPS_DAY",
+            },
+            {
+              address: this.address,
+              abi: FuturesAbi,
+              functionName: "ORACLE_UNIT_HPS_DAY",
+            },
           ],
         });
-        return { oracle, divisor };
+        return { oracle, divisor, contractSizeHpsDay, oracleUnitHpsDay };
       },
     });
   }
 
+  /** Nearest-expiry instrument. Back-compat / single-market entrypoint. */
   async getInstrument(): Promise<InstrumentAdapter> {
-    if (!this.instrumentSingleton) {
-      this.instrumentSingleton = new FuturesInstrumentAdapter(
-        this,
-        this.logger,
+    const dates = await this.readDeliveryDates();
+    if (dates.length === 0) throw new Error("futures contract returned no delivery dates");
+    return this.instrumentFor(dates[0]);
+  }
+
+  /** All currently-selected expiries, nearest-first. */
+  async listInstruments(): Promise<InstrumentAdapter[]> {
+    const { active } = await this.resolveMarkets();
+    return active;
+  }
+
+  /**
+   * Re-read the rolling delivery-date window, apply the configured selection,
+   * and diff against the previously-active set. Instruments are memoized per
+   * expiry, so `added`/`dropped` let the runner bootstrap new markets and tear
+   * down matured ones without disturbing the survivors.
+   */
+  async resolveMarkets(): Promise<FuturesMarketSet> {
+    const dates = await this.readDeliveryDates();
+    const selected = this.selectDates(dates);
+    const selectedKeys = selected.map((d) => d.toString());
+
+    const prev = new Set(this.activeKeys);
+    const next = new Set(selectedKeys);
+
+    const added: FuturesInstrumentAdapter[] = [];
+    for (const d of selected) {
+      if (!prev.has(d.toString())) added.push(this.instrumentFor(d));
+    }
+    const dropped: FuturesInstrumentAdapter[] = [];
+    for (const key of this.activeKeys) {
+      if (!next.has(key)) {
+        const inst = this.instruments.get(key);
+        if (inst) dropped.push(inst);
+        this.instruments.delete(key);
+      }
+    }
+
+    this.activeKeys = selectedKeys;
+    const active = selected.map((d) => this.instrumentFor(d));
+
+    if (added.length > 0 || dropped.length > 0) {
+      this.logger.info(
+        {
+          active: active.map((i) => i.deliveryDate.toString()),
+          added: added.map((i) => i.deliveryDate.toString()),
+          dropped: dropped.map((i) => i.deliveryDate.toString()),
+        },
+        "futures markets resolved",
       );
     }
-    return this.instrumentSingleton;
+    return { active, added, dropped };
+  }
+
+  private instrumentFor(deliveryDate: bigint): FuturesInstrumentAdapter {
+    const key = deliveryDate.toString();
+    let inst = this.instruments.get(key);
+    if (!inst) {
+      inst = new FuturesInstrumentAdapter(this, deliveryDate, this.logger);
+      this.instruments.set(key, inst);
+    }
+    return inst;
+  }
+
+  private async readDeliveryDates(): Promise<bigint[]> {
+    const dates = await this.publicClient.readContract({
+      address: this.address,
+      abi: FuturesAbi,
+      functionName: "getDeliveryDates",
+    });
+    return [...dates];
+  }
+
+  private selectDates(dates: bigint[]): bigint[] {
+    if (dates.length === 0) return [];
+    if (this.marketSelection.mode === "nearest") {
+      return dates.slice(0, Math.max(0, this.marketSelection.count));
+    }
+    const out: bigint[] = [];
+    for (const idx of this.marketSelection.indices) {
+      if (idx >= 0 && idx < dates.length) out.push(dates[idx]);
+    }
+    return out;
   }
 
   async multicall(
     calls: `0x${string}`[],
-    opts: { maxFeePerGas?: bigint } = {},
+    opts: { maxFeePerGas?: bigint; nonce?: number } = {},
   ): Promise<`0x${string}`> {
     try {
       return await this.wallet.walletClient.writeContract({
@@ -139,6 +255,7 @@ export class FuturesVenueAdapter implements VenueAdapter {
         account: this.wallet.account,
         chain: this.chain,
         maxFeePerGas: opts.maxFeePerGas,
+        nonce: opts.nonce,
       });
     } catch (err) {
       // Attach a Tenderly simulation URL so the failed multicall can be
@@ -217,47 +334,23 @@ export class FuturesVenueAdapter implements VenueAdapter {
   }
 
   /**
-   * Cache delivery-duration-days and marginPercent on the venue. Both are
-   * static-ish (admin-changeable) so we read them once and reuse for the
-   * `estimateOrderMargin` formula.
+   * Cache marginPercent on the venue. It is static-ish (admin-changeable) so we
+   * read it once and reuse for the `estimateOrderMargin` formula.
    */
-  async getMarginInputs(): Promise<{
-    deliveryDurationDays: bigint;
-    marginPct: bigint;
-  }> {
-    if (
-      this.deliveryDurationDaysCache !== null &&
-      this.marginPercentCache !== null
-    ) {
-      return {
-        deliveryDurationDays: this.deliveryDurationDaysCache,
-        marginPct: this.marginPercentCache,
-      };
+  async getMarginInputs(): Promise<{ marginPct: bigint }> {
+    if (this.marginPercentCache !== null) {
+      return { marginPct: this.marginPercentCache };
     }
-    const [duration, liqMarginPct] = await this.publicClient.multicall({
-      allowFailure: false,
-      contracts: [
-        {
-          address: this.address,
-          abi: FuturesAbi,
-          functionName: "deliveryDurationDays",
-        },
-        {
-          address: this.address,
-          abi: FuturesAbi,
-          functionName: "liquidationMarginPercent",
-        },
-      ],
+    const liqMarginPct = await this.publicClient.readContract({
+      address: this.address,
+      abi: FuturesAbi,
+      functionName: "liquidationMarginPercent",
     });
     // Note: `getMarginPercent` on chain adds a breach-penalty term we don't
     // mirror here — we use `liquidationMarginPercent` as a slight over-estimate.
     // The on-chain check is the real authority; this is just our pre-trade gate.
-    this.deliveryDurationDaysCache = BigInt(duration);
     this.marginPercentCache = BigInt(liqMarginPct);
-    return {
-      deliveryDurationDays: this.deliveryDurationDaysCache,
-      marginPct: this.marginPercentCache,
-    };
+    return { marginPct: this.marginPercentCache };
   }
 }
 
@@ -268,88 +361,66 @@ export class FuturesVenueAdapter implements VenueAdapter {
  * portfolio IM/MM, futures order margin (positive resting margin), futures
  * unrealized PnL (signed), wallet ERC20 balance, native ETH balance.
  */
-class FuturesCollateralAccount implements CollateralAccount {
+class FuturesCollateralAccount implements BatchableCollateralAccount {
   private readonly venue: FuturesVenueAdapter;
   constructor(venue: FuturesVenueAdapter) {
     this.venue = venue;
   }
 
-  async snapshot(): Promise<CollateralSnapshot> {
+  /**
+   * Decompose the snapshot into shared (portfolio-wide) + venue-specific reads.
+   * `shared` order matches the perps account so the aggregator can decode one
+   * shared result slice for every venue:
+   *   [vaultBalance, portfolioIM, portfolioMM, walletTokenBalance, nativeBalance]
+   */
+  async buildMarginReadPlan(): Promise<MarginReadPlan> {
     const owner = this.venue.wallet.account.address;
     const { vault, engine, token } = await this.venue.resolveAddresses();
     const mc3 = this.venue.getMulticall3Address();
 
-    const [
-      vaultBalance,
-      portfolioIM,
-      portfolioMM,
-      orderMargin,
-      unrealizedPnl,
-      walletTokenBalance,
-      nativeBalance,
-    ] = await this.venue.publicClient.multicall({
-      allowFailure: false,
-      contracts: [
-        {
-          address: vault,
-          abi: CollateralVaultAbi,
-          functionName: "balanceOf",
-          args: [owner],
-        },
-        {
-          address: engine,
-          abi: PortfolioMarginEngineAbi,
-          functionName: "computePortfolioIM",
-          args: [owner],
-        },
-        {
-          address: engine,
-          abi: PortfolioMarginEngineAbi,
-          functionName: "computePortfolioMM",
-          args: [owner],
-        },
-        {
-          address: this.venue.address,
-          abi: FuturesAbi,
-          functionName: "getFuturesOrderMargin",
-          args: [owner],
-        },
-        {
-          address: this.venue.address,
-          abi: FuturesAbi,
-          functionName: "getFuturesUnrealizedPnl",
-          args: [owner],
-        },
-        {
-          address: token,
-          abi: erc20Abi,
-          functionName: "balanceOf",
-          args: [owner],
-        },
-        {
-          address: mc3,
-          abi: Multicall3Abi,
-          functionName: "getEthBalance",
-          args: [owner],
-        },
-      ],
-    });
+    const shared = [
+      { address: vault, abi: CollateralVaultAbi, functionName: "balanceOf", args: [owner] },
+      { address: engine, abi: PortfolioMarginEngineAbi, functionName: "computePortfolioIM", args: [owner] },
+      { address: engine, abi: PortfolioMarginEngineAbi, functionName: "computePortfolioMM", args: [owner] },
+      { address: token, abi: erc20Abi, functionName: "balanceOf", args: [owner] },
+      { address: mc3, abi: Multicall3Abi, functionName: "getEthBalance", args: [owner] },
+    ] as MarginReadPlan["shared"];
 
-    return {
-      vaultBalance,
-      portfolioIM,
-      portfolioMM,
-      venueOrderMargin: orderMargin,
-      venueUnrealizedPnl: unrealizedPnl,
-      walletTokenBalance,
-      nativeBalance,
-      collateralToken: token,
+    const venue = [
+      { address: this.venue.address, abi: FuturesAbi, functionName: "getFuturesOrderMargin", args: [owner] },
+      { address: this.venue.address, abi: FuturesAbi, functionName: "getFuturesUnrealizedPnl", args: [owner] },
+    ] as MarginReadPlan["venue"];
+
+    const decode = (results: readonly unknown[]): CollateralSnapshot => {
+      const r = results as bigint[];
+      const [vaultBalance, portfolioIM, portfolioMM, walletTokenBalance, nativeBalance] = r;
+      return {
+        vaultBalance,
+        portfolioIM,
+        portfolioMM,
+        venueOrderMargin: r[5],
+        venueUnrealizedPnl: r[6],
+        walletTokenBalance,
+        nativeBalance,
+        collateralToken: token,
+      };
     };
+
+    return { shared, venue, decode };
+  }
+
+  async snapshot(): Promise<CollateralSnapshot> {
+    const plan = await this.buildMarginReadPlan();
+    const results = await this.venue.publicClient.multicall({
+      allowFailure: false,
+      contracts: [...plan.shared, ...plan.venue],
+    });
+    return plan.decode(results);
   }
 
   async imSpotShock(): Promise<bigint> {
-    // Futures uses pricePerDay × deliveryDurationDays × marginPct/100, not a
-    // spot-shock model. Returns 0 to signal "not applicable" — adapters don't
+    // Futures uses pricePerDay × marginPct/100 (one unit, no duration multiplier),
+    // not a spot-shock model. Returns 0 to signal "not applicable" — adapters don't
     // use this directly; estimateOrderMargin reads from getMarginInputs instead.
     return 0n;
   }

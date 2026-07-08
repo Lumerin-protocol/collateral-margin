@@ -216,14 +216,14 @@ Suites cover:
 
 - `pme/health` — multicall batching + `imUtilization` precision
 - `venues/perps` — long/short PnL math, `PERPS_MARKET_ID` sentinel, position id
-- `venues/futures` — buyer/seller PnL, `deliveryAt` → marketId, `deliveryDurationDays` caching
+- `venues/futures` — buyer/seller PnL (one contract = 1 PH/s·day, duration-free), `deliveryAt` → marketId
 - `coordinator/queue` — BigInt-safe ordering, `upsert` re-ranking, snapshot semantics
 - `coordinator/planner` — orders-leg, position ranking, `OrdersStillOpen`-replay, bad-debt
 - `alert/notifier` — dedupe window, severity promotion, ordering, retry-on-failure
 - `discovery/tracker` — checksum dedupe, `onAdded` / `onChanged` listeners, startup backfill
 - `discovery/webhook` — payload extraction across `data` / `records` / array shapes
 - `runtime/scheduler` — alert ladder thresholds, queue upsert + executor kick wiring
-- `oracle/priceFeed` — rebase to token decimals, dispatch, no-op on unchanged answer
+- `oracle/priceFeed` — rebase to token decimals + contract-size unit (`CONTRACT_SIZE_HPS_DAY / ORACLE_UNIT_HPS_DAY`, ×10 at defaults), dispatch, no-op on unchanged answer
 - `predict/mm` — net delta, stress, perp/futures unrealized loss, mm/im surplus
 - `predict/solve` — long/short downside & upside thresholds, drag from orderMargin/funding
 - `predict/predictiveIndex` — upsert/invalidate, sorted crossings on rise & drop
