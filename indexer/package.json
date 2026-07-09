@@ -16,7 +16,7 @@
     "remove-local": "graph remove --node http://localhost:8020/ collateral-vault",
     "deploy-local": "graph deploy --node http://localhost:8020/ --ipfs http://localhost:5001 --version-label 0 collateral-vault",
     "setup-local": "pnpm prepare-local && pnpm codegen && pnpm build && pnpm create-local && pnpm deploy-local",
-    "test": "graph test",
+    "test": "graph test -v 0.6.0",
     "indexer": "docker compose --env-file ../.env up",
     "graph:api": "open http://localhost:8030/graphql/playground"
   },
