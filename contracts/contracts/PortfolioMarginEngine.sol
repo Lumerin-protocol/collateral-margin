@@ -194,7 +194,8 @@ contract PortfolioMarginEngine is
             netDelta += pos.netQuantity * int256(WAD) / qtyScale;
         }
 
-        // Futures delta: sum(deliveryDurationDays * qty) * WAD per active position (optional)
+        // Futures delta: sum(±qty) * WAD per active position — one WAD per contract
+        // (1 PH/s/day), sign per side. No duration multiplier. (optional)
         if (address(futures) != address(0)) {
             netDelta += futures.getNetPositionDelta(user);
         }

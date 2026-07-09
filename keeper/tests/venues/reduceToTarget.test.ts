@@ -77,7 +77,6 @@ function makeChainStub(opts: {
             0n, // getPendingFunding
             0n, // getFuturesOrderMargin
             opts.futuresPositionIds,
-            7, // deliveryDurationDays
           ];
         }
         // readAccountSnapshot per-position hydration
@@ -104,18 +103,18 @@ function makeChainStub(opts: {
 
 describe("futures venue: reduceToTarget", () => {
   it("sizes a strict worst-first lot subset and submits one liquidatePositions batch", async () => {
-    // 12 long lots @ $4.21/day, $40 deposit, crash to $3.90 — underwater but
-    // recoverable (mirrors the solver's in-band fixture).
+    // 12 long lots @ $40/day, $136 deposit, crash to $30 — underwater but
+    // recoverable (mirrors the solver's in-band fixture; no duration factor).
     const ids: Hex[] = [];
     for (let i = 0; i < 12; i++) ids.push(`0x${(i + 1).toString(16).padStart(64, "0")}` as Hex);
     let simulated: ReadCall | undefined;
     const chain = makeChainStub({
-      balance: 40_000_000n,
-      marketPrice: 3_900_000n,
+      balance: 136_000_000n,
+      marketPrice: 30_000_000n,
       liquidationFee: 1_000_000n,
       perp: { netQuantity: 0n, aggregatedEntryPrice: 0n },
       futuresPositionIds: ids,
-      futuresPosition: { buyer: USER, buyPricePerDay: 4_210_000n, sellPricePerDay: 4_210_000n },
+      futuresPosition: { buyer: USER, buyPricePerDay: 40_000_000n, sellPricePerDay: 40_000_000n },
       onSimulate: (call) => {
         simulated = call;
       },
@@ -133,7 +132,7 @@ describe("futures venue: reduceToTarget", () => {
   });
 
   it("caps the batch to maxLotsPerLiquidationTx (gas-bounded chunking)", async () => {
-    // 12 long lots @ $4.21/day, $40 deposit, crash to $1.00 — a deep crash the
+    // 12 long lots @ $40/day, $136 deposit, crash to $1.00 — a deep crash the
     // solver resolves to a FULL close (all 12 ids). With a cap below 12,
     // `reduceToTarget` must send only the worst-first prefix and report
     // `positionsClosed` == cap; the planner loop drains the rest next iteration.
@@ -143,12 +142,12 @@ describe("futures venue: reduceToTarget", () => {
     // Uncapped target first, so the assertion is robust to the solver's sizing.
     let full: Hex[] = [];
     const chainFull = makeChainStub({
-      balance: 40_000_000n,
+      balance: 136_000_000n,
       marketPrice: 1_000_000n,
       liquidationFee: 1_000_000n,
       perp: { netQuantity: 0n, aggregatedEntryPrice: 0n },
       futuresPositionIds: ids,
-      futuresPosition: { buyer: USER, buyPricePerDay: 4_210_000n, sellPricePerDay: 4_210_000n },
+      futuresPosition: { buyer: USER, buyPricePerDay: 40_000_000n, sellPricePerDay: 40_000_000n },
       onSimulate: (call) => {
         full = (call.args as [Address, Hex[]])[1];
       },
@@ -159,12 +158,12 @@ describe("futures venue: reduceToTarget", () => {
     const cap = full.length - 1;
     let chunk: Hex[] = [];
     const chainCap = makeChainStub({
-      balance: 40_000_000n,
+      balance: 136_000_000n,
       marketPrice: 1_000_000n,
       liquidationFee: 1_000_000n,
       perp: { netQuantity: 0n, aggregatedEntryPrice: 0n },
       futuresPositionIds: ids,
-      futuresPosition: { buyer: USER, buyPricePerDay: 4_210_000n, sellPricePerDay: 4_210_000n },
+      futuresPosition: { buyer: USER, buyPricePerDay: 40_000_000n, sellPricePerDay: 40_000_000n },
       onSimulate: (call) => {
         chunk = (call.args as [Address, Hex[]])[1];
       },
@@ -183,11 +182,11 @@ describe("futures venue: reduceToTarget", () => {
     let simulateCalled = false;
     const chain = makeChainStub({
       balance: 1_000_000_000n, // fully collateralised
-      marketPrice: 3_900_000n,
+      marketPrice: 30_000_000n,
       liquidationFee: 1_000_000n,
       perp: { netQuantity: 0n, aggregatedEntryPrice: 0n },
       futuresPositionIds: ids,
-      futuresPosition: { buyer: USER, buyPricePerDay: 4_210_000n, sellPricePerDay: 4_210_000n },
+      futuresPosition: { buyer: USER, buyPricePerDay: 40_000_000n, sellPricePerDay: 40_000_000n },
       onSimulate: () => {
         simulateCalled = true;
       },

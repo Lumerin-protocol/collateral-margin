@@ -20,11 +20,9 @@ import type {
 /**
  * `Venue` adapter for the Futures contract.
  *
- * Caches `deliveryDurationDays` lazily on first use: the contract setting
- * is immutable within an epoch and only ever ratchets on admin action, so
- * we read it once per process and re-read after restart. Position PnL math
- * uses this value as a multiplier (`priceDiffPerDay * deliveryDurationDays`)
- * — caching it keeps `readPositions` to one RPC + one multicall.
+ * One matched unit settles `pricePerDay` of notional (there is no duration
+ * multiplier). Position PnL is therefore just `priceDiffPerDay` per contract,
+ * mirroring `getFuturesUnrealizedPnl` on-chain.
  */
 export class FuturesVenue implements Venue {
   readonly name = "futures" as const;
@@ -33,7 +31,6 @@ export class FuturesVenue implements Venue {
   private readonly config: Config;
   private readonly logger: pino.Logger;
   private readonly ethUsdFeed: EthUsdFeed | undefined;
-  private deliveryDurationDays: bigint | undefined;
   private mmParams: MMParams | undefined;
 
   constructor(
@@ -89,7 +86,7 @@ export class FuturesVenue implements Venue {
   }
 
   async readPositions(user: Address): Promise<VenuePosition[]> {
-    const [positionIds, marketPrice, deliveryDurationDays] = await Promise.all([
+    const [positionIds, marketPrice] = await Promise.all([
       this.chain.publicClient.readContract({
         address: this.config.futures.address,
         abi: FuturesAbi,
@@ -101,7 +98,6 @@ export class FuturesVenue implements Venue {
         abi: FuturesAbi,
         functionName: "getMarketPrice",
       }) as Promise<bigint>,
-      this.getDeliveryDurationDays(),
     ]);
 
     if (positionIds.length === 0) return [];
@@ -119,8 +115,8 @@ export class FuturesVenue implements Venue {
     const userAddr = getAddress(user);
     return positionIds.map((id, i) => {
       const pos = positions[i];
-      // Each position is a single contract; PnL accrues per day across the
-      // full delivery window (matches `getFuturesUnrealizedPnl` on-chain).
+      // Each position is a single contract that settles `pricePerDay` of notional
+      // (no duration multiplier), matching `getFuturesUnrealizedPnl` on-chain.
       const isBuyer = getAddress(pos.buyer) === userAddr;
       const entryPricePerDay = isBuyer
         ? pos.buyPricePerDay
@@ -128,9 +124,9 @@ export class FuturesVenue implements Venue {
       const priceDiffPerDay = isBuyer
         ? marketPrice - entryPricePerDay // long: lose when market drops
         : entryPricePerDay - marketPrice; // short: lose when market rises
-      const pnl = priceDiffPerDay * deliveryDurationDays;
+      const pnl = priceDiffPerDay;
       const unrealizedLoss = pnl < 0n ? -pnl : 0n;
-      const notional = entryPricePerDay * deliveryDurationDays;
+      const notional = entryPricePerDay;
 
       return {
         id,
@@ -235,22 +231,6 @@ export class FuturesVenue implements Venue {
     return this.mmParams;
   }
 
-  /**
-   * Read `deliveryDurationDays` lazily and cache it. The contract returns
-   * `uint8` (decoded as `number`); we widen to `bigint` so downstream
-   * arithmetic stays in bigint land.
-   */
-  private async getDeliveryDurationDays(): Promise<bigint> {
-    if (this.deliveryDurationDays !== undefined)
-      return this.deliveryDurationDays;
-    const days = (await this.chain.publicClient.readContract({
-      address: this.config.futures.address,
-      abi: FuturesAbi,
-      functionName: "deliveryDurationDays",
-    })) as number;
-    this.deliveryDurationDays = BigInt(days);
-    return this.deliveryDurationDays;
-  }
 }
 
 /** `bytes32(uint256(deliveryAt))` — same encoding the indexer uses. */

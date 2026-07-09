@@ -16,85 +16,123 @@ import type {
 import { FuturesAbi } from "futures-contracts/abi/Futures";
 import type { FuturesVenueAdapter } from "./venue.ts";
 import { FuturesOwnOrders } from "./ownOrders.ts";
+import { futuresInstrumentId } from "./events.ts";
 
-const FUTURES_INSTRUMENT_ID = "futures";
+export { futuresInstrumentId } from "./events.ts";
 
+/**
+ * One futures market = one delivery date (expiry). The venue creates one
+ * adapter per selected expiry; each owns its own book snapshot, own-order
+ * cache, and order encoding, all scoped to `deliveryDate`.
+ *
+ * Position and margin reads are per-expiry (client-side), while the shared
+ * portfolio collateral/IM/MM lives on the venue's `CollateralAccount`.
+ */
 export class FuturesInstrumentAdapter implements InstrumentAdapter {
-  readonly id = FUTURES_INSTRUMENT_ID;
+  readonly id: string;
   readonly venue: FuturesVenueAdapter;
   readonly book: FuturesBook;
   readonly ownOrders: FuturesOwnOrders;
+  readonly deliveryDate: bigint;
 
   private tickCache: bigint | null = null;
-  private deliveryDateCache: bigint | null = null;
-  private deliveryDurationDaysCache: bigint | null = null;
+  private marginPercentCache: bigint | null = null;
 
-  constructor(venue: FuturesVenueAdapter, logger: pino.Logger) {
+  constructor(venue: FuturesVenueAdapter, deliveryDate: bigint, logger: pino.Logger) {
     this.venue = venue;
+    this.deliveryDate = deliveryDate;
+    this.id = futuresInstrumentId(deliveryDate);
     this.book = new FuturesBook(this, venue.readBatchSize);
-    this.ownOrders = new FuturesOwnOrders(venue, logger, venue.readBatchSize);
+    this.ownOrders = new FuturesOwnOrders(
+      venue,
+      deliveryDate,
+      logger.child({ instrument: this.id }),
+      venue.readBatchSize,
+    );
   }
 
   async getIndexPrice(): Promise<bigint> {
-    // Read the raw oracle answer rebased to token decimals — `Futures.getMarketPrice`
-    // would round to the nearest tick, which collapses our reservation-price
-    // shift onto a tick boundary and forces a 2-tick min spread. The unrounded
-    // mid lets `roundDownToTick(r) → bidMid` and `roundUpToTick(r) → askMid`
-    // produce a 1-tick spread naturally.
+    // Raw oracle answer rebased to token decimals (no tick rounding). All
+    // futures expiries share the same per-day hashprice oracle, so the index
+    // is identical across markets; only time-to-expiry (T) differs downstream.
     return await this.venue.getRawMarketPrice();
   }
 
   async getPosition(): Promise<Position> {
-    // Futures' net position is summed from all open positions. We use the
-    // engine view exposed for this purpose: getNetPositionDelta returns
-    // `Σ qty_i * deliveryDurationDays` × 1e18 in WAD. Convert back to
-    // contracts by dividing by `deliveryDurationDays * 1e18`.
-    const [netDeltaWad, durationDays, marketPrice] = await Promise.all([
-      this.venue.publicClient.readContract({
-        address: this.venue.address,
-        abi: FuturesAbi,
-        functionName: "getNetPositionDelta",
-        args: [this.venue.wallet.account.address],
-      }),
-      this.venue.publicClient.readContract({
-        address: this.venue.address,
-        abi: FuturesAbi,
-        functionName: "deliveryDurationDays",
-      }),
-      this.venue.getRawMarketPrice(),
-    ]);
-    const days = BigInt(durationDays);
-    const denom = days * 10n ** 18n;
-    const netQuantity = denom === 0n ? 0n : netDeltaWad / denom;
-    return { netQuantity, entryPrice: marketPrice };
+    // Per-expiry net position, computed client-side. The engine's
+    // `getNetPositionDelta` is portfolio-wide (sums all expiries), so we walk
+    // this expiry's positions instead. Each position is a single matched unit
+    // (qty=1): buyer is long (+1), seller is short (-1).
+    const owner = this.venue.wallet.account.address.toLowerCase();
+    const positionIds = await this.venue.publicClient.readContract({
+      address: this.venue.address,
+      abi: FuturesAbi,
+      functionName: "getPositionsByParticipantDeliveryDate",
+      args: [this.venue.wallet.account.address, this.deliveryDate],
+    });
+
+    if (positionIds.length === 0) {
+      return { netQuantity: 0n, entryPrice: await this.venue.getRawMarketPrice() };
+    }
+
+    const batchSize = this.venue.readBatchSize;
+    const positions: {
+      seller: string;
+      buyer: string;
+      sellPricePerDay: bigint;
+      buyPricePerDay: bigint;
+    }[] = [];
+    for (let i = 0; i < positionIds.length; i += batchSize) {
+      const chunk = positionIds.slice(i, i + batchSize);
+      const results = await this.venue.publicClient.multicall({
+        allowFailure: false,
+        contracts: chunk.map((id) => ({
+          address: this.venue.address,
+          abi: FuturesAbi,
+          functionName: "getPositionById" as const,
+          args: [id] as const,
+        })),
+      });
+      positions.push(
+        ...(results as {
+          seller: string;
+          buyer: string;
+          sellPricePerDay: bigint;
+          buyPricePerDay: bigint;
+        }[]),
+      );
+    }
+
+    let net = 0n;
+    let entrySum = 0n;
+    let entryCount = 0n;
+    for (const p of positions) {
+      if (p.buyer.toLowerCase() === owner) {
+        net += 1n;
+        entrySum += p.buyPricePerDay;
+        entryCount += 1n;
+      }
+      if (p.seller.toLowerCase() === owner) {
+        net -= 1n;
+        entrySum += p.sellPricePerDay;
+        entryCount += 1n;
+      }
+    }
+    const entryPrice =
+      entryCount > 0n ? entrySum / entryCount : await this.venue.getRawMarketPrice();
+    return { netQuantity: net, entryPrice };
   }
 
   async getContext(): Promise<InstrumentContext> {
-    const deliveryDates = await this.venue.publicClient.readContract({
-      address: this.venue.address,
-      abi: FuturesAbi,
-      functionName: "getDeliveryDates",
-    });
-    if (deliveryDates.length === 0)
-      throw new Error("futures contract returned no delivery dates");
-    this.deliveryDateCache = deliveryDates[0];
-
-    // Eagerly cache margin inputs so `estimateOrderMargin` can be synchronous.
-    const { deliveryDurationDays } = await this.venue.getMarginInputs();
-    this.deliveryDurationDaysCache = deliveryDurationDays;
-
+    // Eagerly cache marginPct so `estimateOrderMargin` is synchronous.
+    const { marginPct } = await this.venue.getMarginInputs();
+    this.marginPercentCache = marginPct;
     return {
-      deliveryDate: Number(deliveryDates[0]),
-      contractMultiplier: deliveryDurationDays,
+      deliveryDate: Number(this.deliveryDate),
     };
   }
 
   encodeCreate(intent: OrderIntent): `0x${string}` {
-    if (this.deliveryDateCache === null) {
-      throw new Error(
-        "futures: getContext() must be called before encodeCreate()",
-      );
-    }
     const qty = Number(intent.size);
     if (qty <= 0 || qty > 127) {
       throw new Error(`futures: order size ${qty} must be in (0, 127]`);
@@ -105,7 +143,7 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
     return encodeFunctionData({
       abi: FuturesAbi,
       functionName: "createOrder",
-      args: [intent.price, this.deliveryDateCache, "", signed],
+      args: [intent.price, this.deliveryDate, "", signed],
     });
   }
 
@@ -118,58 +156,50 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
   }
 
   /**
-   * Execute cancels then creates on-chain. Owns the full lifecycle:
-   * encoding → batching → tx chunking → broadcast → receipt gathering.
-   *
-   * Cancels (individual closeOrder calls, max 20 per batch) are placed
-   * before creates (createOrders calls, max 10 per batch) so margin is
-   * freed before new risk is added.
+   * Execute cancels then creates for this expiry. Kept for single-market
+   * callers and tests; the portfolio runner routes through the shared
+   * `TxCoordinator` instead, which batches this expiry's calls with the other
+   * expiries' into one `Futures.multicall`.
    */
-  async executeOrders(
-    intent: ExecuteOrdersIntent,
-  ): Promise<ExecuteOrdersResult> {
+  async executeOrders(intent: ExecuteOrdersIntent): Promise<ExecuteOrdersResult> {
     return this.executeOrdersImpl(intent, this.venue.getLogger());
+  }
+
+  /** Build the ordered call list for this expiry: cancels then creates. */
+  buildCalls(intent: { cancels: CancelIntent[]; creates: OrderIntent[] }): `0x${string}`[] {
+    const calls: `0x${string}`[] = [];
+    for (const c of intent.cancels) calls.push(this.encodeCancel(c));
+    for (const c of intent.creates) calls.push(this.encodeCreate(c));
+    return calls;
   }
 
   // ── Private implementation ──────────────────────────────────────────
 
-  /**
-   * Shared implementation — the inner `logger` param makes this testable
-   * without coupling to the full venue adapter.
-   */
   private async executeOrdersImpl(
     intent: ExecuteOrdersIntent,
     logger: pino.Logger,
   ): Promise<ExecuteOrdersResult> {
-    // 1. Build the ordered call list: cancels first, then creates.
-    const calls = this.buildCallList(intent);
+    const batches = this.chunkCalls(intent);
 
     if (intent.dryRun) {
       logger.info(
-        {
-          cancels: intent.cancels.length,
-          creates: intent.creates.length,
-        },
+        { cancels: intent.cancels.length, creates: intent.creates.length },
         "DRY RUN: would send multicall batches",
       );
       return { receipts: [], errors: [] };
     }
 
-    // 2. Chunk into tx-sized groups and broadcast sequentially.
     const receipts: { gasUsed: bigint; effectiveGasPrice: bigint }[] = [];
     const errors: Error[] = [];
-    const totalBatches = calls.length;
-
-    console.log(calls);
-    for (let batchNum = 0; batchNum < totalBatches; batchNum++) {
-      const chunk = calls[batchNum];
+    for (let batchNum = 0; batchNum < batches.length; batchNum++) {
+      const chunk = batches[batchNum];
       try {
         const hash = await this.venue.multicall(chunk, {
           maxFeePerGas: intent.maxFeePerGas,
         });
-        const receipt = await this.venue.publicClient.waitForTransactionReceipt(
-          { hash },
-        );
+        const receipt = await this.venue.publicClient.waitForTransactionReceipt({
+          hash,
+        });
         receipts.push({
           gasUsed: receipt.gasUsed,
           effectiveGasPrice: receipt.effectiveGasPrice,
@@ -177,7 +207,7 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
         logger.info(
           {
             calls: chunk.length,
-            batch: `${batchNum}/${totalBatches}`,
+            batch: `${batchNum}/${batches.length}`,
             gas: receipt.gasUsed.toString(),
           },
           "futures multicall chunk executed",
@@ -186,100 +216,53 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
         const wrapped = err instanceof Error ? err : new Error(String(err));
         errors.push(wrapped);
         logger.error(
-          {
-            err: wrapped,
-            calls: chunk.length,
-            batch: `${batchNum}/${totalBatches}`,
-          },
+          { err: wrapped, calls: chunk.length, batch: `${batchNum}/${batches.length}` },
           "futures multicall chunk failed — continuing with next chunk",
         );
       }
     }
-
     return { receipts, errors };
   }
 
-  /** Build the ordered call list: cancels (individual closeOrder) then creates (createOrders). */
-  private buildCallList(intent: ExecuteOrdersIntent): `0x${string}`[][] {
+  /**
+   * Split cancels+creates into tx-sized chunks. Batch size is measured in qty
+   * count since one cancel costs roughly one qty=1 create.
+   */
+  private chunkCalls(intent: {
+    cancels: CancelIntent[];
+    creates: OrderIntent[];
+  }): `0x${string}`[][] {
     const batchSize = this.venue.writeBatchSize;
-
-    let batchN = 0;
-    let qtyCount = 0; // we limit batch by qty count, since gas cost of one cancel approx eq one create order qty=1
-    const batch: `0x${string}`[][] = [];
-    function addTx(tx: `0x${string}`, qty: number) {
-      if (!batch[batchN]) {
-        batch[batchN] = new Array();
-      }
-      batch[batchN].push(tx);
+    const batches: `0x${string}`[][] = [];
+    let current: `0x${string}`[] = [];
+    let qtyCount = 0;
+    const push = (tx: `0x${string}`, qty: number) => {
+      current.push(tx);
       qtyCount += qty;
-      if (batch[batchN].length >= batchSize) {
-        batchN++;
+      if (current.length >= batchSize || qtyCount >= batchSize) {
+        batches.push(current);
+        current = [];
         qtyCount = 0;
       }
-    }
-
-    for (const c of intent.cancels) {
-      addTx(this.encodeCancel(c), 1);
-    }
-
-    for (const c of intent.creates) {
-      addTx(this.encodeCreate(c), Number(c.size));
-    }
-
-    return batch;
-  }
-
-  /** Encode a batch of creates via the `createOrders` contract function. */
-  private encodeCreateOrders(intents: OrderIntent[]): `0x${string}` {
-    if (!this.deliveryDateCache) {
-      throw new Error("Delivery data cache not filled");
-    }
-    const _deliveryDateCache = this.deliveryDateCache;
-    return encodeFunctionData({
-      abi: FuturesAbi,
-      functionName: "createOrders",
-      args: [
-        intents.map((i) => ({
-          pricePerDay: i.price,
-          deliveryDate: _deliveryDateCache,
-          destURL: "",
-          qty: i.side === "buy" ? Number(i.size) : -Number(i.size),
-        })),
-      ],
-    });
+    };
+    for (const c of intent.cancels) push(this.encodeCancel(c), 1);
+    for (const c of intent.creates) push(this.encodeCreate(c), Number(c.size));
+    if (current.length > 0) batches.push(current);
+    return batches;
   }
 
   /**
-   * Mirrors `Futures.getMaintenanceMarginForPosition` for a single new order:
-   *   IM_added = pricePerDay × deliveryDurationDays × |qty| × marginPct / 100
-   *
-   * `getFuturesOrderMargin` clamps each order's marginal contribution at 0
-   * when its mark-to-market PnL exceeds maintenance (a profitable order
-   * locks no extra margin). We don't mirror that branch here: it would
-   * make the estimate sign-dependent on the live oracle, and the
-   * conservative "always charge full maintenance" estimate is fine because
-   * `engine.canPlaceOrder` is the real authority. We err on the high side
-   * by O(few percent), which only costs us a tiny slice of quoting capacity.
+   * IM added by a new order:
+   *   pricePerDay × |qty| × marginPct / 100   (one unit, no duration multiplier)
+   * Conservative (ignores the profitable-order clamp); the engine's
+   * `canPlaceOrder` is the real authority.
    */
   estimateOrderMargin(intent: OrderIntent): bigint {
-    if (this.deliveryDurationDaysCache === null) return 0n;
-    // marginPct is loaded lazily at first canPlace call; if we don't have it
-    // yet, return 0 and let the engine gate sort it out on the first tx.
-    const cachedMarginPct = (
-      this.venue as unknown as { marginPercentCache?: bigint }
-    ).marginPercentCache;
-    if (!cachedMarginPct) return 0n;
-    return (
-      (intent.price *
-        this.deliveryDurationDaysCache *
-        intent.size *
-        cachedMarginPct) /
-      100n
-    );
+    if (this.marginPercentCache === null) return 0n;
+    return (intent.price * intent.size * this.marginPercentCache) / 100n;
   }
 
   async estimateCreateGas(account: `0x${string}`): Promise<bigint> {
-    if (this.deliveryDateCache === null) return 0n;
     try {
       return await this.venue.publicClient.estimateContractGas({
         address: this.venue.address,
@@ -287,7 +270,7 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
         functionName: "createOrder",
         args: [
           1_000_000n,
-          this.deliveryDateCache,
+          this.deliveryDate,
           "",
           1 as number & { readonly __int8__: true },
         ],
@@ -308,17 +291,9 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
     this.tickCache = tick;
     return tick;
   }
-
-  /** Internal: nearest delivery date, populated after `getContext()`. */
-  getDeliveryDate(): bigint | null {
-    return this.deliveryDateCache;
-  }
 }
 
-/**
- * Per-(deliveryDate) book source. The MM is locked to the nearest delivery
- * date — see venue header for rationale.
- */
+/** Per-expiry book source. Reads the ladders for this instrument's delivery date. */
 class FuturesBook implements BookSource {
   readonly matchingMode: MatchingMode = "exact";
   private readonly inst: FuturesInstrumentAdapter;
@@ -334,12 +309,7 @@ class FuturesBook implements BookSource {
 
   async snapshot(opts: { depth?: number } = {}): Promise<OrderBookSnapshot> {
     const v = this.inst.venue;
-    const dd = this.inst.getDeliveryDate();
-    if (dd === null) {
-      throw new Error(
-        "futures: getContext() must be called before book.snapshot()",
-      );
-    }
+    const dd = this.inst.deliveryDate;
     const depth = BigInt(opts.depth ?? 200);
 
     const [bidPrices, askPrices] = await v.publicClient.multicall({
@@ -360,8 +330,7 @@ class FuturesBook implements BookSource {
       ],
     });
 
-    if (bidPrices.length === 0 && askPrices.length === 0)
-      return { bids: [], asks: [] };
+    if (bidPrices.length === 0 && askPrices.length === 0) return { bids: [], asks: [] };
 
     const allCalls = [
       ...bidPrices.map((p) => ({
@@ -378,7 +347,6 @@ class FuturesBook implements BookSource {
       })),
     ];
 
-    // Chunk to stay under RPC payload / timeout limits.
     const batchSize = this.readBatchSize;
     const allResults: bigint[] = [];
     for (let i = 0; i < allCalls.length; i += batchSize) {
@@ -398,13 +366,8 @@ class FuturesBook implements BookSource {
       price: p,
       quantity: allResults[bidPrices.length + i],
     }));
-    // EnumerableSet returns prices in unspecified order; sort for the consumer.
-    const bids = bidsRaw.sort((a, b) =>
-      a.price < b.price ? 1 : a.price > b.price ? -1 : 0,
-    );
-    const asks = asksRaw.sort((a, b) =>
-      a.price < b.price ? -1 : a.price > b.price ? 1 : 0,
-    );
+    const bids = bidsRaw.sort((a, b) => (a.price < b.price ? 1 : a.price > b.price ? -1 : 0));
+    const asks = asksRaw.sort((a, b) => (a.price < b.price ? -1 : a.price > b.price ? 1 : 0));
     return { bids, asks };
   }
 }

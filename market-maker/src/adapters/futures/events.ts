@@ -6,7 +6,10 @@ import type {
 } from "../../core/adapter.ts";
 import { FuturesAbi } from "futures-contracts/abi/Futures";
 
-export const FUTURES_INSTRUMENT_ID = "futures";
+/** Instrument id for a futures expiry, e.g. `futures:1893456000`. */
+export function futuresInstrumentId(deliveryDate: bigint): string {
+  return `futures:${deliveryDate.toString()}`;
+}
 
 type FuturesLog = Log<
   bigint,
@@ -61,11 +64,12 @@ export class FuturesVenueEvents implements VenueEvents {
 export function decodeEvent(log: FuturesLog): VenueEvent | null {
   switch (log.eventName) {
     case "OrderCreated": {
-      const { orderId, participant, pricePerDay, isBuy } = log.args;
+      const { orderId, participant, pricePerDay, deliveryAt, isBuy } = log.args;
       if (
         !orderId ||
         !participant ||
         pricePerDay === undefined ||
+        deliveryAt === undefined ||
         isBuy === undefined
       )
         return null;
@@ -75,33 +79,34 @@ export function decodeEvent(log: FuturesLog): VenueEvent | null {
         participant,
         price: pricePerDay,
         side: isBuy ? "buy" : "sell",
-        size: 1n, // futures orders are always single-contract per OrderCreated event
-        instrumentId: FUTURES_INSTRUMENT_ID,
+        size: 1n, // futures orders are single-contract per OrderCreated event
+        instrumentId: futuresInstrumentId(deliveryAt),
+        deliveryDate: deliveryAt,
       };
     }
     case "OrderClosed": {
       const { orderId } = log.args;
       if (!orderId) return null;
+      // OrderClosed carries neither participant nor deliveryAt; per-expiry
+      // own-order caches resolve ownership + routing by cache membership.
       return {
         type: "order-cancelled",
         orderId,
-        instrumentId: FUTURES_INSTRUMENT_ID,
       };
     }
     case "LotCreated": {
-      const { lotId, seller, buyer } = log.args;
-      if (!lotId || !seller || !buyer) return null;
+      const { seller, deliveryAt } = log.args;
+      if (!seller || deliveryAt === undefined) return null;
       return {
         type: "position-changed",
         participant: seller,
-        instrumentId: FUTURES_INSTRUMENT_ID,
+        instrumentId: futuresInstrumentId(deliveryAt),
       };
     }
     case "LotClosed":
       return {
         type: "position-changed",
         participant: "0x0" as `0x${string}`,
-        instrumentId: FUTURES_INSTRUMENT_ID,
       };
     default:
       return null;

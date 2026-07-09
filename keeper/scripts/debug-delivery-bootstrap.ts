@@ -73,15 +73,15 @@ const now = BigInt(Math.floor(Date.now() / 1000));
 const block = await client.getBlock();
 console.log("wall-clock now:", now, "  block.timestamp:", block.timestamp);
 
-const deliveryDurationDays = (await client.readContract({
+const expirationIntervalDays = (await client.readContract({
   address: FUTURES,
   abi: FuturesAbi,
-  functionName: "deliveryDurationDays",
+  functionName: "expirationIntervalDays",
 })) as number;
-const window = BigInt(deliveryDurationDays) * 86_400n;
+const window = BigInt(expirationIntervalDays) * 86_400n;
 console.log(
-  "deliveryDurationDays:",
-  deliveryDurationDays,
+  "expirationIntervalDays:",
+  expirationIntervalDays,
   "→ window:",
   window,
   "s",

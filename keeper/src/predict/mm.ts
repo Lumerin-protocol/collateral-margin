@@ -18,7 +18,7 @@ import type { AccountSnapshot, MMParams } from "./types.ts";
  *   - perp.orderMargin (constant)
  *   - perp.unrealizedLoss = max(0, -((P - entry) * netQty / qtyScale))
  *   - futures.orderMargin (constant)
- *   - futures.unrealizedLoss = sum_i max(0, -(buyer? : ±)(P - entry_i)*deliveryDays)
+ *   - futures.unrealizedLoss = sum_i max(0, -(buyer? : ±)(P - entry_i))
  *   - perp.fundingOwed (constant — short-term, refreshed on snapshot)
  *
  * Total mmRequired(P) is therefore piecewise-linear with kinks at the
@@ -40,7 +40,7 @@ function abs(x: bigint): bigint {
  * Aggregate net delta in WAD (matches `_aggregateGreeks` for pure-delta).
  *
  *   perpDelta = perpNetQty * WAD / 10^perpQtyDecimals
- *   futuresDelta = sum_i (isBuyer ? +1 : -1) * deliveryDays * WAD
+ *   futuresDelta = sum_i (isBuyer ? +1 : -1) * WAD
  *
  * Note: the on-chain `getNetPositionDelta` already returns this sum for the
  * futures leg in WAD; we re-derive it here off-chain because the snapshot
@@ -52,7 +52,7 @@ export function netDeltaWad(snap: AccountSnapshot, params: MMParams): bigint {
   let delta = (snap.perp.netQty * WAD) / perpQtyScale;
   for (const pos of snap.futures.positions) {
     const sign = pos.isBuyer ? 1n : -1n;
-    delta += sign * snap.futures.deliveryDays * WAD;
+    delta += sign * WAD;
   }
   return delta;
 }
@@ -99,17 +99,18 @@ export function perpUnrealizedLoss(snap: AccountSnapshot, params: MMParams, P: b
 }
 
 /**
- * Sum of per-position futures unrealized losses at price P. Each contract:
+ * Sum of per-position futures unrealized losses at price P. Each contract
+ * settles `pricePerDay` of notional (no duration multiplier):
  *
  *   diffPerDay = isBuyer ? (P - entryPerDay) : (entryPerDay - P)
- *   pnl = diffPerDay * deliveryDays
+ *   pnl = diffPerDay
  *   loss = max(0, -pnl)
  */
 export function futuresUnrealizedLoss(snap: AccountSnapshot, P: bigint): bigint {
   let sum = 0n;
   for (const pos of snap.futures.positions) {
     const diffPerDay = pos.isBuyer ? P - pos.entryPricePerDay : pos.entryPricePerDay - P;
-    const pnl = diffPerDay * snap.futures.deliveryDays;
+    const pnl = diffPerDay;
     if (pnl < 0n) sum += -pnl;
   }
   return sum;

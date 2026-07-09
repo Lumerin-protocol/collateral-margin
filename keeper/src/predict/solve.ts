@@ -208,7 +208,7 @@ export function simulateFuturesClose(
     const diffPerDay = pos.isBuyer
       ? currentPrice - pos.entryPricePerDay
       : pos.entryPricePerDay - currentPrice;
-    const pnl = diffPerDay * snap.futures.deliveryDays;
+    const pnl = diffPerDay;
     balanceDelta += pnl - liquidationFee;
   }
   return {
@@ -281,11 +281,7 @@ export function solveFuturesLotsToTarget(
   // shapes WHICH lots that tx closes. The prefix search below is unchanged, so
   // we still stop at the deepest in-band subset (reaching IM stays the
   // priority — balance is best-effort within that).
-  const ranked = rankLotsBalancedAcrossExpirations(
-    positions,
-    snap.futures.deliveryDays,
-    currentPrice,
-  );
+  const ranked = rankLotsBalancedAcrossExpirations(positions, currentPrice);
 
   const n = ranked.length;
   let best: Hex[] | undefined;
@@ -394,11 +390,10 @@ type FuturesLot = AccountSnapshot["futures"]["positions"][number];
  */
 function rankLotsBalancedAcrossExpirations(
   positions: readonly FuturesLot[],
-  deliveryDays: bigint,
   currentPrice: bigint,
 ): FuturesLot[] {
-  const lossOf = (p: FuturesLot) => lotUnrealizedLoss(p, deliveryDays, currentPrice);
-  const notionalOf = (p: FuturesLot) => p.entryPricePerDay * deliveryDays;
+  const lossOf = (p: FuturesLot) => lotUnrealizedLoss(p, currentPrice);
+  const notionalOf = (p: FuturesLot) => p.entryPricePerDay;
 
   const groups = new Map<bigint, FuturesLot[]>();
   for (const p of positions) {
@@ -442,11 +437,10 @@ function rankLotsBalancedAcrossExpirations(
 /** Per-lot unrealized loss at `P` (token decimals); 0 when in profit. */
 function lotUnrealizedLoss(
   pos: AccountSnapshot["futures"]["positions"][number],
-  deliveryDays: bigint,
   P: bigint,
 ): bigint {
   const diffPerDay = pos.isBuyer ? P - pos.entryPricePerDay : pos.entryPricePerDay - P;
-  const pnl = diffPerDay * deliveryDays;
+  const pnl = diffPerDay;
   return pnl < 0n ? -pnl : 0n;
 }
 

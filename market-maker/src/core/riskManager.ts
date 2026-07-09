@@ -73,7 +73,12 @@ export class RiskManager {
   private startOfDayTimestamp = 0;
 
   private readonly cfg: RiskManagerConfig;
-  private readonly inventory: InventoryManager;
+  /**
+   * Default inventory for single-market callers. Null in the portfolio process,
+   * where `allowedSides` is always called with the per-market inventory since
+   * position units differ across venues (perps hashrate vs futures contracts).
+   */
+  private readonly inventory: InventoryManager | null;
   private readonly collateral: CollateralTracker;
   private readonly gas: GasTracker;
   private readonly oracle: OracleTracker;
@@ -81,7 +86,7 @@ export class RiskManager {
 
   constructor(
     cfg: RiskManagerConfig,
-    inventory: InventoryManager,
+    inventory: InventoryManager | null,
     collateral: CollateralTracker,
     gas: GasTracker,
     oracle: OracleTracker,
@@ -186,12 +191,19 @@ export class RiskManager {
   }
 
   /**
-   * Sides allowed to quote. Respects position cap and stops quoting at high
-   * utilization (only the side that reduces exposure is allowed).
+   * Sides allowed to quote for a market. Utilization is portfolio-wide (shared
+   * collateral), while the direction and the position cap are per-market:
+   * pass the market's inventory + cap. Single-market callers may omit both to
+   * fall back to the injected defaults.
    */
-  allowedSides(): { quoteBid: boolean; quoteAsk: boolean } {
-    const maxPos = this.cfg.maxPositionSize;
-    const net = this.inventory.netQuantity;
+  allowedSides(
+    inventory?: InventoryManager,
+    maxPositionSize?: bigint,
+  ): { quoteBid: boolean; quoteAsk: boolean } {
+    const inv = inventory ?? this.inventory;
+    if (!inv) return { quoteBid: false, quoteAsk: false };
+    const maxPos = maxPositionSize ?? this.cfg.maxPositionSize;
+    const net = inv.netQuantity;
 
     if (this.collateral.utilizationPct > this.cfg.maxUtilizationPct) {
       if (net > 0n) return { quoteBid: false, quoteAsk: true };

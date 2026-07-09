@@ -307,8 +307,9 @@ describe("Futures liquidation", () => {
     { timeout: 60_000 },
     async () => {
       // Precondition: alice holds a single long futures contract at the
-      // first delivery date. The unrealized loss is `(entryPrice − marketPrice)
-      // · deliveryDurationDays · qty`; sized so the deposit can't cover it.
+      // first delivery date. Duration-free: the unrealized loss is
+      // `(entryPrice − marketPrice) · qty` (multiplier of 1); sized so the
+      // deposit can't cover it.
       const ctx = await loadFixture(futuresLongCrashFixture, testClient);
       keeper = buildKeeper(ctx);
       await keeper.start();
@@ -382,7 +383,7 @@ describe("Liquidate down to the IM buffer", () => {
     { timeout: 60_000 },
     async () => {
       // Precondition: alice holds 12 long futures lots; a moderate crash
-      // (4.21 → 3.90) breaks MM but a subset close restores the IM buffer.
+      // ($40 → $30 mark) breaks MM but a subset close restores the IM buffer.
       // Contract under test (the screenshot bug fix): the planner must NOT
       // fan out into one-lot-per-tx churn. Instead a single
       // `liquidatePositions(user, ids[])` closes the worst-first subset in
@@ -432,10 +433,10 @@ describe("Liquidate down to the IM buffer", () => {
     { timeout: 60_000 },
     async () => {
       // Precondition: alice holds 6 long futures lots on EACH of two delivery
-      // dates (12 total). The moderate crash (4.21 → 3.90) breaks MM; because
-      // the risk model weights every lot by the same global
-      // `deliveryDurationDays`, the aggregate margin equals the single-expiry
-      // 12-lot case, so a worst-first subset restores the IM buffer.
+      // dates (12 total). The moderate crash ($40 → $30 mark) breaks MM; because
+      // the duration-free risk model weights every lot by the same per-day value
+      // (±1 delta each) regardless of expiry, the aggregate margin equals the
+      // single-expiry 12-lot case, so a worst-first subset restores the IM buffer.
       //
       // Contract under test (the balancing feature): the ONE
       // `liquidatePositions(user, ids[])` call must draw its closed lots from
@@ -545,9 +546,9 @@ describe("Liquidate down to the IM buffer", () => {
     { timeout: 60_000 },
     async () => {
       // Precondition: alice is long 40 perps AND long 1 futures lot; a moderate
-      // crash (4.21 → 3.00) puts the *combined* portfolio below MM. The perps
-      // leg dominates by unrealized loss ($48.40 vs $8.47), so the planner
-      // reduces it first.
+      // crash (4.21 → 3.00 mark) puts the *combined* portfolio below MM. The
+      // perps leg dominates by unrealized loss ($48.40 vs $1.21, duration-free),
+      // so the planner reduces it first.
       //
       // Contract under test: the perps `reduceToTarget` sizes its partial
       // `closeQty` against WHOLE-portfolio margin — the still-open futures leg's
@@ -598,11 +599,12 @@ describe("Liquidate down to the IM buffer", () => {
     "cross-venue: a substantially underwater account is swept on BOTH venues into the [MM, IM] band",
     { timeout: 60_000 },
     async () => {
-      // Precondition: alice is long 6 futures lots AND long 25 perps; a moderate
-      // crash (4.21 → 3.00) leaves the combined portfolio SUBSTANTIALLY under MM
-      // (~$8.12 deficit). The futures leg dominates by loss, so it's reduced
-      // first — but fully closing all 6 lots only frees ~$6.30 of MM stress,
-      // short of the deficit, so the account is still under MM.
+      // Precondition: alice is long 12 futures lots AND long 11 perps (staged at
+      // a $40 mark); a moderate crash ($40 → $30 mark) leaves the combined
+      // portfolio SUBSTANTIALLY under MM (~$14.50 deficit). The futures leg
+      // dominates by loss ($120 vs $110), so it's reduced first — but fully
+      // closing all 12 lots realizes $120 of loss + $12 fee, still short of the
+      // residual perps MM requirement, so the account is still under MM.
       //
       // Contract under test: the planner's position loop must then take a
       // SECOND iteration and reduce the perps leg (partial, continuous qty) to
@@ -616,12 +618,12 @@ describe("Liquidate down to the IM buffer", () => {
 
       const alice = ctx.accounts.alice.account.address;
       const perpsBefore = await readPerpsPosition(ctx, alice);
-      assert.equal(perpsBefore.netQuantity, ctx.alicePerpsQty, "precondition: alice long 25 perps");
+      assert.equal(perpsBefore.netQuantity, ctx.alicePerpsQty, "precondition: alice long 11 perps");
       const futuresBefore = await readFuturesPositionIds(ctx, alice);
       assert.equal(
         futuresBefore.length,
         ctx.aliceFuturesQty,
-        "precondition: alice holds 6 futures lots",
+        "precondition: alice holds 12 futures lots",
       );
 
       await ctx.makeLiquidatable();
@@ -717,8 +719,8 @@ describe("Cross-venue coordination", () => {
     { timeout: 60_000 },
     async () => {
       // Precondition: 100-qty perps long ($420 loss) + 1-unit futures
-      // long ($29.40 loss). The planner's `rankPositions` orders by
-      // `unrealizedLoss DESC`, so perps must be closed strictly before
+      // long ($4.20 loss, duration-free). The planner's `rankPositions` orders
+      // by `unrealizedLoss DESC`, so perps must be closed strictly before
       // futures. Observable signal: the block number of the perps
       // `PositionLiquidated` event is strictly less than the futures one.
       const ctx = await loadFixture(crossVenuePerpsDominantFixture, testClient);
@@ -748,9 +750,9 @@ describe("Cross-venue coordination", () => {
     { timeout: 60_000 },
     async () => {
       // Precondition: inverted from the previous test — 1-qty perps long
-      // ($4.20 loss) + 20-unit futures long ($588 loss across the 7-day
-      // delivery window). Futures must be closed strictly before perps,
-      // confirming the planner's ranking is by loss size and not by a
+      // ($4.20 loss) + 12-unit futures long ($50.40 loss, duration-free:
+      // 12 · ($4.21 − $0.01 mark)). Futures must be closed strictly before
+      // perps, confirming the planner's ranking is by loss size and not by a
       // hard-coded venue order.
       const ctx = await loadFixture(crossVenueFuturesDominantFixture, testClient);
       keeper = buildKeeper(ctx);

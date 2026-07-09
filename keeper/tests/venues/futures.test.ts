@@ -47,12 +47,10 @@ const silentLogger = {
 } as unknown as ConstructorParameters<typeof FuturesVenue>[2];
 
 const DELIVERY_AT = 1_756_416_000n; // 2025-08-28T18:40:00Z (slice(0,10) → "2025-08-28")
-const DELIVERY_DURATION_DAYS = 7n;
 
-/** Reusable stub: deliveryDurationDays + market price + (positionIds | orderIds) reads. */
-function makeReadHandler(deliveryDurationDays: bigint, marketPrice: bigint, listResult: readonly Hex[]) {
+/** Reusable stub: market price + (positionIds | orderIds) reads. */
+function makeReadHandler(marketPrice: bigint, listResult: readonly Hex[]) {
   return (call: ReadCall): unknown => {
-    if (call.functionName === "deliveryDurationDays") return Number(deliveryDurationDays);
     if (call.functionName === "getMarketPrice") return marketPrice;
     if (call.functionName === "getOrderIds" || call.functionName === "getPositionIds") return listResult;
     throw new Error(`unexpected readContract call: ${call.functionName}`);
@@ -71,7 +69,7 @@ describe("futures venue: readOpenOrders", () => {
   it("returns empty when getOrderIds is empty (no extra multicall)", async () => {
     let multicallCount = 0;
     const chain = makeChainStub({
-      readContract: makeReadHandler(DELIVERY_DURATION_DAYS, 100n, []),
+      readContract: makeReadHandler(100n, []),
       multicall: () => {
         multicallCount++;
         return [];
@@ -89,7 +87,7 @@ describe("futures venue: readOpenOrders", () => {
       "0x000000000000000000000000000000000000000000000000000000000000000b",
     ];
     const chain = makeChainStub({
-      readContract: makeReadHandler(DELIVERY_DURATION_DAYS, 100n, orderIds),
+      readContract: makeReadHandler(100n, orderIds),
       multicall: (calls) => {
         // One getOrderById per order id, in order.
         assert.equal(calls.length, 2);
@@ -112,7 +110,7 @@ describe("futures venue: readOpenOrders", () => {
 describe("futures venue: readPositions", () => {
   it("returns empty when getPositionIds is empty", async () => {
     const chain = makeChainStub({
-      readContract: makeReadHandler(DELIVERY_DURATION_DAYS, 100n, []),
+      readContract: makeReadHandler(100n, []),
       multicall: () => [],
     });
     const venue = new FuturesVenue(chain, makeConfigStub(), silentLogger);
@@ -124,9 +122,9 @@ describe("futures venue: readPositions", () => {
     const positionIds: Hex[] = ["0x" + "11".repeat(32) as Hex];
     const buyPx = 100n;
     const sellPx = 100n;
-    const marketPrice = 70n; // long → loses (100-70)*7days = 210 per contract
+    const marketPrice = 70n; // long → loses (100-70) = 30 per contract (no duration factor)
     const chain = makeChainStub({
-      readContract: makeReadHandler(DELIVERY_DURATION_DAYS, marketPrice, positionIds),
+      readContract: makeReadHandler(marketPrice, positionIds),
       multicall: (calls) => {
         assert.equal(calls.length, 1);
         assert.equal(calls[0]?.functionName, "getPositionById");
@@ -144,8 +142,8 @@ describe("futures venue: readPositions", () => {
     const venue = new FuturesVenue(chain, makeConfigStub(), silentLogger);
     const [pos] = await venue.readPositions(BUYER);
     assert.ok(pos);
-    assert.equal(pos.unrealizedLoss, (buyPx - marketPrice) * DELIVERY_DURATION_DAYS);
-    assert.equal(pos.notional, buyPx * DELIVERY_DURATION_DAYS);
+    assert.equal(pos.unrealizedLoss, buyPx - marketPrice);
+    assert.equal(pos.notional, buyPx);
     assert.equal(pos.marketId, deliveryAtMarketId(DELIVERY_AT));
   });
 
@@ -153,9 +151,9 @@ describe("futures venue: readPositions", () => {
     const positionIds: Hex[] = ["0x" + "22".repeat(32) as Hex];
     const sellPx = 100n;
     const buyPx = 100n;
-    const marketPrice = 130n; // short → loses (130-100)*7days = 210 per contract
+    const marketPrice = 130n; // short → loses (130-100) = 30 per contract (no duration factor)
     const chain = makeChainStub({
-      readContract: makeReadHandler(DELIVERY_DURATION_DAYS, marketPrice, positionIds),
+      readContract: makeReadHandler(marketPrice, positionIds),
       multicall: () => [
         {
           seller: SELLER,
@@ -169,14 +167,14 @@ describe("futures venue: readPositions", () => {
     const venue = new FuturesVenue(chain, makeConfigStub(), silentLogger);
     const [pos] = await venue.readPositions(SELLER);
     assert.ok(pos);
-    assert.equal(pos.unrealizedLoss, (marketPrice - sellPx) * DELIVERY_DURATION_DAYS);
-    assert.equal(pos.notional, sellPx * DELIVERY_DURATION_DAYS);
+    assert.equal(pos.unrealizedLoss, marketPrice - sellPx);
+    assert.equal(pos.notional, sellPx);
   });
 
   it("reports zero loss when the user is in profit", async () => {
     const positionIds: Hex[] = ["0x" + "33".repeat(32) as Hex];
     const chain = makeChainStub({
-      readContract: makeReadHandler(DELIVERY_DURATION_DAYS, 150n, positionIds),
+      readContract: makeReadHandler(150n, positionIds),
       multicall: () => [
         {
           seller: SELLER,
@@ -191,26 +189,5 @@ describe("futures venue: readPositions", () => {
     const [pos] = await venue.readPositions(BUYER);
     assert.ok(pos);
     assert.equal(pos.unrealizedLoss, 0n, "buyer with market > entry is in profit");
-  });
-
-  it("caches deliveryDurationDays across calls (read once)", async () => {
-    let durationReads = 0;
-    const chain = makeChainStub({
-      readContract: (call) => {
-        if (call.functionName === "deliveryDurationDays") {
-          durationReads++;
-          return Number(DELIVERY_DURATION_DAYS);
-        }
-        if (call.functionName === "getMarketPrice") return 100n;
-        if (call.functionName === "getPositionIds") return [];
-        throw new Error(`unexpected ${call.functionName}`);
-      },
-      multicall: () => [],
-    });
-    const venue = new FuturesVenue(chain, makeConfigStub(), silentLogger);
-    await venue.readPositions(BUYER);
-    await venue.readPositions(BUYER);
-    await venue.readPositions(BUYER);
-    assert.equal(durationReads, 1, "deliveryDurationDays read only once");
   });
 });

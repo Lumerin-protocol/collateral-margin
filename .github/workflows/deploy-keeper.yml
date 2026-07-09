@@ -447,35 +447,15 @@ jobs:
           fi
           echo "✅ Service converged on the deployed revision."
 
-      - name: Smoke-test /health reports the deployed version
-        if: steps.rollout.outputs.diagnose == 'true'
-        env:
-          HEALTH_URL: ${{ needs.build.outputs.keeper_health_url }}
-          EXPECTED_VERSION: ${{ needs.build.outputs.version }}
-        run: |
-          set -euo pipefail
-          echo "🔎 GET ${HEALTH_URL} (expecting version=${EXPECTED_VERSION})"
-
-          # Give the new task a moment to bind the health port, then poll.
-          ATTEMPTS=12
-          for i in $(seq 1 "$ATTEMPTS"); do
-            BODY=$(curl -fsS -m 10 "$HEALTH_URL" 2>/dev/null || true)
-            if [ -n "$BODY" ]; then
-              STATUS=$(echo "$BODY" | jq -r '.status // "?"')
-              LIVE_VERSION=$(echo "$BODY" | jq -r '.info.version // "?"')
-              echo "   attempt ${i}: status=${STATUS} version=${LIVE_VERSION}"
-              if [ "$STATUS" = "ok" ] && [ "$LIVE_VERSION" = "$EXPECTED_VERSION" ]; then
-                echo "✅ /health is OK and serving the deployed version."
-                exit 0
-              fi
-            else
-              echo "   attempt ${i}: no response yet"
-            fi
-            sleep 10
-          done
-
-          echo "::error::/health never reported status=ok with version=${EXPECTED_VERSION}. Last body: ${BODY:-<none>}"
-          exit 1
+      # NOTE: There is intentionally no public HTTP smoke-test of /health here.
+      # The keeper sits behind an INTERNAL ALB (see
+      # .bedrock/.terragrunt/06_col_mar_keeper_svc.tf) that only accepts traffic
+      # from the VPC CIDR and VPN range — keeper.{env}.hashpower.exchange is not
+      # resolvable/reachable from GitHub-hosted runners on the public internet.
+      # Health is already proven above: the ALB target group runs a /health
+      # check, and ECS only reports rolloutState=COMPLETED once the new tasks
+      # pass it, which the rollout verification asserts alongside the exact
+      # deployed task-def ARN.
 
       - name: Diagnose failed rollout
         if: failure() && steps.rollout.outputs.diagnose == 'true'

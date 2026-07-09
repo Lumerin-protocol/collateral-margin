@@ -28,6 +28,15 @@ const FEE = 1_000_000n; // $1 flat liquidation fee
 const EXPIRY_A = 1_756_416_000n;
 const EXPIRY_B = 1_759_008_000n;
 
+// Duration-free contract sizing. Each lot is a single contract that settles
+// `entryPricePerDay` of notional (no `× deliveryDays` factor). For a close to
+// improve MM surplus the stress it frees (`spotShock × P`) must exceed the flat
+// fee, so the moderate-crash price sits well above `20 × FEE` — hence the
+// $40/$30 magnitudes below rather than the old sub-dollar per-day prices.
+const ENTRY_PER_DAY = 40_000_000n; // $40/day entry
+const P_MODERATE = 30_000_000n; // $30/day: underwater but recoverable via a subset
+const BALANCE = 136_000_000n; // collateral: underwater at P_MODERATE, healable by a partial close
+
 function futuresLot(id: Hex, entryPricePerDay: bigint, isBuyer = true, deliveryAt = EXPIRY_A) {
   return { id, isBuyer, entryPricePerDay, deliveryAt };
 }
@@ -37,33 +46,33 @@ function futuresSnapshot(overrides: Partial<AccountSnapshot> = {}): AccountSnaps
     user: USER,
     balance: 0n,
     perp: { netQty: 0n, entryPrice: 0n, orderMargin: 0n, fundingOwed: 0n },
-    futures: { positions: [], orderMargin: 0n, deliveryDays: 7n },
+    futures: { positions: [], orderMargin: 0n },
     ...overrides,
   };
 }
 
-/** 12 identical $4.21/day long lots — the integration `futuresPartialCrash` shape. */
+/** 12 identical $40/day long lots — the integration `futuresPartialCrash` shape. */
 function twelveLongLots(): AccountSnapshot {
   const positions = [];
   for (let i = 0; i < 12; i++) {
-    positions.push(futuresLot(`0x${(i + 1).toString(16).padStart(64, "0")}` as Hex, 4_210_000n));
+    positions.push(futuresLot(`0x${(i + 1).toString(16).padStart(64, "0")}` as Hex, ENTRY_PER_DAY));
   }
-  return futuresSnapshot({ balance: 40_000_000n, futures: { positions, orderMargin: 0n, deliveryDays: 7n } });
+  return futuresSnapshot({ balance: BALANCE, futures: { positions, orderMargin: 0n } });
 }
 
 describe("predict/solve: solveFuturesLotsToTarget", () => {
   it("returns an empty set when the account is already healthy", () => {
     const snap = futuresSnapshot({
       balance: 1_000_000_000n,
-      futures: { positions: [futuresLot(("0x" + "01".repeat(32)) as Hex, 4_210_000n)], orderMargin: 0n, deliveryDays: 7n },
+      futures: { positions: [futuresLot(("0x" + "01".repeat(32)) as Hex, ENTRY_PER_DAY)], orderMargin: 0n },
     });
-    const ids = solveFuturesLotsToTarget(snap, PARAMS, 4_000_000n, FEE);
+    const ids = solveFuturesLotsToTarget(snap, PARAMS, P_MODERATE, FEE);
     assert.equal(ids.length, 0);
   });
 
   it("closes a strict worst-first subset that lands inside the [MM, IM] band", () => {
     const snap = twelveLongLots();
-    const P = 3_900_000n; // moderate crash → underwater but recoverable
+    const P = P_MODERATE; // moderate crash → underwater but recoverable
 
     // Precondition: the account really is underwater at P.
     assert.ok(mmSurplus(snap, PARAMS, P) < 0n, "fixture must start underwater");
@@ -80,7 +89,7 @@ describe("predict/solve: solveFuturesLotsToTarget", () => {
 
   it("is the DEEPEST in-band subset — closing one more worst-first lot breaches IM", () => {
     const snap = twelveLongLots();
-    const P = 3_900_000n;
+    const P = P_MODERATE;
     const ids = solveFuturesLotsToTarget(snap, PARAMS, P, FEE);
 
     // There is still a lot to add and doing so would push balance over IM.
@@ -104,7 +113,7 @@ describe("predict/solve: solveFuturesLotsToTarget", () => {
 
   it("degenerate IM == MM: targets minimal healthy (no upper IM bound)", () => {
     const snap = twelveLongLots();
-    const P = 3_900_000n;
+    const P = P_MODERATE;
     const degenerate: MMParams = { ...PARAMS, imSpotShock: PARAMS.mmSpotShock };
     const ids = solveFuturesLotsToTarget(snap, degenerate, P, FEE);
     assert.ok(ids.length > 0 && ids.length <= snap.futures.positions.length);
@@ -120,13 +129,13 @@ describe("predict/solve: solveFuturesLotsToTarget", () => {
     // spread the closures across both books.
     const positions: AccountSnapshot["futures"]["positions"] = [];
     for (let i = 0; i < 6; i++) {
-      positions.push(futuresLot(`0x${(i + 1).toString(16).padStart(64, "0")}` as Hex, 4_210_000n, true, EXPIRY_A));
+      positions.push(futuresLot(`0x${(i + 1).toString(16).padStart(64, "0")}` as Hex, ENTRY_PER_DAY, true, EXPIRY_A));
     }
     for (let i = 6; i < 12; i++) {
-      positions.push(futuresLot(`0x${(i + 1).toString(16).padStart(64, "0")}` as Hex, 4_210_000n, true, EXPIRY_B));
+      positions.push(futuresLot(`0x${(i + 1).toString(16).padStart(64, "0")}` as Hex, ENTRY_PER_DAY, true, EXPIRY_B));
     }
-    const snap = futuresSnapshot({ balance: 40_000_000n, futures: { positions, orderMargin: 0n, deliveryDays: 7n } });
-    const P = 3_900_000n;
+    const snap = futuresSnapshot({ balance: BALANCE, futures: { positions, orderMargin: 0n } });
+    const P = P_MODERATE;
     assert.ok(mmSurplus(snap, PARAMS, P) < 0n, "fixture must start underwater");
 
     const ids = solveFuturesLotsToTarget(snap, PARAMS, P, FEE);
@@ -155,13 +164,13 @@ describe("predict/solve: solveFuturesLotsToTarget", () => {
     // lots as B — rather than emptying the smaller book first.
     const positions: AccountSnapshot["futures"]["positions"] = [];
     for (let i = 0; i < 8; i++) {
-      positions.push(futuresLot(`0x${(i + 1).toString(16).padStart(64, "0")}` as Hex, 4_210_000n, true, EXPIRY_A));
+      positions.push(futuresLot(`0x${(i + 1).toString(16).padStart(64, "0")}` as Hex, ENTRY_PER_DAY, true, EXPIRY_A));
     }
     for (let i = 8; i < 12; i++) {
-      positions.push(futuresLot(`0x${(i + 1).toString(16).padStart(64, "0")}` as Hex, 4_210_000n, true, EXPIRY_B));
+      positions.push(futuresLot(`0x${(i + 1).toString(16).padStart(64, "0")}` as Hex, ENTRY_PER_DAY, true, EXPIRY_B));
     }
-    const snap = futuresSnapshot({ balance: 40_000_000n, futures: { positions, orderMargin: 0n, deliveryDays: 7n } });
-    const P = 3_900_000n;
+    const snap = futuresSnapshot({ balance: BALANCE, futures: { positions, orderMargin: 0n } });
+    const P = P_MODERATE;
 
     const ids = solveFuturesLotsToTarget(snap, PARAMS, P, FEE);
     const byExpiry = (deliveryAt: bigint) =>
@@ -181,7 +190,7 @@ function perpSnapshot(netQty: bigint, entryPrice: bigint, balance: bigint): Acco
     user: USER,
     balance,
     perp: { netQty, entryPrice, orderMargin: 0n, fundingOwed: 0n },
-    futures: { positions: [], orderMargin: 0n, deliveryDays: 0n },
+    futures: { positions: [], orderMargin: 0n },
   };
 }
 

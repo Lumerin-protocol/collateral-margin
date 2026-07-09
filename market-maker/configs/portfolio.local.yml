@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=../schemas/portfolio.json
+# Titan Market Maker - Portfolio (perps + all futures expiries) - LOCAL (hardhat).
+#
+#   PRIVATE_KEY             - hex private key of the single market-making wallet
+#   PERPS_ADDRESS           - HashPowerPerpsDEX address on the local chain
+#   FUTURES_ADDRESS         - Futures address on the local chain
+#
+# One process, one signer, one shared collateral vault. Perps and every
+# selected futures expiry quote together; the TxCoordinator sequences their
+# txs on a single nonce and each market is isolated behind its own circuit
+# breaker.
+
+nodeEnv: development
+commitHash: ${COMMIT_HASH:-dev}
+logLevel: debug
+dryRun: false
+cancelOrdersOnShutdown: false
+
+wallets:
+  primary:
+    privateKey: ${PRIVATE_KEY}
+
+# Single shared signer for the whole portfolio.
+wallet: primary
+
+network:
+  name: "hardhat"
+  rpcUrl: "http://127.0.0.1:8545"
+  ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
+
+venues:
+  - kind: perps
+    address: ${PERPS_ADDRESS}
+    maxPositionSize: 10
+    pricing:
+      strategy: effective-spread
+      minSpreadBps: 20
+      volatilityMultiplier: 2.5
+      inventorySkewGamma: 1.0
+      maxSkewTicks: 5
+    sizing:
+      strategy: linear
+      baseQuantity: "10000000" # venue-native (perps hashrate base units)
+      numLevelsPerSide: 3
+
+  - kind: futures
+    address: ${FUTURES_ADDRESS}
+    maxPositionSize: 10
+    # Quote the three nearest expiries; the roll adds/drops markets as dates mature.
+    marketSelection:
+      mode: nearest
+      count: 3
+    pricing:
+      strategy: reservation-price
+      riskAversion: 0.001
+      marginCallTimeSec: 3600
+      minSpreadBps: 20
+      volatilityMultiplier: 2.5
+      maxSkewTicks: 0
+    sizing:
+      strategy: geometric-taper
+      baseQuantity: "10000000" # venue-native (contracts base units)
+      numLevelsPerSide: 3
+      taperRatio: 0.6
+
+# Shared portfolio-wide budget across every market.
+risk:
+  maxPositionSize: 10
+  maxUtilizationPct: 80
+  minCollateralBalance: 1
+  maxDailyLossUsd: 100
+  maxGasBudgetPerHourUsd: 50
+  maxGasBudgetPerDayUsd: 500
+  gasSpikeThresholdPct: 200
+  gasPenaltyBps: 5
+  urgentRequoteThresholdTicks: 10
+
+gas:
+  gasCapMultiplier: 2.0
+
+timing:
+  pollIntervalSec: 3
+  requoteThresholdTicks: 2
+  requoteCooldownSec: 1
+  resyncIntervalSec: 60
+  levelSpacingTicks: 1
+
+collateral:
+  autoDeposit: false
+  autoDepositMinAmount: 0
+
+oracle:
+  windowSize: 60
+  precisionBits: 48
+  historyLookbackMultiplier: 4
+
+health:
+  port: 3001
+
+# Centralized submission / nonce recovery.
+txCoordinator:
+  maxCallsPerTx: 50
+  confirmationTimeoutSec: 60
+  maxReplacements: 2
+  replacementFeeBumpPct: 15
+
+# Per-market fault isolation.
+circuitBreaker:
+  quarantineThreshold: 3
+  baseBackoffSec: 5
+  maxBackoffSec: 180
+
+rollCheckIntervalSec: 300
+sharedStalenessGraceSec: 30
+
+readBatchSize: 100
+writeBatchSize: 20

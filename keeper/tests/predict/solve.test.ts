@@ -20,7 +20,7 @@ function emptySnapshot(overrides: Partial<AccountSnapshot> = {}): AccountSnapsho
     user: USER,
     balance: 0n,
     perp: { netQty: 0n, entryPrice: 0n, orderMargin: 0n, fundingOwed: 0n },
-    futures: { positions: [], orderMargin: 0n, deliveryDays: 0n },
+    futures: { positions: [], orderMargin: 0n },
     ...overrides,
   };
 }
@@ -138,19 +138,20 @@ describe("predict/solve: solveLiquidationThresholds", () => {
   });
 
   it("handles a futures buyer position the same way as a long perp", () => {
-    // Buyer of 1 contract over 30 days @ $50/day, balance $200.
-    // Below entry: stress + (entry - P) * 30 days
-    // delta = 30 * WAD; stress = |delta| * shock * P / WAD² → 30 * 0.05 * P / 1 = 1.5 P (per token decimals).
-    // Hmm — let me just verify via mmSurplus at the returned threshold.
+    // Buyer of 1 contract @ $50/day (delta = 1 * WAD; no duration factor),
+    // collateral $30. Below entry: mmRequired(P) = stress(P) + (entry - P)
+    //   = 0.05 P + (50 - P) = 50 - 0.95 P (token decimals).
+    //   surplus(P) = 30 - (50 - 0.95 P) = -20 + 0.95 P → crosses 0 ≈ $21.05.
     const snap = emptySnapshot({
-      balance: 200n,
+      balance: 30_000_000n,
       futures: {
-        positions: [{ id: "0xaa", isBuyer: true, entryPricePerDay: 50n, deliveryAt: 1_756_416_000n }],
+        positions: [
+          { id: "0xaa", isBuyer: true, entryPricePerDay: 50_000_000n, deliveryAt: 1_756_416_000n },
+        ],
         orderMargin: 0n,
-        deliveryDays: 30n,
       },
     });
-    const out = solveLiquidationThresholds(snap, PARAMS, 50n);
+    const out = solveLiquidationThresholds(snap, PARAMS, 50_000_000n);
     assert.notEqual(out.liqDown, undefined);
     if (out.liqDown !== undefined) {
       assertCrossing(snap, PARAMS, out.liqDown, "down");

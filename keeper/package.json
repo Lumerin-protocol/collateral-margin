@@ -21,8 +21,8 @@
   "dependencies": {
     "amaro": "^1.1.9",
     "collateral-margin-abi": "github:Lumerin-protocol/collateral-margin#dev&path:/contracts/abi",
-    "derivatives-marketplace-abi": "github:Lumerin-protocol/derivatives-marketplace#feat/liquidate-to-im-buffer&path:/contracts/abi",
-    "futures-marketplace-abi": "github:Lumerin-protocol/futures-marketplace#feat/liquidate-to-im-buffer&path:/contracts/abi",
+    "derivatives-marketplace-abi": "github:Lumerin-protocol/derivatives-marketplace#c8078b9e430df8a5ec8bc64865d692b38cc69d8c&path:/contracts/abi",
+    "futures-marketplace-abi": "github:Lumerin-protocol/futures-marketplace#5e28bb346b125d90eb138370a8a78c69487d1c26&path:/contracts/abi",
     "pino": "^10.3.1",
     "viem": "^2.48.8"
   },

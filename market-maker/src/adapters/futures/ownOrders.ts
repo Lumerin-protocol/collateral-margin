@@ -7,23 +7,24 @@ import type {
 } from "../../core/adapter.ts";
 import { FuturesAbi } from "futures-contracts/abi/Futures";
 import type { FuturesVenueAdapter } from "./venue.ts";
-import { FUTURES_INSTRUMENT_ID } from "./events.ts";
+import { futuresInstrumentId } from "./events.ts";
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
 /**
- * Cache-backed own-order source for futures.
+ * Cache-backed own-order source for a single futures expiry.
  *
- * Why a cache? `Futures.sol` previously had no view returning a participant's
- * orders. The new `getOrderIds` view (added alongside this adapter) lets us
- * skip the historical event-scan path entirely:
+ * The contract has no per-participant order view scoped by delivery date, so
+ * we read all of the wallet's orders and keep only those matching this
+ * instrument's `deliveryDate`:
  *
- *   1. `bootstrap()` reads `getOrderIds(wallet)` and `getOrderById(id)` for
- *      each in one multicall, populating the cache.
- *   2. `subscribe()` listens to venue events and applies adds/removes to the
- *      cache, then forwards the event to the registered callback.
- *   3. `list()` returns `Array.from(cache.values())`.
- *
- * Idempotency: bootstrap clears the cache before re-populating, so calling
- * it twice is safe.
+ *   1. `bootstrap()` reads `getOrderIds(wallet)` + `getOrderById(id)` and
+ *      caches the orders whose `deliveryAt === deliveryDate`.
+ *   2. `subscribe()` listens to venue events. `order-created` is filtered by
+ *      participant AND instrumentId (which encodes the expiry). `order-cancelled`
+ *      carries no expiry, so we apply it only if the id is in *this* cache —
+ *      that both identifies ownership and routes to the right expiry.
+ *   3. `list()` returns the cache contents.
  */
 export class FuturesOwnOrders implements OwnOrderSource {
   private readonly cache = new Map<`0x${string}`, OwnOrder>();
@@ -32,15 +33,20 @@ export class FuturesOwnOrders implements OwnOrderSource {
   private bootstrapped = false;
 
   private readonly venue: FuturesVenueAdapter;
+  private readonly deliveryDate: bigint;
+  private readonly instrumentId: string;
   private readonly logger: pino.Logger;
   private readonly readBatchSize: number;
 
   constructor(
     venue: FuturesVenueAdapter,
+    deliveryDate: bigint,
     logger: pino.Logger,
     readBatchSize: number,
   ) {
     this.venue = venue;
+    this.deliveryDate = deliveryDate;
+    this.instrumentId = futuresInstrumentId(deliveryDate);
     this.logger = logger.child({ component: "futures-own-orders" });
     this.readBatchSize = readBatchSize;
   }
@@ -74,10 +80,7 @@ export class FuturesOwnOrders implements OwnOrderSource {
 
     if (orderIds.length === 0) {
       this.bootstrapped = true;
-      this.logger.info(
-        { orders: 0 },
-        "futures own-orders bootstrapped (empty)",
-      );
+      this.logger.info({ orders: 0 }, "futures own-orders bootstrapped (empty)");
       return;
     }
 
@@ -88,7 +91,6 @@ export class FuturesOwnOrders implements OwnOrderSource {
       args: [id] as const,
     }));
 
-    // Chunk to stay under RPC payload / timeout limits.
     const batchSize = this.readBatchSize;
     const allOrders: unknown[] = [];
     for (let i = 0; i < allCalls.length; i += batchSize) {
@@ -104,25 +106,24 @@ export class FuturesOwnOrders implements OwnOrderSource {
       const o = allOrders[i] as {
         participant: string;
         pricePerDay: bigint;
+        deliveryAt: bigint;
         isBuy: boolean;
       };
-      if (
-        !o.participant ||
-        o.participant === "0x0000000000000000000000000000000000000000"
-      )
-        continue;
+      if (!o.participant || o.participant === ZERO_ADDRESS) continue;
+      // Keep only orders belonging to this expiry.
+      if (o.deliveryAt !== this.deliveryDate) continue;
       this.cache.set(orderIds[i], {
         orderId: orderIds[i],
         price: o.pricePerDay,
         side: o.isBuy ? "buy" : "sell",
         size: 1n,
-        instrumentId: FUTURES_INSTRUMENT_ID,
+        instrumentId: this.instrumentId,
       });
     }
 
     this.bootstrapped = true;
     this.logger.info(
-      { orders: this.cache.size },
+      { orders: this.cache.size, deliveryDate: this.deliveryDate.toString() },
       "futures own-orders bootstrapped",
     );
   }
@@ -132,19 +133,21 @@ export class FuturesOwnOrders implements OwnOrderSource {
     return this.venue.events.subscribe((evt) => {
       if (evt.type === "order-created") {
         if (evt.participant.toLowerCase() !== own) return;
+        // Route by expiry: the created event carries the instrumentId.
+        if (evt.instrumentId !== this.instrumentId) return;
         const order: OwnOrder = {
           orderId: evt.orderId,
           price: evt.price,
           side: evt.side,
           size: 1n,
-          instrumentId: FUTURES_INSTRUMENT_ID,
+          instrumentId: this.instrumentId,
         };
         this.cache.set(evt.orderId, order);
         this.notify({ type: "added", orderId: evt.orderId, order });
         return;
       }
       if (evt.type === "order-cancelled") {
-        // OrderClosed no longer carries participant; identify own orders by cache.
+        // No expiry on the close event: apply only if this cache owns the id.
         if (!this.cache.has(evt.orderId)) return;
         this.cache.delete(evt.orderId);
         this.notify({ type: "removed", orderId: evt.orderId });

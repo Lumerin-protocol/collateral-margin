@@ -16,7 +16,7 @@
     "remove-local": "graph remove --node http://localhost:8020/ points",
     "deploy-local": "graph deploy --node http://localhost:8020/ --ipfs http://localhost:5001 --version-label 0 points",
     "setup-local": "pnpm prepare-local && pnpm codegen && pnpm build && pnpm create-local && pnpm deploy-local",
-    "test": "graph test",
+    "test": "graph test -v 0.6.0",
     "test:integration": "hardhat test nodejs",
     "test:integration:debug": "MATCHSTICK_VERBOSE=true hardhat test nodejs",
     "indexer": "docker compose --env-file ../.env up",

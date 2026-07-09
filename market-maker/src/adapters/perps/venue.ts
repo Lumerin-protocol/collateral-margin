@@ -2,9 +2,11 @@ import { encodeFunctionData, erc20Abi } from "viem";
 import type { Chain, PublicClient, Transport } from "viem";
 import type pino from "pino";
 import type {
+  BatchableCollateralAccount,
   CollateralAccount,
   CollateralSnapshot,
   InstrumentAdapter,
+  MarginReadPlan,
   VenueAdapter,
   VenueEvents,
   WalletContext,
@@ -15,6 +17,7 @@ import { CollateralVaultAbi } from "collateral-margin-contracts/abi/CollateralVa
 import { PortfolioMarginEngineAbi } from "collateral-margin-contracts/abi/PortfolioMarginEngine.ts";
 import { Multicall3Abi } from "perps-contracts/abi/Multicall3.ts";
 import { depositToVault } from "../../core/vaultDeposit.ts";
+import { QUANTITY_DECIMALS } from "../../core/math.ts";
 import {
   RawOracleReader,
   chainlinkAggregatorAbi,
@@ -106,7 +109,7 @@ export class PerpsVenueAdapter implements VenueAdapter {
           abi: HashPowerPerpsDEXAbi,
           functionName: "priceOracle",
         });
-        const [oracleDecimals, tokenDecimals] =
+        const [oracleDecimals, tokenDecimals, contractSizeHpsDay, oracleUnitHpsDay] =
           await this.publicClient.multicall({
             allowFailure: false,
             contracts: [
@@ -116,6 +119,16 @@ export class PerpsVenueAdapter implements VenueAdapter {
                 functionName: "decimals",
               },
               { address: token, abi: erc20Abi, functionName: "decimals" },
+              {
+                address: this.address,
+                abi: HashPowerPerpsDEXAbi,
+                functionName: "CONTRACT_SIZE_HPS_DAY",
+              },
+              {
+                address: this.address,
+                abi: HashPowerPerpsDEXAbi,
+                functionName: "ORACLE_UNIT_HPS_DAY",
+              },
             ],
           });
         if (tokenDecimals > oracleDecimals) {
@@ -126,6 +139,8 @@ export class PerpsVenueAdapter implements VenueAdapter {
         return {
           oracle,
           divisor: 10n ** BigInt(oracleDecimals - tokenDecimals),
+          contractSizeHpsDay,
+          oracleUnitHpsDay,
         };
       },
     });
@@ -138,9 +153,14 @@ export class PerpsVenueAdapter implements VenueAdapter {
     return this.instrumentSingleton;
   }
 
+  /** Perps is single-instrument; the list is always one element. */
+  async listInstruments(): Promise<InstrumentAdapter[]> {
+    return [await this.getInstrument()];
+  }
+
   async multicall(
     calls: `0x${string}`[],
-    opts: { maxFeePerGas?: bigint } = {},
+    opts: { maxFeePerGas?: bigint; nonce?: number } = {},
   ): Promise<`0x${string}`> {
     try {
       return await this.wallet.walletClient.writeContract({
@@ -151,6 +171,7 @@ export class PerpsVenueAdapter implements VenueAdapter {
         account: this.wallet.account,
         chain: this.chain,
         maxFeePerGas: opts.maxFeePerGas,
+        nonce: opts.nonce,
       });
     } catch (err) {
       // Attach a Tenderly simulation URL so the failed multicall can be
@@ -228,6 +249,26 @@ export class PerpsVenueAdapter implements VenueAdapter {
     return this.rawOracle.read();
   }
 
+  /**
+   * Assert the compiled `QUANTITY_DECIMALS` matches the on-chain
+   * `HashPowerPerpsDEX.QUANTITY_DECIMALS()`. The off-chain sizing/notional math
+   * hardcodes this scale for performance, so the chain is the source of truth —
+   * a mismatch (e.g. after a venue redeploy) must fail fast at startup rather
+   * than silently misprice by orders of magnitude.
+   */
+  async validateQuantityDecimals(): Promise<void> {
+    const onChain = (await this.publicClient.readContract({
+      address: this.address,
+      abi: HashPowerPerpsDEXAbi,
+      functionName: "QUANTITY_DECIMALS",
+    })) as number;
+    if (Number(onChain) !== QUANTITY_DECIMALS) {
+      throw new Error(
+        `perps: on-chain QUANTITY_DECIMALS (${onChain}) != market-maker QUANTITY_DECIMALS (${QUANTITY_DECIMALS})`,
+      );
+    }
+  }
+
   async fetchImSpotShock(): Promise<bigint> {
     if (this.imSpotShockCache !== null) return this.imSpotShockCache;
     const { engine } = await this.resolveAddresses();
@@ -251,93 +292,66 @@ export class PerpsVenueAdapter implements VenueAdapter {
  * `deposit(amount)` is delegated to the shared `vaultDeposit` helper; the
  * old `addCollateralWithPermit` path no longer exists on the contract.
  */
-class PerpsCollateralAccount implements CollateralAccount {
+class PerpsCollateralAccount implements BatchableCollateralAccount {
   private readonly venue: PerpsVenueAdapter;
   constructor(venue: PerpsVenueAdapter) {
     this.venue = venue;
   }
 
-  async snapshot(): Promise<CollateralSnapshot> {
+  /**
+   * Decompose the snapshot into shared (portfolio-wide) + venue-specific reads
+   * so the portfolio aggregator can batch every venue into one multicall.
+   * `shared` order is canonical across venues:
+   *   [vaultBalance, portfolioIM, portfolioMM, walletTokenBalance, nativeBalance]
+   */
+  async buildMarginReadPlan(): Promise<MarginReadPlan> {
     const owner = this.venue.wallet.account.address;
     const { vault, engine, token } = await this.venue.resolveAddresses();
     const mc3 = await this.venue.getMulticall3Address();
 
-    const [
-      vaultBalance,
-      portfolioIM,
-      portfolioMM,
-      orderMargin,
-      perpsUnrealizedPnl,
-      pendingFunding,
-      walletTokenBalance,
-      nativeBalance,
-    ] = await this.venue.publicClient.multicall({
-      allowFailure: false,
-      contracts: [
-        {
-          address: vault,
-          abi: CollateralVaultAbi,
-          functionName: "balanceOf",
-          args: [owner],
-        },
-        {
-          address: engine,
-          abi: PortfolioMarginEngineAbi,
-          functionName: "computePortfolioIM",
-          args: [owner],
-        },
-        {
-          address: engine,
-          abi: PortfolioMarginEngineAbi,
-          functionName: "computePortfolioMM",
-          args: [owner],
-        },
-        {
-          address: this.venue.address,
-          abi: HashPowerPerpsDEXAbi,
-          functionName: "getOrderMargin",
-          args: [owner],
-        },
-        {
-          address: this.venue.address,
-          abi: HashPowerPerpsDEXAbi,
-          functionName: "getUnrealizedPnl",
-          args: [owner],
-        },
-        {
-          address: this.venue.address,
-          abi: HashPowerPerpsDEXAbi,
-          functionName: "getPendingFunding",
-          args: [owner],
-        },
-        {
-          address: token,
-          abi: erc20Abi,
-          functionName: "balanceOf",
-          args: [owner],
-        },
-        {
-          address: mc3,
-          abi: Multicall3Abi,
-          functionName: "getEthBalance",
-          args: [owner],
-        },
-      ],
-    });
+    const shared = [
+      { address: vault, abi: CollateralVaultAbi, functionName: "balanceOf", args: [owner] },
+      { address: engine, abi: PortfolioMarginEngineAbi, functionName: "computePortfolioIM", args: [owner] },
+      { address: engine, abi: PortfolioMarginEngineAbi, functionName: "computePortfolioMM", args: [owner] },
+      { address: token, abi: erc20Abi, functionName: "balanceOf", args: [owner] },
+      { address: mc3, abi: Multicall3Abi, functionName: "getEthBalance", args: [owner] },
+    ] as MarginReadPlan["shared"];
 
-    // Funding owed (positive) reduces effective unrealized PnL.
-    const venueUnrealizedPnl = perpsUnrealizedPnl - pendingFunding;
+    const venue = [
+      { address: this.venue.address, abi: HashPowerPerpsDEXAbi, functionName: "getOrderMargin", args: [owner] },
+      { address: this.venue.address, abi: HashPowerPerpsDEXAbi, functionName: "getUnrealizedPnl", args: [owner] },
+      { address: this.venue.address, abi: HashPowerPerpsDEXAbi, functionName: "getPendingFunding", args: [owner] },
+    ] as MarginReadPlan["venue"];
 
-    return {
-      vaultBalance,
-      portfolioIM,
-      portfolioMM,
-      venueOrderMargin: orderMargin,
-      venueUnrealizedPnl,
-      walletTokenBalance,
-      nativeBalance,
-      collateralToken: token,
+    const decode = (results: readonly unknown[]): CollateralSnapshot => {
+      const r = results as bigint[];
+      const [vaultBalance, portfolioIM, portfolioMM, walletTokenBalance, nativeBalance] = r;
+      const orderMargin = r[5];
+      const perpsUnrealizedPnl = r[6];
+      const pendingFunding = r[7];
+      // Funding owed (positive) reduces effective unrealized PnL.
+      return {
+        vaultBalance,
+        portfolioIM,
+        portfolioMM,
+        venueOrderMargin: orderMargin,
+        venueUnrealizedPnl: perpsUnrealizedPnl - pendingFunding,
+        walletTokenBalance,
+        nativeBalance,
+        collateralToken: token,
+      };
     };
+
+    return { shared, venue, decode };
+  }
+
+  async snapshot(): Promise<CollateralSnapshot> {
+    const plan = await this.buildMarginReadPlan();
+    const results = await this.venue.publicClient.multicall({
+      allowFailure: false,
+      contracts: [...plan.shared, ...plan.venue],
+    });
+    return plan.decode(results);
   }
 
   imSpotShock(): Promise<bigint> {
