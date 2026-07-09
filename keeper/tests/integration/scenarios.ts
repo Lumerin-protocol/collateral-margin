@@ -751,30 +751,35 @@ export function crossVenuePartialCrashFixtureBuilder(rpcUrl: string) {
  * in the partial regime (distinct from both the single-venue-suffices partial
  * test and the 99.8% deep-crash test that wipes everything into bad debt).
  *
- * Staged at a $40 mark (crash to $30) so the per-lot stress clears the flat
- * liquidation fee — the duration-free equivalent of the old $4.21-scale sizing.
- * Alice holds a dominant 12-lot futures long + an 11-qty perps long (delta
- * units: futures 12·1 = 12, perps 11; S = 23). Futures is made the worst leg by
- * lot count (each lot now ±1 delta, so its loss must out-number the perps qty).
- * Moderate crash 40 → 30:
+ * Staged at a $40 mark (crash to $30) — the duration-free equivalent of the old
+ * $4.21-scale sizing. Alice holds a dominant 12-lot futures long + an 11-qty
+ * perps long (delta units: futures 12·1 = 12, perps 11; S = 23). Futures is made
+ * the worst leg by lot count (each lot now ±1 delta, so its loss out-numbers the
+ * perps qty). Moderate crash 40 → 30:
  *   - mmReq(30) = 23·0.05·30 + 11·(40−30) + 12·(40−30)
  *              = 34.50 + 110 + 120 = $264.50
  *   - imReq(30) = 23·0.10·30 + 230 = 69 + 230 = $299
- *   - $250 deposit ⇒ underwater by ~$14.50 (substantial)
- *   - futures is worst by loss ($120 > $110), so it's reduced first — but fully
- *     closing all 12 lots realizes $120 of loss + $12 liquidation fee, dropping
- *     the balance to $118 against a residual perps mmReq of $126.50, so the
- *     account is STILL under MM (the futures leg can't close the gap alone).
- *   - the planner then takes a SECOND iteration and reduces the perps leg. Perps
- *     closes by a *continuous* quantity: it needs δ ≈ (143 − 118 + $1 fee)/3.00
- *     ≈ 9 of the 11 qty, landing precisely on the IM boundary (residual perps
- *     ~2 qty stays open), unlike the discrete futures-lot granularity.
+ *   - $235 deposit (−$1 perps taker fee ⇒ $234 balance) ⇒ underwater by ~$30.50
+ *     (substantial).
  *
- * Net effect the test asserts: BOTH venues carry liquidation activity in the
- * one sweep (futures fully closed, perps partially closed), the account lands in
+ * The key sizing invariant: closing a delta unit only improves the portfolio
+ * margin *gap* by the maintenance-margin relief `mmRate·mark = 0.05·30 = $1.50`
+ * (realizing the loss debits the balance but drops mmReq by the same amount, so
+ * only the shock-margin term nets out). Liquidation fees are zero in this harness
+ * (futures taker fee zeroed; no per-lot liquidation fee applied), so:
+ *   - Full futures capacity = 12·$1.50 = $18 < $30.50 deficit ⇒ even closing ALL
+ *     12 lots leaves the account under MM: the futures leg CANNOT heal it alone.
+ *   - The planner therefore fully closes the futures leg, then takes a SECOND
+ *     iteration on perps. Perps closes by a *continuous* quantity down to the IM
+ *     boundary (deepest close staying at/under IM), reducing ~9.67 of the 11 qty
+ *     and leaving a residual ~1.33-qty long — unlike the discrete futures-lot
+ *     granularity.
+ *   - Total capacity = 23·$1.50 = $34.50 > $30.50, so the account stays
+ *     recoverable (a residual perps long survives — not the bad-debt path).
+ *
+ * Net effect the test asserts: BOTH venues carry liquidation activity in the one
+ * sweep (futures fully closed, perps partially closed), the account lands in
  * `[MM, IM]`, and it is not fully wiped (the perps leg keeps a residual long).
- * The futures taker fee is zeroed (as elsewhere) so the $1/lot open cost doesn't
- * shift the sizing.
  */
 export function crossVenueBothLegsCrashFixtureBuilder(rpcUrl: string) {
   return async (): Promise<CrossVenueFixture> => {
@@ -783,7 +788,7 @@ export function crossVenueBothLegsCrashFixtureBuilder(rpcUrl: string) {
     const entryMark = parseUnits("40", base.config.tokenDecimals);
     await base.setMark(entryMark);
 
-    const aliceDeposit = parseUnits("250", base.config.tokenDecimals);
+    const aliceDeposit = parseUnits("235", base.config.tokenDecimals);
     const bobDeposit = parseUnits("5000", base.config.tokenDecimals);
     const alicePerpsQty = parseUnits("11", base.config.quantityDecimals);
     const aliceFuturesQty = 12;
