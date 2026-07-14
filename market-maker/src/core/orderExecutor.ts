@@ -204,7 +204,15 @@ export class OrderExecutor {
       return false;
     }
 
-    const expectedCount = desired.length;
+    // `ownOrders.size` counts individual resting orders. On exact-matching
+    // venues (futures) a single createOrder(qty=N) rests as N distinct orders,
+    // so the comparable "expected" is the qty-expanded total, not the level
+    // count — otherwise this fast-path is dead (actual is always ≫ levels) and
+    // the log is misleading. Limit venues (perps) rest one order per level.
+    const expectedCount =
+      this.instrument.book.matchingMode === "exact"
+        ? desired.reduce((sum, i) => sum + Number(i.size), 0)
+        : desired.length;
     const actualCount = this.book.ownOrders.size;
     if (actualCount < expectedCount) {
       this.logger.debug(
