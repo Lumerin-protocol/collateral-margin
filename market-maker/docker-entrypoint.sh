@@ -2,17 +2,18 @@
 # Container entrypoint.
 #
 # Required:
-#   MAKER_APP   - "perps" or "futures"
+#   MAKER_APP   - "perps", "futures", or "portfolio"
+#                 ("portfolio" runs perps + all futures expiries in one process)
 #
 # Config selection (in precedence order):
-#   1. CLI arg:  docker run … perps --config /custom/path.yml
+#   1. CLI arg:  docker run … portfolio --config /custom/path.yml
 #   2. MAKER_CONFIG env var
 #   3. MAKER_ENV env var → /app/configs/${MAKER_APP}.${MAKER_ENV}.yml
 #                           (MAKER_ENV defaults to "prd" inside containers)
 set -eu
 
 if [ -z "${MAKER_APP:-}" ]; then
-  echo "MAKER_APP must be set to 'perps' or 'futures'" >&2
+  echo "MAKER_APP must be set to 'perps', 'futures', or 'portfolio'" >&2
   exit 1
 fi
 
@@ -23,8 +24,11 @@ case "$MAKER_APP" in
   futures)
     ENTRY="/app/src/apps/futures/main.ts"
     ;;
+  portfolio)
+    ENTRY="/app/src/apps/portfolio/main.ts"
+    ;;
   *)
-    echo "Unknown MAKER_APP='$MAKER_APP' (expected 'perps' or 'futures')" >&2
+    echo "Unknown MAKER_APP='$MAKER_APP' (expected 'perps', 'futures', or 'portfolio')" >&2
     exit 1
     ;;
 esac

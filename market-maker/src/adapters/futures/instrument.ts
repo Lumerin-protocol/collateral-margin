@@ -156,6 +156,16 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
   }
 
   /**
+   * Cost units = qty. A futures `createOrder(…, int8 qty)` does one unit of
+   * work per contract, so its gas scales with qty (a qty=1 create ≈ one
+   * cancel). This lets the shared TxCoordinator budget futures batches by total
+   * qty rather than call count — the same weighting `chunkCalls` uses below.
+   */
+  createCallWeight(intent: OrderIntent): number {
+    return Number(intent.size);
+  }
+
+  /**
    * Execute cancels then creates for this expiry. Kept for single-market
    * callers and tests; the portfolio runner routes through the shared
    * `TxCoordinator` instead, which batches this expiry's calls with the other

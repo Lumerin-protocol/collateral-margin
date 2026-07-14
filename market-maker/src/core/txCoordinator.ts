@@ -15,7 +15,14 @@ export interface MarketIntents {
 }
 
 export interface TxCoordinatorConfig {
-  /** Max encoded calls per on-chain tx before chunking. Default 50. */
+  /**
+   * Max cost units per on-chain tx before chunking. One unit is the cheapest
+   * single call (see `InstrumentAdapter.createCallWeight`): for perps that's
+   * one order per price level; for futures it's one contract (qty=1), since a
+   * futures `createOrder` does one unit of work per qty and its gas scales with
+   * total qty rather than call count. A single call heavier than the budget is
+   * still sent alone (it can't be split). Default 50.
+   */
   maxCallsPerTx?: number;
 }
 
@@ -101,21 +108,26 @@ export class TxCoordinator {
 
     // 3. Build + submit per venue, isolated.
     for (const [venue, markets] of byVenue) {
-      const calls: `0x${string}`[] = [];
+      // Each call carries a cost weight so one shared per-tx budget can chunk
+      // venues with very different per-call gas (perps: 1/level; futures: qty).
+      const calls: WeightedCall[] = [];
       let cancelCount = 0;
       let placeCount = 0;
 
       // Cancels first (all markets), then creates (all markets).
       for (const m of markets) {
         for (const c of m.cancels) {
-          calls.push(m.instrument.encodeCancel(c));
+          calls.push({ data: m.instrument.encodeCancel(c), weight: 1 });
           cancelCount++;
         }
       }
       if (allowCreates) {
         for (const m of markets) {
           for (const c of m.creates) {
-            calls.push(m.instrument.encodeCreate(c));
+            calls.push({
+              data: m.instrument.encodeCreate(c),
+              weight: Math.max(1, m.instrument.createCallWeight(c)),
+            });
             placeCount++;
           }
         }
@@ -158,11 +170,31 @@ export class TxCoordinator {
     return result;
   }
 
-  private chunk(calls: `0x${string}`[]): `0x${string}`[][] {
+  /**
+   * Pack calls into chunks whose summed weight stays within `maxCallsPerTx`.
+   * A single call heavier than the budget occupies its own chunk (it can't be
+   * split), so the invariant is "at most one over-budget call per chunk".
+   */
+  private chunk(calls: WeightedCall[]): `0x${string}`[][] {
     const out: `0x${string}`[][] = [];
-    for (let i = 0; i < calls.length; i += this.maxCallsPerTx) {
-      out.push(calls.slice(i, i + this.maxCallsPerTx));
+    let current: `0x${string}`[] = [];
+    let weight = 0;
+    for (const c of calls) {
+      if (current.length > 0 && weight + c.weight > this.maxCallsPerTx) {
+        out.push(current);
+        current = [];
+        weight = 0;
+      }
+      current.push(c.data);
+      weight += c.weight;
     }
+    if (current.length > 0) out.push(current);
     return out;
   }
+}
+
+/** An encoded call tagged with its relative gas cost (see createCallWeight). */
+interface WeightedCall {
+  data: `0x${string}`;
+  weight: number;
 }

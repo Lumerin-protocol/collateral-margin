@@ -85,6 +85,14 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
   }
 
   /**
+   * One cost unit per order: a perps `createOrder` is a single price-level
+   * insertion whose gas is independent of the order's size.
+   */
+  createCallWeight(_intent: OrderIntent): number {
+    return 1;
+  }
+
+  /**
    * Execute cancels then creates on-chain. Perps uses individual
    * cancelOrder / createOrder calls (no batch functions on the contract).
    */

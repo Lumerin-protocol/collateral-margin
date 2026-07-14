@@ -1,15 +1,19 @@
 name: Deploy Collateral Margin Market Maker
 
-# CI/CD owns the "personality" of the perps and futures market-maker ECS
-# services. Terraform builds the scaffolding (service shell, ALB, target
-# group, log group, security groups, Route53, IAM); this workflow:
+# CI/CD owns the "personality" of the single portfolio market-maker ECS
+# service. One process quotes perps AND every selected futures expiry on one
+# shared signer/collateral vault, so we run it on a single ECS service. We
+# reuse the futures service scaffolding (svc/tsk-col-mar-futures-mm) that
+# Terraform provisions; the perps service is no longer deployed to.
+# Terraform builds the scaffolding (service shell, ALB, target group, log
+# group, security groups, Route53, IAM); this workflow:
 #
 #   1. Builds one Docker image from market-maker/ and pushes to GHCR
-#   2. For each venue (perps, futures), renders a new task-def revision
+#   2. Renders a new task-def revision for the portfolio app (MAKER_APP=portfolio)
 #      with image + env vars + secrets sourced from GitHub Variables and
 #      Secrets (no AWS Secrets Manager)
-#   3. Calls ecs:UpdateService to point both services at the new revisions
-#      and to scale them to the operator-chosen desired_count
+#   3. Calls ecs:UpdateService to point the service at the new revision
+#      and to scale it to the operator-chosen desired_count
 #
 # GitHub Variables (configure per-environment under Settings -> Environments):
 #   MAKER_LOG_LEVEL                   default "info"
@@ -17,15 +21,14 @@ name: Deploy Collateral Margin Market Maker
 #   MAKER_CANCEL_ORDERS_ON_SHUTDOWN   default "true"
 #   MAKER_HEALTH_PORT                 default "3001"  (must match TF cnt_port)
 #   MAKER_DESIRED_COUNT               default "1"     (set 0 to halt without redeploy)
-#   PERPS_ADDRESS                     contract address (perps service only)
-#   FUTURES_ADDRESS                   contract address (futures service only)
+#   PERPS_ADDRESS                     HashPowerPerpsDEX contract address
+#   FUTURES_ADDRESS                   Futures contract address
 #   ETH_PRICE_FEED_ADDRESS            optional Chainlink feed
 #
 # GitHub Secrets (configure per-environment):
 #   AWS_ROLE_ARN_DEV / _STG / _LMN    OIDC role ARNs from the TF output github_actions_role_arn
 #   ALCHEMY_API_KEY                   shared Alchemy project key (composes the RPC URL)
-#   PERPS_MM_PRIVATE_KEY              perps wallet private key
-#   FUTURES_MM_PRIVATE_KEY            futures wallet private key
+#   FUTURES_MM_PRIVATE_KEY            shared portfolio signer private key (both venues)
 #   SLACK_WEBHOOK_URL                 (org or repo level) for slack-notify
 
 on:
@@ -71,12 +74,9 @@ jobs:
       env_suffix: ${{ steps.env_config.outputs.env_suffix }}
       aws_region: ${{ steps.env_config.outputs.aws_region }}
       ecs_cluster: ${{ steps.env_config.outputs.ecs_cluster }}
-      perps_service: ${{ steps.env_config.outputs.perps_service }}
-      futures_service: ${{ steps.env_config.outputs.futures_service }}
-      perps_task_family: ${{ steps.env_config.outputs.perps_task_family }}
-      futures_task_family: ${{ steps.env_config.outputs.futures_task_family }}
-      perps_health_url: ${{ steps.env_config.outputs.perps_health_url }}
-      futures_health_url: ${{ steps.env_config.outputs.futures_health_url }}
+      service: ${{ steps.env_config.outputs.service }}
+      task_family: ${{ steps.env_config.outputs.task_family }}
+      health_url: ${{ steps.env_config.outputs.health_url }}
       is_cicd_branch: ${{ steps.gen_tag.outputs.is_cicd_branch }}
 
     steps:
@@ -100,12 +100,12 @@ jobs:
         run: |
           ENV="${{ steps.gen_tag.outputs.environment }}"
           echo "aws_region=us-east-1" >> $GITHUB_OUTPUT
-          echo "perps_task_family=tsk-col-mar-perps-mm" >> $GITHUB_OUTPUT
-          echo "futures_task_family=tsk-col-mar-futures-mm" >> $GITHUB_OUTPUT
+          # The unified portfolio MM runs on the futures service scaffolding.
+          echo "task_family=tsk-col-mar-futures-mm" >> $GITHUB_OUTPUT
 
           # URL_HOST_PREFIX matches the per-env Route53 alias produced by the
-          # collateral-margin TF stack (perps_mm_endpoint / futures_mm_endpoint
-          # in 00_outputs.tf): dev/stg get a subdomain, prod uses the apex.
+          # collateral-margin TF stack (futures_mm_endpoint in 00_outputs.tf):
+          # dev/stg get a subdomain, prod uses the apex.
           case "$ENV" in
             dev)
               SUFFIX="dev"
@@ -131,10 +131,8 @@ jobs:
           echo "env_suffix=${SUFFIX}" >> $GITHUB_OUTPUT
           echo "maker_env=${MAKER_ENV}" >> $GITHUB_OUTPUT
           echo "ecs_cluster=ecs-derivatives-marketplace-${SUFFIX}" >> $GITHUB_OUTPUT
-          echo "perps_service=svc-col-mar-perps-mm-${SUFFIX}" >> $GITHUB_OUTPUT
-          echo "futures_service=svc-col-mar-futures-mm-${SUFFIX}" >> $GITHUB_OUTPUT
-          echo "perps_health_url=https://perpsmm.${URL_HOST_PREFIX}hashpower.exchange/health" >> $GITHUB_OUTPUT
-          echo "futures_health_url=https://futuresmm.${URL_HOST_PREFIX}hashpower.exchange/health" >> $GITHUB_OUTPUT
+          echo "service=svc-col-mar-futures-mm-${SUFFIX}" >> $GITHUB_OUTPUT
+          echo "health_url=https://futuresmm.${URL_HOST_PREFIX}hashpower.exchange/health" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -187,15 +185,11 @@ jobs:
           echo "**Image:** Built locally, not pushed to GHCR" >> $GITHUB_STEP_SUMMARY
 
   deploy:
-    name: 🚀 Deploy ${{ matrix.app }}
+    name: 🚀 Deploy portfolio
     runs-on: ubuntu-latest
     needs: build
     if: needs.build.outputs.is_cicd_branch != 'true'
     environment: ${{ needs.build.outputs.environment }}
-    strategy:
-      fail-fast: false
-      matrix:
-        app: [ perps, futures ]
 
     steps:
       - name: Configure AWS credentials
@@ -205,13 +199,12 @@ jobs:
             secrets.AWS_ROLE_ARN_DEV || needs.build.outputs.environment == 'stg'
             && secrets.AWS_ROLE_ARN_STG || secrets.AWS_ROLE_ARN_LMN }}
           aws-region: ${{ needs.build.outputs.aws_region }}
-          role-session-name: GitHubActions-ColMarMM-${{ matrix.app }}-${{ github.run_id }}
+          role-session-name: GitHubActions-ColMarMM-portfolio-${{ github.run_id }}
 
       - name: Verify service exists
         id: svc_check
         env:
-          SERVICE: ${{ matrix.app == 'perps' && needs.build.outputs.perps_service ||
-            needs.build.outputs.futures_service }}
+          SERVICE: ${{ needs.build.outputs.service }}
           CLUSTER: ${{ needs.build.outputs.ecs_cluster }}
           REGION: ${{ needs.build.outputs.aws_region }}
         run: |
@@ -224,7 +217,7 @@ jobs:
 
           if [ "$ACTIVE_COUNT" = "0" ]; then
             echo "⚠️ ECS service '$SERVICE' is not ACTIVE in cluster '$CLUSTER'."
-            echo "    Likely Terraform has create=false for this venue. Skipping deploy."
+            echo "    Likely Terraform has create=false for this service. Skipping deploy."
             echo "skip=true" >> $GITHUB_OUTPUT
           else
             echo "✅ Service '$SERVICE' is active. Proceeding with deploy."
@@ -236,10 +229,8 @@ jobs:
         env:
           # Routing
           CLUSTER: ${{ needs.build.outputs.ecs_cluster }}
-          SERVICE: ${{ matrix.app == 'perps' && needs.build.outputs.perps_service ||
-            needs.build.outputs.futures_service }}
-          TASK_FAMILY: ${{ matrix.app == 'perps' && needs.build.outputs.perps_task_family
-            || needs.build.outputs.futures_task_family }}
+          SERVICE: ${{ needs.build.outputs.service }}
+          TASK_FAMILY: ${{ needs.build.outputs.task_family }}
           REGION: ${{ needs.build.outputs.aws_region }}
           IMAGE: ${{ env.GHCR_IMAGE }}:${{ needs.build.outputs.version }}
 
@@ -252,27 +243,26 @@ jobs:
           ETH_PRICE_FEED_ADDRESS: ${{ vars.ETH_PRICE_FEED_ADDRESS }}
           HASHPRICE_ORACLE_SUBGRAPH_URL: ${{ vars.HASHPRICE_ORACLE_SUBGRAPH_URL }}
 
-          # Per-environment GitHub Secrets (encrypted personality). Secrets
-          # only flow into this step's process env via inline ternaries; they
-          # are never written to step outputs or to disk on the runner.
-          ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
-          PRIVATE_KEY: ${{ matrix.app == 'perps' && secrets.PERPS_MM_PRIVATE_KEY ||
-            secrets.FUTURES_MM_PRIVATE_KEY }}
+          # Both venue addresses — the portfolio app quotes perps + futures.
+          PERPS_ADDRESS: ${{ vars.PERPS_ADDRESS }}
+          FUTURES_ADDRESS: ${{ vars.FUTURES_ADDRESS }}
 
-          # Per-venue config selected by matrix.app
-          VENUE_ADDR_NAME: ${{ matrix.app == 'perps' && 'PERPS_ADDRESS' || 'FUTURES_ADDRESS' }}
-          VENUE_ADDR_VALUE: ${{ matrix.app == 'perps' && vars.PERPS_ADDRESS ||
-            vars.FUTURES_ADDRESS }}
+          # Per-environment GitHub Secrets (encrypted personality). Secrets
+          # only flow into this step's process env; they are never written to
+          # step outputs or to disk on the runner. One shared signer runs both
+          # venues; we reuse the futures wallet key.
+          ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+          PRIVATE_KEY: ${{ secrets.FUTURES_MM_PRIVATE_KEY }}
 
           # Computed
-          MAKER_APP: ${{ matrix.app }}
+          MAKER_APP: portfolio
           MAKER_ENV: ${{ needs.build.outputs.maker_env }}
           COMMIT_HASH: ${{ github.sha }}
         run: |
           set -euo pipefail
           DESIRED_COUNT="${MAKER_DESIRED_COUNT:-1}"
 
-          echo "🚀 Deploying ${{ matrix.app }} to ${{ needs.build.outputs.environment }}"
+          echo "🚀 Deploying portfolio to ${{ needs.build.outputs.environment }}"
           echo "   Cluster: ${CLUSTER}"
           echo "   Service: ${SERVICE}"
           echo "   Task Family: ${TASK_FAMILY}"
@@ -308,8 +298,8 @@ jobs:
             --arg ETH_PRICE_FEED_ADDRESS          "${ETH_PRICE_FEED_ADDRESS:-}" \
             --arg ALCHEMY_API_KEY                 "${ALCHEMY_API_KEY}" \
             --arg PRIVATE_KEY                     "${PRIVATE_KEY}" \
-            --arg VENUE_ADDR_NAME                 "${VENUE_ADDR_NAME}" \
-            --arg VENUE_ADDR_VALUE                "${VENUE_ADDR_VALUE}" \
+            --arg PERPS_ADDRESS                   "${PERPS_ADDRESS}" \
+            --arg FUTURES_ADDRESS                 "${FUTURES_ADDRESS}" \
             --arg HASHPRICE_ORACLE_SUBGRAPH_URL   "${HASHPRICE_ORACLE_SUBGRAPH_URL}" \
             '[
               {name:"MAKER_APP",                       value:$MAKER_APP},
@@ -322,7 +312,8 @@ jobs:
               {name:"ETH_PRICE_FEED_ADDRESS",          value:$ETH_PRICE_FEED_ADDRESS},
               {name:"ALCHEMY_API_KEY",                 value:$ALCHEMY_API_KEY},
               {name:"PRIVATE_KEY",                     value:$PRIVATE_KEY},
-              {name:$VENUE_ADDR_NAME,                  value:$VENUE_ADDR_VALUE},
+              {name:"PERPS_ADDRESS",                   value:$PERPS_ADDRESS},
+              {name:"FUTURES_ADDRESS",                 value:$FUTURES_ADDRESS},
               {name:"HASHPRICE_ORACLE_SUBGRAPH_URL",   value:$HASHPRICE_ORACLE_SUBGRAPH_URL}
             ]' > env-block.json
 
@@ -352,17 +343,13 @@ jobs:
             --region "${REGION}" \
             --force-new-deployment > /dev/null
 
-          echo "✅ Deployment triggered for ${{ matrix.app }}"
+          echo "✅ Deployment triggered for portfolio"
 
   verify:
-    name: 🔍 Verify ${{ matrix.app }}
+    name: 🔍 Verify portfolio
     runs-on: ubuntu-latest
     needs: [ build, deploy ]
     if: needs.build.outputs.is_cicd_branch != 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        app: [ perps, futures ]
 
     steps:
       - name: Configure AWS credentials
@@ -372,12 +359,11 @@ jobs:
             secrets.AWS_ROLE_ARN_DEV || needs.build.outputs.environment == 'stg'
             && secrets.AWS_ROLE_ARN_STG || secrets.AWS_ROLE_ARN_LMN }}
           aws-region: ${{ needs.build.outputs.aws_region }}
-          role-session-name: GitHubActions-ColMarMM-${{ matrix.app }}-Verify-${{ github.run_id }}
+          role-session-name: GitHubActions-ColMarMM-portfolio-Verify-${{ github.run_id }}
 
       - name: Wait for service to stabilize
         env:
-          SERVICE: ${{ matrix.app == 'perps' && needs.build.outputs.perps_service ||
-            needs.build.outputs.futures_service }}
+          SERVICE: ${{ needs.build.outputs.service }}
           CLUSTER: ${{ needs.build.outputs.ecs_cluster }}
           REGION: ${{ needs.build.outputs.aws_region }}
         run: |
@@ -436,12 +422,12 @@ jobs:
         run: |
           echo "## 🎉 Deployment Complete" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Service:** Collateral Margin Market Maker (perps + futures)" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:** Collateral Margin Market Maker (portfolio: perps + futures)" >> $GITHUB_STEP_SUMMARY
           echo "**Environment:** ${{ needs.build.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
           echo "**Version:** ${{ needs.build.outputs.version }}" >> $GITHUB_STEP_SUMMARY
           echo "**Image:** \`${{ env.GHCR_IMAGE }}:${{ needs.build.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Cluster:** ${{ needs.build.outputs.ecs_cluster }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Services:** \`${{ needs.build.outputs.perps_service }}\`, \`${{ needs.build.outputs.futures_service }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:** \`${{ needs.build.outputs.service }}\`" >> $GITHUB_STEP_SUMMARY
 
       - name: Failure summary
         if: needs.verify.result == 'failure'
@@ -493,11 +479,8 @@ jobs:
           image_tag: ${{ needs.build.outputs.is_cicd_branch != 'true' && format('{0}:{1}',
             env.GHCR_IMAGE, needs.build.outputs.version) || '' }}
           additional_info: "${{ needs.build.outputs.is_cicd_branch == 'true' && '*Mode:*
-            CI/CD Test (build only, no deploy)' || format('*Health:* <{0}|Perps>
-            <{1}|Futures>
+            CI/CD Test (build only, no deploy)' || format('*Health:* <{0}|Portfolio>
 
-            *Cluster:* `{2}` • *Services:* `{3}`, `{4}`',
-            needs.build.outputs.perps_health_url,
-            needs.build.outputs.futures_health_url,
-            needs.build.outputs.ecs_cluster, needs.build.outputs.perps_service,
-            needs.build.outputs.futures_service) }}"
+            *Cluster:* `{1}` • *Service:* `{2}`',
+            needs.build.outputs.health_url,
+            needs.build.outputs.ecs_cluster, needs.build.outputs.service) }}"

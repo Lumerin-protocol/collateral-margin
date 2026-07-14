@@ -307,6 +307,18 @@ export interface InstrumentAdapter {
   encodeCancel(intent: CancelIntent): `0x${string}`;
 
   /**
+   * Relative gas weight of placing this create, in "cost units" where one unit
+   * is roughly the cheapest single call. The shared `TxCoordinator` sums these
+   * against one per-tx budget when chunking a venue batch, so venues with very
+   * different per-call gas profiles share one limiter:
+   *   - Perps:   1 per order — a create is one price-level insertion.
+   *   - Futures: `size` (qty) — `createOrder(…, int8 qty)` does one unit of
+   *              work per contract, so gas scales with total qty, not calls.
+   * Cancels are always weight 1 (the coordinator assumes this).
+   */
+  createCallWeight(intent: OrderIntent): number;
+
+  /**
    * Execute a batch of order cancellations and creations on-chain.
    *
    * The adapter owns the full lifecycle: encoding, batching, tx chunking,
