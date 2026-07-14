@@ -231,6 +231,50 @@ describe("OrderExecutor requote guards (regression)", () => {
   });
 });
 
+// ── exact-mode (futures) qty-expanded count deficit ────────────────────────
+
+describe("OrderExecutor exact-mode count deficit (qty-expanded)", () => {
+  /**
+   * On exact-matching venues a createOrder(qty=N) rests as N distinct orders,
+   * so `expectedCount` must be the qty-expanded total (Σ desired sizes), not
+   * the level count. A fully-provisioned multi-contract book must NOT churn.
+   */
+  it("does not requote when a multi-contract book is fully provisioned", () => {
+    const deps = makeDeps(); // matchingMode defaults to "exact"
+    const executor = makeExecutor(deps);
+
+    // Desired: 3 contracts @95 (buy), 3 @96 (sell). Each contract rests as a
+    // separate qty=1 order, so seed 3 + 3 individual orders.
+    for (let i = 0; i < 3; i++) seedOrder(deps.book, i + 1, "buy", 95_000_000n, 1n);
+    for (let i = 0; i < 3; i++) seedOrder(deps.book, i + 10, "sell", 96_000_000n, 1n);
+
+    executor.recordRequote(0, 0); // anchor mid → drift 0
+    const planned = executor.plan([desiredBuy(95_000_000n, 3n), desiredSell(96_000_000n, 3n)]);
+    assert.equal(planned, null, "no churn: 6 resting orders == 6 desired contracts");
+  });
+
+  /**
+   * When individual resting orders fall below the qty-expanded desired total
+   * (a partial fill on an exact venue), the deficit fast-path fires and the
+   * missing contracts are topped up — the pre-fix level-count comparison
+   * (2 desired levels vs 5 resting orders) would have missed this.
+   */
+  it("requotes when resting contracts fall below the desired qty total", () => {
+    const deps = makeDeps();
+    const executor = makeExecutor(deps);
+
+    // Only 2 of the 3 desired buy contracts remain (one filled); asks intact.
+    for (let i = 0; i < 2; i++) seedOrder(deps.book, i + 1, "buy", 95_000_000n, 1n);
+    for (let i = 0; i < 3; i++) seedOrder(deps.book, i + 10, "sell", 96_000_000n, 1n);
+
+    executor.recordRequote(0, 0);
+    const planned = executor.plan([desiredBuy(95_000_000n, 3n), desiredSell(96_000_000n, 3n)]);
+    assert.ok(planned, "requote triggered by qty-expanded count deficit");
+    assert.equal(planned.creates.length, 1, "tops up the single missing buy contract");
+    assert.equal(planned.creates[0].size, 1n);
+  });
+});
+
 // ── plan() / cooldown / gas-spike deferral ─────────────────────────────────
 
 describe("OrderExecutor.plan", () => {

@@ -46,7 +46,7 @@ function makeMarket(
   venue: VenueAdapter,
   id: string,
   cancels: string[],
-  creates: { price: bigint; im: bigint }[],
+  creates: { price: bigint; im: bigint; size?: bigint }[],
 ): MarketIntents {
   const instrument = {
     id,
@@ -55,11 +55,13 @@ function makeMarket(
     encodeCreate: (o: { price: bigint }) => `0xO${o.price.toString()}` as `0x${string}`,
     estimateOrderMargin: (o: { price: bigint }) =>
       creates.find((c) => c.price === o.price)?.im ?? 0n,
+    // Mirror the futures weighting (cost units = qty) so chunking is exercised.
+    createCallWeight: (o: { size: bigint }) => Number(o.size),
   } as unknown as InstrumentAdapter;
   return {
     instrument,
     cancels: cancels.map((o) => ({ orderId: o as `0x${string}` })),
-    creates: creates.map((c) => ({ side: "buy" as const, price: c.price, size: 1n })),
+    creates: creates.map((c) => ({ side: "buy" as const, price: c.price, size: c.size ?? 1n })),
   };
 }
 
@@ -133,7 +135,7 @@ describe("TxCoordinator", () => {
     assert.equal(futures.batches.length, 1);
   });
 
-  it("chunks a venue batch that exceeds maxCallsPerTx", async () => {
+  it("chunks a venue batch that exceeds maxCallsPerTx (unit-weight cancels)", async () => {
     const { nm, submitCount } = makeNonce();
     const coord = new TxCoordinator(nm, { maxCallsPerTx: 2 }, makeLogger());
     const { venue, batches } = makeVenue("futures");
@@ -141,8 +143,37 @@ describe("TxCoordinator", () => {
       makeMarket(venue, "f1", ["0xa", "0xb", "0xc", "0xd", "0xe"], []),
     ];
     await coord.submit(markets, { maxFeePerGas: 1n, dryRun: false, canPlace: async () => true });
-    assert.equal(submitCount(), 3); // 5 calls / 2 = 3 chunks
+    assert.equal(submitCount(), 3); // 5 cancels @ weight 1 / budget 2 = 3 chunks
     assert.deepEqual(batches.map((b) => b.length), [2, 2, 1]);
+  });
+
+  it("chunks by weighted cost units (futures qty), not raw call count", async () => {
+    const { nm, submitCount } = makeNonce();
+    const coord = new TxCoordinator(nm, { maxCallsPerTx: 10 }, makeLogger());
+    const { venue, batches } = makeVenue("futures");
+    // Weights 6, 6, 3: budget 10 → [6] | [6, 3]. Three calls, but two txs.
+    const markets = [
+      makeMarket(venue, "f1", [], [
+        { price: 1n, im: 0n, size: 6n },
+        { price: 2n, im: 0n, size: 6n },
+        { price: 3n, im: 0n, size: 3n },
+      ]),
+    ];
+    await coord.submit(markets, { maxFeePerGas: 1n, dryRun: false, canPlace: async () => true });
+    assert.equal(submitCount(), 2);
+    assert.deepEqual(batches.map((b) => b.length), [1, 2]);
+  });
+
+  it("sends a single over-budget call alone rather than dropping it", async () => {
+    const { nm, submitCount } = makeNonce();
+    const coord = new TxCoordinator(nm, { maxCallsPerTx: 2 }, makeLogger());
+    const { venue, batches } = makeVenue("futures");
+    // One create of qty 5 > budget 2 → its own chunk; a trailing cancel packs after.
+    const markets = [makeMarket(venue, "f1", ["0xz"], [{ price: 1n, im: 0n, size: 5n }])];
+    await coord.submit(markets, { maxFeePerGas: 1n, dryRun: false, canPlace: async () => true });
+    // cancel (w1) then create (w5): [0xCz] fills to 1, +5 > 2 → flush, [0xO1] alone.
+    assert.equal(submitCount(), 2);
+    assert.deepEqual(batches.map((b) => b.length), [1, 1]);
   });
 
   it("dry run submits nothing but reports intended counts", async () => {
