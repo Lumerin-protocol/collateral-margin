@@ -1212,7 +1212,8 @@
         "maxCallsPerTx",
         "confirmationTimeoutSec",
         "maxReplacements",
-        "replacementFeeBumpPct"
+        "replacementFeeBumpPct",
+        "maxNonceResyncs"
       ],
       "properties": {
         "maxCallsPerTx": {
@@ -1291,6 +1292,21 @@
           ],
           "description": "Fee bump per replacement attempt, percent.",
           "default": 15
+        },
+        "maxNonceResyncs": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Per-submit retries that re-read the chain nonce when another party (e.g. a keeper sharing this wallet) advances it. Workaround for a shared signer.",
+          "default": 5
         }
       }
     },

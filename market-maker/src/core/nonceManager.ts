@@ -8,6 +8,16 @@ export interface NonceManagerConfig {
   maxReplacements?: number;
   /** Fee bump per replacement attempt, in percent. Default 15%. */
   replacementFeeBumpPct?: number;
+  /**
+   * Max times, within a single submit, to re-read the chain nonce and retry when
+   * a *third party* advanced the nonce out from under us (e.g. a keeper sharing
+   * this wallet). Guards against the pathological "nonce too low" thrash when the
+   * signer is not exclusively owned by this process. Default 5.
+   *
+   * NOTE: This is a resilience workaround for a shared signer. The correct fix is
+   * a dedicated wallet per process — a single EOA nonce cannot be safely shared.
+   */
+  maxNonceResyncs?: number;
 }
 
 /** Broadcasts one logical tx at the given nonce/fee and returns its hash. */
@@ -43,6 +53,7 @@ export class NonceManager {
   private readonly confirmationTimeoutMs: number;
   private readonly maxReplacements: number;
   private readonly bumpPct: number;
+  private readonly maxNonceResyncs: number;
 
   private readonly publicClient: PublicClient;
   private readonly walletClient: WalletClient;
@@ -65,6 +76,7 @@ export class NonceManager {
     this.confirmationTimeoutMs = cfg.confirmationTimeoutMs ?? 60_000;
     this.maxReplacements = cfg.maxReplacements ?? 2;
     this.bumpPct = cfg.replacementFeeBumpPct ?? 15;
+    this.maxNonceResyncs = cfg.maxNonceResyncs ?? 5;
     this.logger = logger.child({ component: "nonce" });
   }
 
@@ -106,8 +118,9 @@ export class NonceManager {
     broadcast: Broadcast,
     opts: { maxFeePerGas: bigint; label: string },
   ): Promise<TxOutcome> {
-    const nonce = await this.nextNonce();
+    let nonce = await this.nextNonce();
     let fee = opts.maxFeePerGas;
+    let resyncs = 0;
 
     for (let attempt = 0; attempt <= this.maxReplacements; attempt++) {
       try {
@@ -127,6 +140,34 @@ export class NonceManager {
           "tx confirmation timed out; replacing by fee",
         );
       } catch (err) {
+        // A *third party* (e.g. a keeper sharing this wallet) consumed our nonce.
+        // Fee-bumping or cancelling a nonce that is already spent is pointless and
+        // only burns gas, so re-read the live nonce and retry at the fresh value.
+        if (isNonceDesyncError(err)) {
+          // Exhausted the resync budget: the nonce is being taken faster than we
+          // can claim it. A spent nonce cannot be replaced or cancelled, so skip
+          // the fee-bump/cancel escalation entirely and surface the failure now —
+          // the next poll tick retries with a freshly re-read nonce.
+          if (resyncs >= this.maxNonceResyncs) {
+            this.resetNonce();
+            this.logger.error(
+              { err, label: opts.label, nonce, resyncs },
+              "nonce repeatedly advanced by another party; giving up this cycle",
+            );
+            throw err instanceof Error ? err : new Error(String(err));
+          }
+          resyncs++;
+          this.resetNonce();
+          const fresh = await this.nextNonce();
+          this.logger.warn(
+            { label: opts.label, staleNonce: nonce, freshNonce: fresh, resyncs },
+            "nonce advanced by another party; resyncing to chain",
+          );
+          nonce = fresh;
+          fee = opts.maxFeePerGas; // fresh nonce starts from the base fee again
+          attempt = -1; // ...becomes 0 after the loop increment: full retry budget
+          continue;
+        }
         // A submission error (revert-on-send, RPC error). Fee-bump-and-retry a
         // couple of times; a persistent failure likely means the nonce is
         // wedged, so unstick it below.
@@ -191,4 +232,54 @@ export class NonceManager {
       this.logger.error({ err, nonce }, "cancel-tx failed; will resync nonce");
     }
   }
+}
+
+/**
+ * Substrings that mean the nonce we used no longer matches the chain and we must
+ * move to a *fresh* nonce (someone else advanced this wallet's nonce, or we left
+ * a gap). Deliberately EXCLUDES same-nonce replacement signals like "replacement
+ * transaction underpriced" and "already known": those mean we still own the nonce
+ * and should keep it while bumping the fee, so they fall through to the RBF path.
+ */
+const NONCE_DESYNC_PATTERNS = [
+  "nonce too low",
+  "lower than the current nonce",
+  "nonce too high",
+  "nonce has already been used",
+  "invalid nonce",
+  "oldnonce",
+  "noncetoolow",
+  "noncetoohigh",
+] as const;
+
+/**
+ * True when `err` (or anything in its `cause` chain) means the nonce we used is
+ * stale relative to the chain — i.e. the tx needs a *new* nonce, not a fee bump.
+ * Matches viem's `NonceTooLowError`/`NonceTooHighError` and raw RPC messages.
+ *
+ * Returns false for replacement-underpriced / already-known errors: those keep
+ * the same nonce and are handled by the fee-bump replacement path.
+ */
+export function isNonceDesyncError(err: unknown): boolean {
+  const seen = new Set<unknown>();
+  let cur: unknown = err;
+  while (cur && typeof cur === "object" && !seen.has(cur)) {
+    seen.add(cur);
+    const e = cur as {
+      name?: unknown;
+      message?: unknown;
+      shortMessage?: unknown;
+      details?: unknown;
+      cause?: unknown;
+    };
+    const haystack = [e.name, e.message, e.shortMessage, e.details]
+      .filter((v): v is string => typeof v === "string")
+      .join(" | ")
+      .toLowerCase();
+    if (NONCE_DESYNC_PATTERNS.some((p) => haystack.includes(p))) {
+      return true;
+    }
+    cur = e.cause;
+  }
+  return false;
 }

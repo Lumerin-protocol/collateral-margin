@@ -38,6 +38,7 @@ function makeInstrument(prices: bigint[]): InstrumentAdapter {
     executeOrders: async () => ({ receipts: [], errors: [] }),
     estimateOrderMargin: () => 0n,
     estimateCreateGas: async () => 0n,
+    createCallWeight: () => 1,
   };
 }
 
