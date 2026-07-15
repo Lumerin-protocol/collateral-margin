@@ -266,6 +266,7 @@ async function main(): Promise<void> {
       confirmationTimeoutMs: config.txCoordinator.confirmationTimeoutMs,
       maxReplacements: config.txCoordinator.maxReplacements,
       replacementFeeBumpPct: config.txCoordinator.replacementFeeBumpPct,
+      maxNonceResyncs: config.txCoordinator.maxNonceResyncs,
     },
     logger,
   );

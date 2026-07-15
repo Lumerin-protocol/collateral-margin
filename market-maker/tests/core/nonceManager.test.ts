@@ -167,7 +167,8 @@ describe("NonceManager", () => {
     const attempts: { nonce: number; fee: bigint }[] = [];
     const broadcast = ({ nonce, maxFeePerGas }: { nonce: number; maxFeePerGas: bigint }) => {
       attempts.push({ nonce, fee: maxFeePerGas });
-      if (attempts.length === 1) return Promise.reject(new Error("nonce too low"));
+      // A non-nonce transient error (RPC hiccup) → fee-bump + retry same nonce.
+      if (attempts.length === 1) return Promise.reject(new Error("429 Too Many Requests"));
       return Promise.resolve("0xok" as const);
     };
 
@@ -177,6 +178,117 @@ describe("NonceManager", () => {
     assert.equal(attempts[1].nonce, 7, "same nonce reused on retry");
     assert.equal(attempts[1].fee, 120n, "fee bumped +20% after the error");
     assert.equal(mocks.cancelCalls.length, 0, "no cancel-tx for a recovered submit");
+  });
+
+  it("resyncs to the chain nonce (no fee-bump, no cancel) when another party advances it", async () => {
+    // A keeper sharing this wallet consumes nonce 100 before our broadcast lands,
+    // so the first send is rejected "nonce too low". We must re-read the chain and
+    // retry at the fresh nonce — NOT fee-bump a spent nonce or send a cancel-tx.
+    let reads = 0;
+    const mocks = makeMocks({ startNonce: 100, receiptFor: async () => RECEIPT });
+    (mocks.publicClient as unknown as { getTransactionCount: () => Promise<number> }).getTransactionCount =
+      async () => {
+        reads++;
+        return reads === 1 ? 100 : 101; // chain advanced by the other party
+      };
+    const nm = new NonceManager(
+      mocks.publicClient,
+      mocks.walletClient,
+      account,
+      chain,
+      { maxReplacements: 2, replacementFeeBumpPct: 20, maxNonceResyncs: 5 },
+      makeLogger(),
+    );
+
+    const attempts: { nonce: number; fee: bigint }[] = [];
+    const broadcast = ({ nonce, maxFeePerGas }: { nonce: number; maxFeePerGas: bigint }) => {
+      attempts.push({ nonce, fee: maxFeePerGas });
+      if (attempts.length === 1) {
+        return Promise.reject(
+          new Error("Nonce provided for the transaction (100) is lower than the current nonce"),
+        );
+      }
+      return Promise.resolve("0xok" as const);
+    };
+
+    const outcome = await nm.submit(broadcast, { maxFeePerGas: 100n, label: "shared" });
+    assert.equal(outcome.gasUsed, RECEIPT.gasUsed);
+    assert.deepEqual(
+      attempts.map((a) => a.nonce),
+      [100, 101],
+      "retried at the fresh chain nonce",
+    );
+    assert.equal(attempts[1].fee, 100n, "fee reset to base for the fresh nonce (not bumped)");
+    assert.equal(mocks.cancelCalls.length, 0, "no cancel-tx for a nonce someone else spent");
+  });
+
+  it("keeps the same nonce and bumps fee on 'replacement transaction underpriced'", async () => {
+    // A same-nonce replacement that was under-bumped must retry the SAME nonce
+    // with a higher fee — it must NOT be treated as a stolen nonce and resynced.
+    let reads = 0;
+    const mocks = makeMocks({ startNonce: 42, receiptFor: async () => RECEIPT });
+    (mocks.publicClient as unknown as { getTransactionCount: () => Promise<number> }).getTransactionCount =
+      async () => {
+        reads++;
+        return 42; // if this were wrongly treated as desync, a re-read would happen
+      };
+    const nm = new NonceManager(
+      mocks.publicClient,
+      mocks.walletClient,
+      account,
+      chain,
+      { maxReplacements: 2, replacementFeeBumpPct: 20 },
+      makeLogger(),
+    );
+
+    const attempts: { nonce: number; fee: bigint }[] = [];
+    const broadcast = ({ nonce, maxFeePerGas }: { nonce: number; maxFeePerGas: bigint }) => {
+      attempts.push({ nonce, fee: maxFeePerGas });
+      if (attempts.length === 1) {
+        return Promise.reject(new Error("replacement transaction underpriced"));
+      }
+      return Promise.resolve("0xok" as const);
+    };
+
+    const outcome = await nm.submit(broadcast, { maxFeePerGas: 100n, label: "rbf" });
+    assert.equal(outcome.gasUsed, RECEIPT.gasUsed);
+    assert.deepEqual(
+      attempts.map((a) => a.nonce),
+      [42, 42],
+      "same nonce reused for the replacement",
+    );
+    assert.equal(attempts[1].fee, 120n, "fee bumped +20% for the replacement");
+    assert.equal(reads, 1, "no nonce re-read for a same-nonce replacement");
+    assert.equal(mocks.cancelCalls.length, 0);
+  });
+
+  it("gives up after maxNonceResyncs when the nonce keeps getting stolen", async () => {
+    const mocks = makeMocks({ startNonce: 5, receiptFor: async () => RECEIPT });
+    const nm = new NonceManager(
+      mocks.publicClient,
+      mocks.walletClient,
+      account,
+      chain,
+      { maxReplacements: 0, maxNonceResyncs: 2 },
+      makeLogger(),
+    );
+
+    let calls = 0;
+    const broadcast = () => {
+      calls++;
+      return Promise.reject(new Error("nonce too low"));
+    };
+    await assert.rejects(
+      nm.submit(broadcast, { maxFeePerGas: 1n, label: "contended" }),
+      /nonce too low/,
+    );
+    // 1 initial + 2 resyncs = 3 broadcast attempts, then throw immediately.
+    assert.equal(calls, 3, "bounded by maxNonceResyncs");
+    assert.equal(
+      mocks.cancelCalls.length,
+      0,
+      "no cancel-tx: a nonce someone else spent cannot be cancelled",
+    );
   });
 
   it("escalates to a cancel-tx and re-reads the nonce after a persistent send error", async () => {

@@ -124,6 +124,12 @@ const txCoordinatorSchema = Type.Object(
       default: 15,
       description: "Fee bump per replacement attempt, percent.",
     }),
+    maxNonceResyncs: Type.Integer({
+      minimum: 0,
+      default: 5,
+      description:
+        "Per-submit retries that re-read the chain nonce when another party (e.g. a keeper sharing this wallet) advances it. Workaround for a shared signer.",
+    }),
   },
   { ...Closed, default: {}, description: "Centralized submission / nonce recovery." },
 );
@@ -252,6 +258,7 @@ export interface ParsedTxCoordinatorConfig {
   confirmationTimeoutMs: number;
   maxReplacements: number;
   replacementFeeBumpPct: number;
+  maxNonceResyncs: number;
 }
 
 export interface ParsedCircuitBreakerConfig {
@@ -320,6 +327,7 @@ export function loadPortfolioConfig(
         confirmationTimeoutSec: 60,
         maxReplacements: 2,
         replacementFeeBumpPct: 15,
+        maxNonceResyncs: 5,
       };
       const cb = raw.circuitBreaker ?? {
         quarantineThreshold: 3,
@@ -338,6 +346,7 @@ export function loadPortfolioConfig(
           confirmationTimeoutMs: secondsToMs(tx.confirmationTimeoutSec, "txCoordinator.confirmationTimeoutSec"),
           maxReplacements: tx.maxReplacements,
           replacementFeeBumpPct: tx.replacementFeeBumpPct,
+          maxNonceResyncs: tx.maxNonceResyncs ?? 5,
         },
         circuitBreaker: {
           quarantineThreshold: cb.quarantineThreshold,
