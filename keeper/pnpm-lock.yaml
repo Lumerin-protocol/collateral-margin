@@ -22,8 +22,8 @@ importers:
         specifier: github:Lumerin-protocol/derivatives-marketplace#c8078b9e430df8a5ec8bc64865d692b38cc69d8c&path:/contracts/abi
         version: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/c8078b9e430df8a5ec8bc64865d692b38cc69d8c#path:/contracts/abi(patch_hash=96cf5481d03a402c55577d18ce7e4576a0252323c61d0b1f48f6fec7d7001c2d)
       futures-marketplace-abi:
-        specifier: github:Lumerin-protocol/futures-marketplace#20fcd524629f87c352161377a7b50ac263b92e12&path:/contracts/abi
-        version: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/20fcd524629f87c352161377a7b50ac263b92e12#path:/contracts/abi
+        specifier: github:Lumerin-protocol/futures-marketplace#2e2c1b599eec37f2f27973e78bafaf0870e1df7a&path:/contracts/abi
+        version: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/2e2c1b599eec37f2f27973e78bafaf0870e1df7a#path:/contracts/abi
       pino:
         specifier: ^10.3.1
         version: 10.3.1
@@ -165,8 +165,8 @@ packages:
   fast-safe-stringify@2.1.1:
     resolution: {integrity: sha512-W+KJc2dmILlPplD/H4K9l9LcAHAfPtP6BY84uVLXQ6Evcz9Lcg33Y2z1IVblT6xdY54PXYVHEv+0Wpq8Io6zkA==}
 
-  futures-marketplace-abi@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/20fcd524629f87c352161377a7b50ac263b92e12#path:/contracts/abi:
-    resolution: {gitHosted: true, path: /contracts/abi, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/20fcd524629f87c352161377a7b50ac263b92e12}
+  futures-marketplace-abi@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/2e2c1b599eec37f2f27973e78bafaf0870e1df7a#path:/contracts/abi:
+    resolution: {gitHosted: true, integrity: sha512-LScXrIs5FTsgQtgqYn7AcACUYdP/qtWPuapRbWYLZxjE5tFS/6jWfxPKBc5TNflZsBPifvSG2til0Y2fxazqXQ==, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/2e2c1b599eec37f2f27973e78bafaf0870e1df7a}
     version: 0.0.0
 
   help-me@5.0.0:
@@ -363,7 +363,7 @@ snapshots:
 
   fast-safe-stringify@2.1.1: {}
 
-  futures-marketplace-abi@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/20fcd524629f87c352161377a7b50ac263b92e12#path:/contracts/abi: {}
+  futures-marketplace-abi@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/2e2c1b599eec37f2f27973e78bafaf0870e1df7a#path:/contracts/abi: {}
 
   help-me@5.0.0: {}
 
