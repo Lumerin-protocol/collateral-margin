@@ -166,7 +166,7 @@ packages:
     resolution: {integrity: sha512-W+KJc2dmILlPplD/H4K9l9LcAHAfPtP6BY84uVLXQ6Evcz9Lcg33Y2z1IVblT6xdY54PXYVHEv+0Wpq8Io6zkA==}
 
   futures-marketplace-abi@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/2e2c1b599eec37f2f27973e78bafaf0870e1df7a#path:/contracts/abi:
-    resolution: {gitHosted: true, integrity: sha512-LScXrIs5FTsgQtgqYn7AcACUYdP/qtWPuapRbWYLZxjE5tFS/6jWfxPKBc5TNflZsBPifvSG2til0Y2fxazqXQ==, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/2e2c1b599eec37f2f27973e78bafaf0870e1df7a}
+    resolution: {gitHosted: true, path: /contracts/abi, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/2e2c1b599eec37f2f27973e78bafaf0870e1df7a}
     version: 0.0.0
 
   help-me@5.0.0:
