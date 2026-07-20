@@ -262,25 +262,15 @@ class FuturesBook implements BookSource {
 
   async snapshot(opts: { depth?: number } = {}): Promise<OrderBookSnapshot> {
     const v = this.inst.venue;
-    const dd = this.inst.expirationAt;
+    const expirationAt = this.inst.expirationAt;
     const depth = BigInt(opts.depth ?? 200);
 
-    const [bidPrices, askPrices] = await v.publicClient.multicall({
-      allowFailure: false,
-      contracts: [
-        {
-          address: v.address,
-          abi: FuturesAbi,
-          functionName: "getBidPrices",
-          args: [dd, depth],
-        },
-        {
-          address: v.address,
-          abi: FuturesAbi,
-          functionName: "getAskPrices",
-          args: [dd, depth],
-        },
-      ],
+    // Same shape as perps `getOrderBookPrices(depth)`, with expirationAt first.
+    const [bidPrices, askPrices] = await v.publicClient.readContract({
+      address: v.address,
+      abi: FuturesAbi,
+      functionName: "getOrderBookPrices",
+      args: [expirationAt, depth],
     });
 
     if (bidPrices.length === 0 && askPrices.length === 0) return { bids: [], asks: [] };
@@ -290,13 +280,13 @@ class FuturesBook implements BookSource {
         address: v.address,
         abi: FuturesAbi,
         functionName: "getQuantityAtPrice" as const,
-        args: [dd, p, true] as const,
+        args: [expirationAt, p, true] as const,
       })),
       ...askPrices.map((p) => ({
         address: v.address,
         abi: FuturesAbi,
         functionName: "getQuantityAtPrice" as const,
-        args: [dd, p, false] as const,
+        args: [expirationAt, p, false] as const,
       })),
     ];
 

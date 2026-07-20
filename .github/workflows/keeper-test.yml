@@ -76,7 +76,7 @@ jobs:
           repository: Lumerin-protocol/futures-marketplace
           # Futures 3.0 aggregate positions (PR Lumerin-protocol/futures-marketplace#215).
           # After that merges to dev, retarget this pin to the merge commit / dev tip.
-          ref: d5cf8b9154276efdbe583c5be4c81eb0eedbaadc
+          ref: 6c14a42b37dcb776e4925777e7a843749d5386a4
           path: futures-marketplace
 
       - name: Install perps contracts dependencies
