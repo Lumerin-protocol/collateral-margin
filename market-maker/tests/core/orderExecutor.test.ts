@@ -8,7 +8,6 @@ import type {
   InstrumentAdapter,
   OrderIntent,
   OwnOrder,
-  MatchingMode,
   ExecuteOrdersIntent,
 } from "../../src/core/adapter.ts";
 import type { Quoter } from "../../src/core/quoter.ts";
@@ -58,7 +57,7 @@ function makeDeps(overrides: Partial<TestDeps> = {}): TestDeps {
   const deps: TestDeps = {
     instrument: {
       id: "test-instrument",
-      book: { matchingMode: "exact" as MatchingMode },
+      book: {},
       executeOrders: async (intent: ExecuteOrdersIntent) => {
         for (const c of intent.cancels) cancelledOrderIds.push(c.orderId);
         for (const p of intent.creates) placedIntents.push(p);
@@ -138,22 +137,20 @@ function seedOrder(
 
 describe("OrderExecutor requote guards (regression)", () => {
   /**
-   * Bug: when all resting orders are at wrong prices (e.g. stale from a
-   * previous oracle level), `hasQuantityDeficit` returned false because no
-   * desired level had matching existing orders (`have === undefined`).
-   * A requote was never triggered and the book stayed shifted forever.
+   * When all resting orders are worse than the desired grid, quantity deficit
+   * alone used to miss the requote (`have === undefined` at desired prices).
+   * Stale detection must cancel them and place the grid.
    */
-  it("requotes when all orders are at wrong prices (quantity-deficit fix)", async () => {
+  it("requotes when all orders are worse than the desired grid", async () => {
     const deps = makeDeps();
     const executor = makeExecutor(deps);
 
-    // Seed the book with stale orders at wrong prices (oracle was higher).
-    seedOrder(deps.book, 1, "buy", 99_000_000n, 1_000_000n);
-    seedOrder(deps.book, 2, "buy", 98_000_000n, 1_000_000n);
+    // Worse than desired bid@95 / ask@96.
+    seedOrder(deps.book, 1, "buy", 90_000_000n, 1_000_000n);
+    seedOrder(deps.book, 2, "buy", 91_000_000n, 1_000_000n);
     seedOrder(deps.book, 3, "sell", 101_000_000n, 1_000_000n);
     seedOrder(deps.book, 4, "sell", 102_000_000n, 1_000_000n);
 
-    // Desired quotes are at the current (lower) oracle prices.
     const desired: OrderIntent[] = [
       desiredBuy(95_000_000n),
       desiredSell(96_000_000n),
@@ -161,34 +158,27 @@ describe("OrderExecutor requote guards (regression)", () => {
 
     await executor.reconcile(desired);
 
-    // All stale orders must be cancelled.
     assert.equal(
       deps.cancelledOrderIds.length,
       4,
-      "all stale orders cancelled",
+      "all worse orders cancelled",
     );
-    // Missing desired levels must be placed.
     assert.equal(deps.placedIntents.length, 2, "missing levels placed");
   });
 
   /**
-   * Bug: when stale orders at wrong prices coexist with correct orders at
-   * desired prices (e.g. cancels failed but creates succeeded on a prior
-   * reconciliation), the deficit check didn't fire (all desired levels
-   * have sufficient quantity), and the stale-orders guard was missing.
-   * The wrong-price orders persisted forever.
+   * Worse leftovers coexist with correct grid orders — cancel only the worse
+   * ones. Better-than-grid leftovers are kept (limit LOB policy).
    */
-  it("requotes when stale orders coexist with correct ones (stale-orders guard)", async () => {
+  it("cancels worse leftovers while keeping the desired grid", async () => {
     const deps = makeDeps();
     const executor = makeExecutor(deps);
 
-    // Correct orders at the right prices.
     seedOrder(deps.book, 1, "buy", 95_000_000n, 1_000_000n);
     seedOrder(deps.book, 2, "sell", 96_000_000n, 1_000_000n);
 
-    // Stale orders at wrong prices (leftover from a previous oracle level
-    // whose cancels failed or were never submitted).
-    seedOrder(deps.book, 3, "buy", 99_000_000n, 1_000_000n);
+    // Worse leftovers (cancels failed on a prior tick).
+    seedOrder(deps.book, 3, "buy", 90_000_000n, 1_000_000n);
     seedOrder(deps.book, 4, "sell", 101_000_000n, 1_000_000n);
 
     const desired: OrderIntent[] = [
@@ -198,14 +188,27 @@ describe("OrderExecutor requote guards (regression)", () => {
 
     await executor.reconcile(desired);
 
-    // Stale orders must be cancelled.
-    assert.equal(deps.cancelledOrderIds.length, 2, "stale orders cancelled");
-    // Correct orders must survive (no deficit → no new placement at same prices).
+    assert.equal(deps.cancelledOrderIds.length, 2, "worse leftovers cancelled");
     assert.equal(
       deps.placedIntents.length,
       0,
       "no new orders at already-filled prices",
     );
+  });
+
+  it("keeps better-than-grid leftovers (does not cancel them as stale)", async () => {
+    const deps = makeDeps();
+    const executor = makeExecutor(deps);
+
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 1_000_000n);
+    seedOrder(deps.book, 2, "sell", 96_000_000n, 1_000_000n);
+    seedOrder(deps.book, 3, "buy", 99_000_000n, 1_000_000n); // better bid
+    seedOrder(deps.book, 4, "sell", 94_000_000n, 1_000_000n); // better ask
+
+    await executor.reconcile([desiredBuy(95_000_000n), desiredSell(96_000_000n)]);
+
+    assert.equal(deps.cancelledOrderIds.length, 0, "better leftovers kept");
+    assert.equal(deps.placedIntents.length, 0);
   });
 
   /**
@@ -231,46 +234,32 @@ describe("OrderExecutor requote guards (regression)", () => {
   });
 });
 
-// ── exact-mode (futures) qty-expanded count deficit ────────────────────────
+// ── quantity deficit (qty-bearing orders) ──────────────────────────────────
 
-describe("OrderExecutor exact-mode count deficit (qty-expanded)", () => {
-  /**
-   * On exact-matching venues a createOrder(qty=N) rests as N distinct orders,
-   * so `expectedCount` must be the qty-expanded total (Σ desired sizes), not
-   * the level count. A fully-provisioned multi-contract book must NOT churn.
-   */
-  it("does not requote when a multi-contract book is fully provisioned", () => {
-    const deps = makeDeps(); // matchingMode defaults to "exact"
-    const executor = makeExecutor(deps);
-
-    // Desired: 3 contracts @95 (buy), 3 @96 (sell). Each contract rests as a
-    // separate qty=1 order, so seed 3 + 3 individual orders.
-    for (let i = 0; i < 3; i++) seedOrder(deps.book, i + 1, "buy", 95_000_000n, 1n);
-    for (let i = 0; i < 3; i++) seedOrder(deps.book, i + 10, "sell", 96_000_000n, 1n);
-
-    executor.recordRequote(0, 0); // anchor mid → drift 0
-    const planned = executor.plan([desiredBuy(95_000_000n, 3n), desiredSell(96_000_000n, 3n)]);
-    assert.equal(planned, null, "no churn: 6 resting orders == 6 desired contracts");
-  });
-
-  /**
-   * When individual resting orders fall below the qty-expanded desired total
-   * (a partial fill on an exact venue), the deficit fast-path fires and the
-   * missing contracts are topped up — the pre-fix level-count comparison
-   * (2 desired levels vs 5 resting orders) would have missed this.
-   */
-  it("requotes when resting contracts fall below the desired qty total", () => {
+describe("OrderExecutor quantity deficit", () => {
+  it("does not requote when resting size matches the desired grid", () => {
     const deps = makeDeps();
     const executor = makeExecutor(deps);
 
-    // Only 2 of the 3 desired buy contracts remain (one filled); asks intact.
-    for (let i = 0; i < 2; i++) seedOrder(deps.book, i + 1, "buy", 95_000_000n, 1n);
-    for (let i = 0; i < 3; i++) seedOrder(deps.book, i + 10, "sell", 96_000_000n, 1n);
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 3n);
+    seedOrder(deps.book, 2, "sell", 96_000_000n, 3n);
 
     executor.recordRequote(0, 0);
     const planned = executor.plan([desiredBuy(95_000_000n, 3n), desiredSell(96_000_000n, 3n)]);
-    assert.ok(planned, "requote triggered by qty-expanded count deficit");
-    assert.equal(planned.creates.length, 1, "tops up the single missing buy contract");
+    assert.equal(planned, null, "no churn when size and prices match");
+  });
+
+  it("requotes when resting size falls below desired qty at a level", () => {
+    const deps = makeDeps();
+    const executor = makeExecutor(deps);
+
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 2n);
+    seedOrder(deps.book, 2, "sell", 96_000_000n, 3n);
+
+    executor.recordRequote(0, 0);
+    const planned = executor.plan([desiredBuy(95_000_000n, 3n), desiredSell(96_000_000n, 3n)]);
+    assert.ok(planned, "requote triggered by quantity deficit");
+    assert.equal(planned.creates.length, 1, "tops up the missing buy size");
     assert.equal(planned.creates[0].size, 1n);
   });
 });
@@ -345,18 +334,11 @@ describe("OrderExecutor.plan", () => {
   });
 });
 
-// ── limit-mode (perps) stale detection ─────────────────────────────────────
+// ── stale detection ────────────────────────────────────────────────────────
 
-describe("OrderExecutor limit-mode stale detection", () => {
-  function limitDeps(): TestDeps {
-    const deps = makeDeps();
-    (deps.instrument as unknown as { book: { matchingMode: MatchingMode } }).book.matchingMode =
-      "limit";
-    return deps;
-  }
-
+describe("OrderExecutor stale detection", () => {
   it("keeps orders at-least-as-aggressive as the grid, cancels worse ones", () => {
-    const deps = limitDeps();
+    const deps = makeDeps();
     const executor = makeExecutor(deps);
     seedOrder(deps.book, 1, "buy", 96_000_000n); // better than worst bid → keep
     seedOrder(deps.book, 2, "buy", 93_000_000n); // worse than worst bid → stale
@@ -376,12 +358,12 @@ describe("OrderExecutor limit-mode stale detection", () => {
   });
 
   it("treats every resting order on a side as stale when that side is absent from the grid", () => {
-    const deps = limitDeps();
+    const deps = makeDeps();
     const executor = makeExecutor(deps);
     seedOrder(deps.book, 1, "buy", 96_000_000n);
     seedOrder(deps.book, 2, "buy", 93_000_000n);
-    seedOrder(deps.book, 3, "sell", 95_000_000n); // 95 > 96? no → keep
-    seedOrder(deps.book, 4, "sell", 98_000_000n); // 98 > 96? yes → stale
+    seedOrder(deps.book, 3, "sell", 95_000_000n); // better than ask@96 → keep
+    seedOrder(deps.book, 4, "sell", 98_000_000n); // worse → stale
 
     // Desired has only an ask side → no desired bid → all resting buys stale.
     const planned = executor.plan([desiredSell(96_000_000n)]);
@@ -404,7 +386,7 @@ describe("OrderExecutor reconcile gate and cancelAll", () => {
         canPlaceOrders: async () => false,
       } as unknown as RiskManager,
     });
-    seedOrder(deps.book, 1, "buy", 99_000_000n); // stale vs desired buy@95
+    seedOrder(deps.book, 1, "buy", 90_000_000n); // worse than desired buy@95 → stale
     const executor = makeExecutor(deps);
 
     await executor.reconcile([desiredBuy(95_000_000n), desiredSell(96_000_000n)]);

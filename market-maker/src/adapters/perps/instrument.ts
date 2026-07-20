@@ -8,7 +8,6 @@ import type {
   ExecuteOrdersResult,
   InstrumentAdapter,
   InstrumentContext,
-  MatchingMode,
   OrderBookSnapshot,
   OrderIntent,
   OwnOrder,
@@ -248,7 +247,6 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
 }
 
 class PerpsBook implements BookSource {
-  readonly matchingMode: MatchingMode = "limit";
   private readonly inst: PerpsInstrumentAdapter;
   constructor(inst: PerpsInstrumentAdapter) {
     this.inst = inst;

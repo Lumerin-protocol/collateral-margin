@@ -11,9 +11,9 @@
  *   { Q/2, Q/4, Q/8, ... } / (1 − 0.5^N) ≈ { Q/2, Q/4, Q/8, ... }
  * for large N. As ratio → 1 sizes flatten toward Q/N each.
  *
- * Used on futures where matching is "exact" — every level needs a distinct
- * fill probability profile, and the front level should be the largest
- * because it has the only direct fill opportunity.
+ * Used on futures multi-level books — every level needs a distinct fill
+ * probability profile, and the front level should be the largest because it
+ * has the highest hit rate.
  *
  * ## Edge cases
  *

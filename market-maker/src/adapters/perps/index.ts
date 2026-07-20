@@ -23,8 +23,6 @@ export interface CreatePerpsVenueOpts {
  *
  * Caller is responsible for providing the wallet and Multicall3 address;
  * `WalletRegistry` and `createNetworkClients` from core handle both.
- *
- * matchingMode = "limit" — orders fill at any price better-or-equal.
  */
 export async function createPerpsVenue(
   opts: CreatePerpsVenueOpts,

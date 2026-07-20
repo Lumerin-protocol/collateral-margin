@@ -8,7 +8,6 @@ import type {
   ExecuteOrdersResult,
   InstrumentAdapter,
   InstrumentContext,
-  MatchingMode,
   OrderBookSnapshot,
   OrderIntent,
   Position,
@@ -248,7 +247,6 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
 
 /** Per-expiry book source. Reads the ladders for this instrument's delivery date. */
 class FuturesBook implements BookSource {
-  readonly matchingMode: MatchingMode = "exact";
   private readonly inst: FuturesInstrumentAdapter;
   private readonly readBatchSize: number;
   constructor(inst: FuturesInstrumentAdapter, readBatchSize: number) {

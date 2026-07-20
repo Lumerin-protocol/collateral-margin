@@ -25,12 +25,9 @@ export interface OrderExecutorConfig {
 /**
  * Diff desired quotes vs the resting book; cancel + place via venue multicall.
  *
- * Stale-order detection is matching-mode-aware:
- *   - "exact" (futures): a resting order is stale iff its price is not in the
- *     desired set (each level only matches at exactly its price).
- *   - "limit" (perps):   a resting buy is stale iff its price < worst desired
- *     bid; a resting sell is stale iff its price > worst desired ask. Orders
- *     better-than-the-grid are kept (better priority + better price).
+ * Stale-order detection (limit LOB): a resting buy is stale iff its price <
+ * worst desired bid; a resting sell is stale iff its price > worst desired ask.
+ * Orders better-than-the-grid are kept (better priority + better price).
  */
 export class OrderExecutor {
   readonly stats = { ordersPlaced: 0, ordersCancelled: 0, reconcileCount: 0 };
@@ -204,15 +201,8 @@ export class OrderExecutor {
       return false;
     }
 
-    // `ownOrders.size` counts individual resting orders. On exact-matching
-    // venues (futures) a single createOrder(qty=N) rests as N distinct orders,
-    // so the comparable "expected" is the qty-expanded total, not the level
-    // count — otherwise this fast-path is dead (actual is always ≫ levels) and
-    // the log is misleading. Limit venues (perps) rest one order per level.
-    const expectedCount =
-      this.instrument.book.matchingMode === "exact"
-        ? desired.reduce((sum, i) => sum + Number(i.size), 0)
-        : desired.length;
+    // One qty-bearing resting order per desired level (perps + futures LOB).
+    const expectedCount = desired.length;
     const actualCount = this.book.ownOrders.size;
     if (actualCount < expectedCount) {
       this.logger.debug(
@@ -227,7 +217,7 @@ export class OrderExecutor {
       return true;
     }
 
-    if (this.hasStaleOrders(desired)) {
+    if (this.findStaleOrders(desired).length > 0) {
       this.logger.debug("requote triggered: stale orders at wrong prices");
       return true;
     }
@@ -243,24 +233,6 @@ export class OrderExecutor {
       { drift, threshold, actualCount, expectedCount },
       "requote skipped: no deficit / no stale / no drift",
     );
-    return false;
-  }
-
-  /** True when any own order sits at a price not in the desired set. */
-  private hasStaleOrders(desired: OrderIntent[]): boolean {
-    const desiredPrices = new Map<string, Set<bigint>>();
-    for (const i of desired) {
-      let set = desiredPrices.get(i.side);
-      if (!set) {
-        set = new Set<bigint>();
-        desiredPrices.set(i.side, set);
-      }
-      set.add(i.price);
-    }
-    for (const order of this.book.ownOrders.values()) {
-      const set = desiredPrices.get(order.side);
-      if (!set || !set.has(order.price)) return true;
-    }
     return false;
   }
 
@@ -285,32 +257,10 @@ export class OrderExecutor {
   }
 
   /**
-   * Stale = should be cancelled. See class header for matching-mode rules.
+   * Stale = should be cancelled. Keep orders at-least-as-aggressive as the
+   * worst desired price for that side (higher bid / lower ask).
    */
   private findStaleOrders(desired: OrderIntent[]): OwnOrder[] {
-    const mode = this.instrument.book.matchingMode;
-    if (mode === "exact") return this.findStaleOrdersExact(desired);
-    return this.findStaleOrdersLimit(desired);
-  }
-
-  private findStaleOrdersExact(desired: OrderIntent[]): OwnOrder[] {
-    const desiredBidPrices = new Set<bigint>();
-    const desiredAskPrices = new Set<bigint>();
-    for (const i of desired) {
-      (i.side === "buy" ? desiredBidPrices : desiredAskPrices).add(i.price);
-    }
-    const stale: OwnOrder[] = [];
-    for (const order of this.book.ownOrders.values()) {
-      const set = order.side === "buy" ? desiredBidPrices : desiredAskPrices;
-      if (!set.has(order.price)) stale.push(order);
-    }
-    return stale;
-  }
-
-  private findStaleOrdersLimit(desired: OrderIntent[]): OwnOrder[] {
-    // For limit-mode, keep any resting order that is at-least-as-aggressive as
-    // the worst desired price for that side. "Aggressive" means a higher price
-    // for buys and a lower price for sells.
     let worstDesiredBid: bigint | undefined;
     let worstDesiredAsk: bigint | undefined;
     for (const i of desired) {
@@ -337,12 +287,7 @@ export class OrderExecutor {
     return stale;
   }
 
-  /**
-   * New orders = desired levels that are missing from the resting book at
-   * exactly the desired price (regardless of matching mode). Limit mode's
-   * "we have an even better resting order" case is covered by the deficit
-   * check returning 0 for that level, so we don't double-place.
-   */
+  /** New orders = desired levels missing size at exactly the desired price. */
   private findNewOrders(desired: OrderIntent[]): OrderIntent[] {
     const existing = this.aggregateOwnSizeByPriceSide();
     const out: OrderIntent[] = [];

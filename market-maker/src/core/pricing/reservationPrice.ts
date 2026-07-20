@@ -2,9 +2,9 @@
  * # Reservation-price pricing (Avellaneda–Stoikov)
  *
  * Asymmetric quoter where the *mid* is shifted by inventory and the half-spread
- * is widened by vol/gas. Used on futures where matching is "exact" — each
- * level needs a distinct price to be useful, and the shift means the side we
- * want to be hit gets a better price than the side we don't.
+ * is widened by vol/gas. Used on futures multi-level books — each level needs a
+ * distinct price, and the shift means the side we want to be hit gets a better
+ * price than the side we don't.
  *
  * ## Formulas
  *
