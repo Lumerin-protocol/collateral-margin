@@ -175,7 +175,7 @@ export function isBatchableCollateralAccount(
 
 export interface InstrumentContext {
   /** Unix seconds of delivery / expiry, if any. */
-  deliveryDate?: number;
+  expirationAt?: number;
   /** Strike price (options). */
   strike?: bigint;
   /** Call vs put (options). */
@@ -247,7 +247,7 @@ export type VenueEvent =
       size: bigint;
       instrumentId?: string;
       /** Futures expiry (unix seconds) the order belongs to; undefined for perps. */
-      deliveryDate?: bigint;
+      expirationAt?: bigint;
     }
   | {
       type: "order-updated";

@@ -114,7 +114,7 @@ export interface DeployedStack {
     perpsMakerFeeBps: bigint;
     futuresTakerFee: bigint;
     futuresLiquidationFee: bigint;
-    futuresFirstDeliveryDate: bigint;
+    futuresFirstExpirationAt: bigint;
     insuranceFund: bigint;
     initialUserBalance: bigint;
   };
@@ -153,8 +153,8 @@ const PERPS_MAKER_FEE_BPS = 0n;
 const FUTURES_TAKER_FEE = parseUnits("1", TOKEN_DECIMALS);
 const FUTURES_LIQUIDATION_FEE = parseUnits("1", TOKEN_DECIMALS);
 const FUTURES_LIQUIDATION_MARGIN_PCT = 20;
-/** Spacing, in days, between successive expiries (renamed from delivery interval). */
-const FUTURES_EXPIRATION_INTERVAL_DAYS = 7;
+/** Spacing, in days, between successive expiries — must match Futures.EXPIRATION_INTERVAL_DAYS (30). */
+const FUTURES_EXPIRATION_INTERVAL_DAYS = 30;
 const FUTURES_FUTURE_DELIVERY_DATES_COUNT = 10;
 const INSURANCE_FUND = parseUnits("100000", TOKEN_DECIMALS);
 const INITIAL_USER_BALANCE = parseUnits("10000", TOKEN_DECIMALS);
@@ -253,10 +253,10 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
   const latestBlock = await publicClient.getBlock();
   // First expiry sits one interval out from now (the duration constant is gone —
   // hashpower settles per-day, so only the expiry spacing schedules the book).
-  const firstDeliveryDate =
+  const firstExpirationAt =
     latestBlock.timestamp + BigInt(FUTURES_EXPIRATION_INTERVAL_DAYS * 24 * 3600);
   // initialize(hashrateOracle, liquidationMarginPercent, minimumPriceIncrement,
-  //            expirationIntervalDays, futureDeliveryDatesCount, firstFutureDeliveryDate)
+  //            expirationIntervalDays, futureExpirationDatesCount, firstFutureExpirationDate)
   const futures = await deployProxy(
     publicClient,
     owner.client,
@@ -269,7 +269,7 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
       MIN_PRICE_INCREMENT,
       FUTURES_EXPIRATION_INTERVAL_DAYS,
       FUTURES_FUTURE_DELIVERY_DATES_COUNT,
-      firstDeliveryDate,
+      firstExpirationAt,
     ],
   );
 
@@ -428,7 +428,7 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
       perpsMakerFeeBps: PERPS_MAKER_FEE_BPS,
       futuresTakerFee: FUTURES_TAKER_FEE,
       futuresLiquidationFee: FUTURES_LIQUIDATION_FEE,
-      futuresFirstDeliveryDate: firstDeliveryDate,
+      futuresFirstExpirationAt: firstExpirationAt,
       insuranceFund: INSURANCE_FUND,
       initialUserBalance: INITIAL_USER_BALANCE,
     },

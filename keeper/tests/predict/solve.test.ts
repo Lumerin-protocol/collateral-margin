@@ -146,7 +146,7 @@ describe("predict/solve: solveLiquidationThresholds", () => {
       balance: 30_000_000n,
       futures: {
         positions: [
-          { id: "0xaa", isBuyer: true, entryPricePerDay: 50_000_000n, deliveryAt: 1_756_416_000n },
+          { expirationAt: 1_756_416_000n, netQuantity: 1n, netEntryValue: 50_000_000n },
         ],
         orderMargin: 0n,
       },

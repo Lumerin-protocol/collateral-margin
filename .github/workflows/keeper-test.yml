@@ -51,6 +51,29 @@ jobs:
         working-directory: ./keeper
         run: pnpm install --frozen-lockfile
 
+      # pnpm git path deps must keep `path: /contracts/abi` in the lockfile
+      # resolution. If that field is dropped (integrity-only), a cold CI store
+      # unpacks the whole futures-marketplace repo and TypeCheck fails with
+      # TS2307 on futures-marketplace-abi/Futures.ts.
+      - name: Verify futures ABI package layout
+        working-directory: ./keeper
+        run: |
+          set -euo pipefail
+          pkg="node_modules/futures-marketplace-abi"
+          test -f "$pkg/Futures.ts"
+          test -f "$pkg/package.json"
+          if grep -q '_pnpmPlaceholder' "$pkg/package.json"; then
+            echo "::error::$pkg/package.json is a pnpm placeholder; lockfile likely lost path:/contracts/abi"
+            exit 1
+          fi
+          if ! grep -q '"name": "futures-marketplace-abi"' "$pkg/package.json"; then
+            echo "::error::$pkg/package.json is not the abi package manifest"
+            cat "$pkg/package.json"
+            exit 1
+          fi
+          echo "futures-marketplace-abi layout ok:"
+          ls -la "$pkg" | head -20
+
       - name: TypeCheck
         working-directory: ./keeper
         run: pnpm typecheck
@@ -74,7 +97,9 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: Lumerin-protocol/futures-marketplace
-          ref: 5e28bb346b125d90eb138370a8a78c69487d1c26
+          # Futures 3.0 aggregate positions (PR Lumerin-protocol/futures-marketplace#215).
+          # After that merges to dev, retarget this pin to the merge commit / dev tip.
+          ref: 2e2c1b599eec37f2f27973e78bafaf0870e1df7a
           path: futures-marketplace
 
       - name: Install perps contracts dependencies

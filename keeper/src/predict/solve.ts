@@ -1,6 +1,16 @@
-import type { Hex } from "viem";
-import type { AccountSnapshot, AlertThresholds, MMParams, PriceThresholds } from "./types.ts";
+import type { AccountSnapshot, AlertThresholds, FuturesCloseLeg, MMParams, PriceThresholds } from "./types.ts";
 import { imRequired, imSurplus, mmSurplus } from "./mm.ts";
+
+function abs(x: bigint): bigint {
+  return x < 0n ? -x : x;
+}
+
+/** Average entry price for an aggregate (`|netEntryValue| / |netQuantity|`). */
+function avgEntry(pos: AccountSnapshot["futures"]["positions"][number]): bigint {
+  const absNet = abs(pos.netQuantity);
+  if (absNet === 0n) return 0n;
+  return abs(pos.netEntryValue) / absNet;
+}
 
 /**
  * Find the price thresholds where `mmSurplus(P)` crosses zero.
@@ -118,7 +128,7 @@ function findClosestCrossings(
   const kinks: bigint[] = [];
   if (snap.perp.netQty !== 0n) kinks.push(snap.perp.entryPrice);
   for (const pos of snap.futures.positions) {
-    kinks.push(pos.entryPricePerDay);
+    if (pos.netQuantity !== 0n) kinks.push(avgEntry(pos));
   }
   kinks.push(currentPrice);
   kinks.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
@@ -172,45 +182,61 @@ function findClosestCrossings(
 // Close-to-IM-buffer sizing (the batched-liquidation solvers)
 //
 // The on-chain `liquidatePositions` (futures) / `liquidatePosition(user,
-// closeQty)` (perps) do NOT recompute margin per lot — they close the
+// closeQty)` (perps) do NOT recompute margin per unit — they close the
 // keeper-supplied amount and enforce a single end-of-tx `OverLiquidation`
 // guard: with positions remaining and a real IM buffer (`im > mm`), the
 // leftover balance must sit at/under IM. These solvers pick, off-chain, the
 // deepest close that keeps the account inside the `[MM, IM]` band (healthy but
-// not over-liquidated) — so one batched tx replaces the old one-lot-per-tx
-// churn. If no in-band partial exists (deep crash / bad debt) they fall back
-// to a full close, which the contract lets through (the guard is skipped once
-// no positions remain).
+// not over-liquidated). If no in-band partial exists (deep crash / bad debt)
+// they fall back to a full close, which the contract lets through (the guard
+// is skipped once no positions remain).
 // ───────────────────────────────────────────────────────────────────────────
 
 /**
- * Off-chain replica of the futures batch close: remove `closeIds` from the
- * snapshot and debit the realized PnL + flat fee of each closed lot from the
- * balance. Mirrors `Futures._forceLiquidatePosition` (loss/profit routed
- * through the insurance fund) + the per-lot `liquidationFee`. Entry prices of
- * the surviving lots are untouched. Shared by the solver and its tests so the
- * band predicate they assert is the exact one the solver optimises against.
+ * Off-chain replica of the futures batch close: reduce each aggregate toward
+ * zero by `closeQty` and debit realized PnL + flat fee per expiry leg.
+ * Mirrors `Futures._doPartialLiquidatePosition` / `_doLiquidateFullPosition`.
  */
 export function simulateFuturesClose(
   snap: AccountSnapshot,
-  closeIds: readonly Hex[],
+  closes: readonly FuturesCloseLeg[],
   currentPrice: bigint,
   liquidationFee: bigint,
 ): AccountSnapshot {
-  const closeSet = new Set(closeIds);
+  const closeByExpiry = new Map<bigint, bigint>();
+  for (const c of closes) {
+    closeByExpiry.set(c.expirationAt, (closeByExpiry.get(c.expirationAt) ?? 0n) + c.closeQty);
+  }
+
   const remaining: AccountSnapshot["futures"]["positions"] = [];
   let balanceDelta = 0n;
   for (const pos of snap.futures.positions) {
-    if (!closeSet.has(pos.id)) {
+    const want = closeByExpiry.get(pos.expirationAt) ?? 0n;
+    if (want <= 0n) {
       remaining.push(pos);
       continue;
     }
-    const diffPerDay = pos.isBuyer
-      ? currentPrice - pos.entryPricePerDay
-      : pos.entryPricePerDay - currentPrice;
-    const pnl = diffPerDay;
+    const absNet = abs(pos.netQuantity);
+    const closeAbs = want < absNet ? want : absNet;
+    if (closeAbs <= 0n) {
+      remaining.push(pos);
+      continue;
+    }
+
+    const entry = avgEntry(pos);
+    const signedClose = pos.netQuantity > 0n ? closeAbs : -closeAbs;
+    const pnl = (currentPrice - entry) * signedClose;
     balanceDelta += pnl - liquidationFee;
+
+    if (closeAbs >= absNet) continue;
+    const newAbs = absNet - closeAbs;
+    remaining.push({
+      expirationAt: pos.expirationAt,
+      netQuantity: pos.netQuantity > 0n ? newAbs : -newAbs,
+      netEntryValue: (pos.netEntryValue * newAbs) / absNet,
+    });
   }
+
   return {
     ...snap,
     balance: snap.balance + balanceDelta,
@@ -250,61 +276,57 @@ export function simulatePerpClose(
 }
 
 /**
- * Pick the worst-first subset of futures lot ids to close so the account lands
- * inside the `[MM, IM]` band. Lots are ranked by unrealized loss (desc), then
- * notional (desc). We add lots one at a time (simulating each removal) and keep
- * the DEEPEST prefix that is healthy at MM while staying at/under IM. When a
- * real IM buffer exists (`imSpotShock > mmSpotShock`), closing past the IM
- * crossing would trip `OverLiquidation`, so we stop there. In the degenerate
- * `IM == MM` case there is no upper bound — we take the minimal healthy prefix.
- * Returns `[]` if already healthy, or every id (full close) when no in-band
- * partial exists (deep crash / bad debt — the contract skips the guard once
- * the position set is empty).
+ * Pick per-expiry `closeQty` legs so the account lands inside the `[MM, IM]`
+ * band. Unit closes are ranked worst-first and interleaved across expiries
+ * (round-robin) so a prefix does not drain one book before touching another.
+ * Returns `[]` if already healthy, or a full close of every aggregate when no
+ * in-band partial exists (deep crash / bad debt).
  */
-export function solveFuturesLotsToTarget(
+export function solveFuturesClosesToTarget(
   snap: AccountSnapshot,
   params: MMParams,
   currentPrice: bigint,
   liquidationFee: bigint,
-): Hex[] {
+): FuturesCloseLeg[] {
   const positions = snap.futures.positions;
   if (positions.length === 0) return [];
   if (mmSurplus(snap, params, currentPrice) >= 0n) return [];
 
   const hasBuffer = params.imSpotShock > params.mmSpotShock;
+  const unitSequence = rankUnitClosesBalancedAcrossExpirations(positions, currentPrice);
+  const n = unitSequence.length;
+  if (n === 0) return [];
 
-  // Expiry-balanced worst-first ordering. Each `deliveryAt` is a separate
-  // market/order-book, so we interleave closures across expirations (round
-  // robin, worst-first within each) instead of a single global worst-first
-  // prefix that would drain one expiry's book before touching another. The
-  // batch is still submitted in one `liquidatePositions` tx; balancing only
-  // shapes WHICH lots that tx closes. The prefix search below is unchanged, so
-  // we still stop at the deepest in-band subset (reaching IM stays the
-  // priority — balance is best-effort within that).
-  const ranked = rankLotsBalancedAcrossExpirations(positions, currentPrice);
-
-  const n = ranked.length;
-  let best: Hex[] | undefined;
-  for (let k = 1; k < n; k++) {
-    const closeSet = ranked.slice(0, k).map((p) => p.id);
-    const after = simulateFuturesClose(snap, closeSet, currentPrice, liquidationFee);
+  let bestPrefix = 0;
+  let foundInBand = false;
+  for (let k = 1; k <= n; k++) {
+    const closes = coalesceUnitPrefix(unitSequence, k);
+    const after = simulateFuturesClose(snap, closes, currentPrice, liquidationFee);
     const mmS = mmSurplus(after, params, currentPrice);
     const imS = imSurplus(after, params, currentPrice);
     if (!hasBuffer) {
-      // Degenerate IM == MM: no over-liquidation ceiling. Take minimal healthy.
       if (mmS >= 0n) {
-        best = closeSet;
+        bestPrefix = k;
+        foundInBand = true;
         break;
       }
       continue;
     }
-    if (mmS >= 0n && imS <= 0n) best = closeSet; // in band — record and keep going deeper
-    if (imS > 0n) break; // deeper only raises IM surplus → would over-liquidate
+    if (mmS >= 0n && imS <= 0n) {
+      bestPrefix = k;
+      foundInBand = true;
+    }
+    if (imS > 0n) break;
   }
 
-  if (best !== undefined) return best;
-  // No in-band partial — close everything (bad-debt / full-deleverage path).
-  return ranked.map((p) => p.id);
+  if (!foundInBand) {
+    // Full close every aggregate.
+    return positions.map((p) => ({
+      expirationAt: p.expirationAt,
+      closeQty: abs(p.netQuantity),
+    }));
+  }
+  return coalesceUnitPrefix(unitSequence, bestPrefix);
 }
 
 /**
@@ -372,75 +394,61 @@ function firstQtyWhere(f: (q: bigint) => bigint, hi: bigint): bigint {
   return b;
 }
 
-type FuturesLot = AccountSnapshot["futures"]["positions"][number];
+type FuturesAggregate = AccountSnapshot["futures"]["positions"][number];
 
 /**
- * Order futures lots so a worst-first prefix is *balanced across expirations*.
- *
- * Lots are grouped by `deliveryAt` (each group = one market). Within a group
- * they are sorted worst-first (unrealized loss desc, then notional desc, then
- * id for determinism). Groups are then round-robin interleaved — round `r`
- * takes the r-th lot of every group that still has one — with groups visited
- * worst-first (group total loss desc, tiebreak `deliveryAt` asc).
- *
- * The effect: any prefix of the result draws from every expiry evenly until a
- * book is exhausted, so the deepest in-band prefix spreads the close rather
- * than emptying a single expiry's book. A single-expiry portfolio collapses to
- * plain worst-first (identical to the pre-balancing behaviour).
+ * Expand aggregates into a unit-close sequence interleaved across expiries.
+ * Each unit is one whole contract at a `expirationAt`. Groups (expiries) are
+ * ordered by total unrealized loss desc; within the sequence we round-robin
+ * one unit from each group until books are exhausted.
  */
-function rankLotsBalancedAcrossExpirations(
-  positions: readonly FuturesLot[],
+function rankUnitClosesBalancedAcrossExpirations(
+  positions: readonly FuturesAggregate[],
   currentPrice: bigint,
-): FuturesLot[] {
-  const lossOf = (p: FuturesLot) => lotUnrealizedLoss(p, currentPrice);
-  const notionalOf = (p: FuturesLot) => p.entryPricePerDay;
+): bigint[] {
+  const lossOf = (p: FuturesAggregate) => aggregateUnrealizedLoss(p, currentPrice);
+  const ordered = [...positions]
+    .filter((p) => p.netQuantity !== 0n)
+    .sort((a, b) => {
+      const la = lossOf(a);
+      const lb = lossOf(b);
+      if (la !== lb) return la < lb ? 1 : -1;
+      const na = abs(a.netQuantity) * avgEntry(a);
+      const nb = abs(b.netQuantity) * avgEntry(b);
+      if (na !== nb) return na < nb ? 1 : -1;
+      return a.expirationAt < b.expirationAt ? -1 : a.expirationAt > b.expirationAt ? 1 : 0;
+    });
 
-  const groups = new Map<bigint, FuturesLot[]>();
-  for (const p of positions) {
-    const bucket = groups.get(p.deliveryAt);
-    if (bucket === undefined) groups.set(p.deliveryAt, [p]);
-    else bucket.push(p);
-  }
-
-  const worstFirst = (a: FuturesLot, b: FuturesLot): number => {
-    const la = lossOf(a);
-    const lb = lossOf(b);
-    if (la !== lb) return la < lb ? 1 : -1;
-    const na = notionalOf(a);
-    const nb = notionalOf(b);
-    if (na !== nb) return na < nb ? 1 : -1;
-    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-  };
-  for (const bucket of groups.values()) bucket.sort(worstFirst);
-
-  const orderedGroups = [...groups.entries()]
-    .sort(([dateA, groupA], [dateB, groupB]) => {
-      const lossA = groupA.reduce((s, p) => s + lossOf(p), 0n);
-      const lossB = groupB.reduce((s, p) => s + lossOf(p), 0n);
-      if (lossA !== lossB) return lossA < lossB ? 1 : -1;
-      return dateA < dateB ? -1 : dateA > dateB ? 1 : 0;
-    })
-    .map(([, group]) => group);
-
-  const result: FuturesLot[] = [];
-  let maxLen = 0;
-  for (const group of orderedGroups) if (group.length > maxLen) maxLen = group.length;
-  for (let round = 0; round < maxLen; round++) {
-    for (const group of orderedGroups) {
-      const lot = group[round];
-      if (lot !== undefined) result.push(lot);
+  const remaining = ordered.map((p) => abs(p.netQuantity));
+  const result: bigint[] = [];
+  let progress = true;
+  while (progress) {
+    progress = false;
+    for (let i = 0; i < ordered.length; i++) {
+      const left = remaining[i] ?? 0n;
+      if (left <= 0n) continue;
+      remaining[i] = left - 1n;
+      result.push(ordered[i]!.expirationAt);
+      progress = true;
     }
   }
   return result;
 }
 
-/** Per-lot unrealized loss at `P` (token decimals); 0 when in profit. */
-function lotUnrealizedLoss(
-  pos: AccountSnapshot["futures"]["positions"][number],
-  P: bigint,
-): bigint {
-  const diffPerDay = pos.isBuyer ? P - pos.entryPricePerDay : pos.entryPricePerDay - P;
-  const pnl = diffPerDay;
+function coalesceUnitPrefix(unitSequence: readonly bigint[], prefixLen: number): FuturesCloseLeg[] {
+  const counts = new Map<bigint, bigint>();
+  for (let i = 0; i < prefixLen && i < unitSequence.length; i++) {
+    const d = unitSequence[i]!;
+    counts.set(d, (counts.get(d) ?? 0n) + 1n);
+  }
+  return [...counts.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([expirationAt, closeQty]) => ({ expirationAt, closeQty }));
+}
+
+/** Per-aggregate unrealized loss at `P` (token decimals); 0 when in profit. */
+function aggregateUnrealizedLoss(pos: FuturesAggregate, P: bigint): bigint {
+  const pnl = P * pos.netQuantity - pos.netEntryValue;
   return pnl < 0n ? -pnl : 0n;
 }
 

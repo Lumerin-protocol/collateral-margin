@@ -68,7 +68,7 @@ export const futuresPricingSchema = Type.Object(
     marginCallTimeSec: Type.Number({
       minimum: 0,
       description:
-        "Seconds. Fallback time-to-margin-call when InstrumentContext.deliveryDate is unavailable.",
+        "Seconds. Fallback time-to-margin-call when InstrumentContext.expirationAt is unavailable.",
     }),
     minSpreadBps: Type.Number({
       minimum: 0,

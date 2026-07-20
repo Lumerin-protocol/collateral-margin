@@ -6,7 +6,7 @@ import { IFutures } from "../interfaces/IFutures.sol";
 /// @title FuturesMock — Minimal mock of the Futures contract for PME tests
 /// @notice Direct analogue of `PerpsDEXMock`: lets tests pin the per-user
 ///         IFutures view outputs (`getNetPositionDelta`,
-///         `getFuturesOrderMargin`, `getFuturesUnrealizedPnl`) and the
+///         `getOrderMargin`, `getUnrealizedPnl`) and the
 ///         shared market price. All views default to zero so a fresh mock
 ///         is a no-op contributor to portfolio margin.
 contract FuturesMock is IFutures {
@@ -35,19 +35,19 @@ contract FuturesMock is IFutures {
         return _netDelta[user];
     }
 
-    function setFuturesOrderMargin(address user, uint256 om) external {
+    function setOrderMargin(address user, uint256 om) external {
         _orderMargin[user] = om;
     }
 
-    function getFuturesOrderMargin(address user) external view returns (uint256) {
+    function getOrderMargin(address user) external view returns (uint256) {
         return _orderMargin[user];
     }
 
-    function setFuturesUnrealizedPnl(address user, int256 pnl) external {
+    function setUnrealizedPnl(address user, int256 pnl) external {
         _unrealizedPnl[user] = pnl;
     }
 
-    function getFuturesUnrealizedPnl(address user) external view returns (int256) {
+    function getUnrealizedPnl(address user) external view returns (int256) {
         return _unrealizedPnl[user];
     }
 }

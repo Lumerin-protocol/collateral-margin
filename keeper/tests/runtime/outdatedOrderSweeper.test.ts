@@ -53,7 +53,7 @@ function makeRecordingLogger(): { logger: pino.Logger; calls: LogCall[] } {
 
 interface FakeOrder {
   participant: Address;
-  deliveryAt: bigint;
+  expirationAt: bigint;
 }
 
 interface FakeChainOpts {
@@ -89,7 +89,7 @@ function makeChain(opts: FakeChainOpts): { chain: Chain; recorded: Recorded } {
       args: unknown[];
     }) => {
       recorded.readContractCalls++;
-      if (functionName !== "getOrderIds") {
+      if (functionName !== "getUserOrders") {
         throw new Error(`unexpected readContract: ${functionName}`);
       }
       const user = args[0] as Address;
@@ -102,7 +102,7 @@ function makeChain(opts: FakeChainOpts): { chain: Chain; recorded: Recorded } {
     }) => {
       recorded.multicallReadCalls++;
       return contracts.map((c) => {
-        if (c.functionName !== "getOrderById") {
+        if (c.functionName !== "getOrder") {
           throw new Error(`unexpected multicall fn: ${c.functionName}`);
         }
         const id = c.args[0] as Hex;
@@ -111,15 +111,13 @@ function makeChain(opts: FakeChainOpts): { chain: Chain; recorded: Recorded } {
           throw new Error(`order not found in fake state: ${id}`);
         }
         // Return shape matches the on-chain Order struct; sweeper only
-        // reads `deliveryAt` but include the other fields so tests
+        // reads `expirationAt` but include the other fields so tests
         // stay close to the real ABI.
         return {
-          isBuy: true,
           participant: order.participant,
-          destURL: "",
-          pricePerDay: 0n,
-          deliveryAt: order.deliveryAt,
-          createdAt: 0n,
+          price: 0n,
+          quantity: 1n,
+          expirationAt: order.expirationAt,
         };
       });
     },
@@ -244,14 +242,14 @@ describe("OutdatedOrderSweeper", () => {
     assert.equal(recorded.multicallReadCalls, 0);
   });
 
-  it("ignores orders whose deliveryAt is still in the future", async () => {
+  it("ignores orders whose expirationAt is still in the future", async () => {
     const { logger } = makeRecordingLogger();
     const orderId = ("0x" + "11".repeat(32)) as Hex;
     const { chain, recorded } = makeChain({
       blockTimestamp: 1_000n,
       orderIdsByUser: new Map([[USER_A, [orderId]]]),
       orders: new Map([
-        [orderId, { participant: USER_A, deliveryAt: 5_000n }], // future
+        [orderId, { participant: USER_A, expirationAt: 5_000n }], // future
       ]),
     });
     const sweeper = new OutdatedOrderSweeper(
@@ -275,9 +273,9 @@ describe("OutdatedOrderSweeper", () => {
       blockTimestamp: 10_000n,
       orderIdsByUser: new Map([[USER_A, [id1, id2, id3]]]),
       orders: new Map([
-        [id1, { participant: USER_A, deliveryAt: 5_000n }], // expired
-        [id2, { participant: USER_A, deliveryAt: 9_999n }], // expired
-        [id3, { participant: USER_A, deliveryAt: 20_000n }], // future
+        [id1, { participant: USER_A, expirationAt: 5_000n }], // expired
+        [id2, { participant: USER_A, expirationAt: 9_999n }], // expired
+        [id3, { participant: USER_A, expirationAt: 20_000n }], // future
       ]),
     });
 
@@ -320,8 +318,8 @@ describe("OutdatedOrderSweeper", () => {
         [USER_B, [idB]],
       ]),
       orders: new Map([
-        [idA, { participant: USER_A, deliveryAt: 5_000n }],
-        [idB, { participant: USER_B, deliveryAt: 5_000n }],
+        [idA, { participant: USER_A, expirationAt: 5_000n }],
+        [idB, { participant: USER_B, expirationAt: 5_000n }],
       ]),
     });
     const sweeper = new OutdatedOrderSweeper(
@@ -347,7 +345,7 @@ describe("OutdatedOrderSweeper", () => {
     for (let i = 0; i < 5; i++) {
       const id = ("0x" + String(i).padStart(2, "0").repeat(32)) as Hex;
       ids.push(id);
-      orders.set(id, { participant: USER_A, deliveryAt: 1n });
+      orders.set(id, { participant: USER_A, expirationAt: 1n });
     }
     const { chain, recorded } = makeChain({
       blockTimestamp: 1_000n,
@@ -371,9 +369,9 @@ describe("OutdatedOrderSweeper", () => {
   });
 
   it("drops stale-state candidates flagged by simulate (OrderNotExists / OrderNotExpired)", async () => {
-    // Race scenario: between our `getOrderById` read and our simulate, the
+    // Race scenario: between our `getOrder` read and our simulate, the
     // user (or a concurrent keeper) closed orderId1, and orderId2 had its
-    // deliveryAt bumped. The sweeper must skip them silently and still
+    // expirationAt bumped. The sweeper must skip them silently and still
     // broadcast a write for the survivor (orderId3).
     const { logger, calls } = makeRecordingLogger();
     const id1 = ("0x" + "11".repeat(32)) as Hex;
@@ -383,9 +381,9 @@ describe("OutdatedOrderSweeper", () => {
       blockTimestamp: 10_000n,
       orderIdsByUser: new Map([[USER_A, [id1, id2, id3]]]),
       orders: new Map([
-        [id1, { participant: USER_A, deliveryAt: 5_000n }],
-        [id2, { participant: USER_A, deliveryAt: 6_000n }],
-        [id3, { participant: USER_A, deliveryAt: 7_000n }],
+        [id1, { participant: USER_A, expirationAt: 5_000n }],
+        [id2, { participant: USER_A, expirationAt: 6_000n }],
+        [id3, { participant: USER_A, expirationAt: 7_000n }],
       ]),
       simulateRevert: (id) => {
         if (id === id1) return "OrderNotExists";
@@ -418,7 +416,7 @@ describe("OutdatedOrderSweeper", () => {
     const { chain, recorded } = makeChain({
       blockTimestamp: 10_000n,
       orderIdsByUser: new Map([[USER_A, [id1]]]),
-      orders: new Map([[id1, { participant: USER_A, deliveryAt: 1n }]]),
+      orders: new Map([[id1, { participant: USER_A, expirationAt: 1n }]]),
     });
     const config = makeConfig();
     (config as { keeper: { dryRun: boolean } }).keeper.dryRun = true;
@@ -439,17 +437,17 @@ describe("OutdatedOrderSweeper", () => {
     assert.ok(calls.some((c) => c.msg.startsWith("[dryRun]")));
   });
 
-  it("does not crash when one user's getOrderIds fails — continues with the next user", async () => {
+  it("does not crash when one user's getUserOrders fails — continues with the next user", async () => {
     // Per-user RPC blips shouldn't drop the whole sweep tick.
     const { logger, calls } = makeRecordingLogger();
     const idB = ("0x" + "bb".repeat(32)) as Hex;
     const orderIdsByUser = new Map<Address, Hex[]>([[USER_B, [idB]]]);
     const orders = new Map<Hex, FakeOrder>([
-      [idB, { participant: USER_B, deliveryAt: 1n }],
+      [idB, { participant: USER_B, expirationAt: 1n }],
     ]);
     const blockTimestamp = 10_000n;
 
-    // Custom chain that fails getOrderIds(USER_A) only.
+    // Custom chain that fails getUserOrders(USER_A) only.
     const recorded: Recorded = {
       readContractCalls: 0,
       multicallReadCalls: 0,
@@ -474,12 +472,10 @@ describe("OutdatedOrderSweeper", () => {
           const order = orders.get(c.args[0] as Hex);
           if (order === undefined) throw new Error("missing");
           return {
-            isBuy: true,
             participant: order.participant,
-            destURL: "",
-            pricePerDay: 0n,
-            deliveryAt: order.deliveryAt,
-            createdAt: 0n,
+            price: 0n,
+            quantity: 1n,
+            expirationAt: order.expirationAt,
           };
         });
       },
@@ -523,7 +519,7 @@ describe("OutdatedOrderSweeper", () => {
     );
     assert.ok(
       calls.some(
-        (c) => c.level === "warn" && c.msg.includes("getOrderIds failed"),
+        (c) => c.level === "warn" && c.msg.includes("getUserOrders failed"),
       ),
       "expected a warn log for the failed user",
     );

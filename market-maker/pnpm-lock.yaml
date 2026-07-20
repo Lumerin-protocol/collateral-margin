@@ -27,8 +27,8 @@ importers:
         specifier: ^5.2.2
         version: 5.3.4
       futures-contracts:
-        specifier: github:Lumerin-protocol/futures-marketplace#5e28bb346b125d90eb138370a8a78c69487d1c26&path:/contracts
-        version: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/5e28bb346b125d90eb138370a8a78c69487d1c26#path:/contracts(@types/node@22.19.17)(ethers@5.8.0)(typescript@5.9.3)
+        specifier: github:Lumerin-protocol/futures-marketplace#feat/futures-3-aggregate-positions&path:/contracts
+        version: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/2e2c1b599eec37f2f27973e78bafaf0870e1df7a#path:/contracts(@types/node@22.19.17)(ethers@5.8.0)(typescript@5.9.3)
       js-yaml:
         specifier: ^4.1.0
         version: 4.1.1
@@ -1245,6 +1245,10 @@ packages:
     resolution: {tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/a7f89b8fd167655d1157568230bc6779ce37d512}
     version: 1.0.0
 
+  collateral-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/fe34a2bd35eb12333a57dac83f65807bfbd2956a:
+    resolution: {tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/fe34a2bd35eb12333a57dac83f65807bfbd2956a}
+    version: 1.0.0
+
   color-convert@2.0.1:
     resolution: {integrity: sha512-RRECPsj7iu/xb5oKYcsFHSppFNnsj/52OVTRKb4zP5onXwVF3zVmmToNcOfGC+CRDpfK/U584fMg38ZHCaElKQ==}
     engines: {node: '>=7.0.0'}
@@ -1542,8 +1546,8 @@ packages:
   function-bind@1.1.2:
     resolution: {integrity: sha512-7XHNxH7qX9xG5mIwxkhumTox/MIRNcOgDrxWsMt2pAr23WHp6MrRlN7FBSFpCpr+oVO0F744iUgR82nJMfG2SA==}
 
-  futures-contracts@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/5e28bb346b125d90eb138370a8a78c69487d1c26#path:/contracts:
-    resolution: {path: /contracts, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/5e28bb346b125d90eb138370a8a78c69487d1c26}
+  futures-contracts@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/2e2c1b599eec37f2f27973e78bafaf0870e1df7a#path:/contracts:
+    resolution: {path: /contracts, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/2e2c1b599eec37f2f27973e78bafaf0870e1df7a}
     version: 1.0.0
     engines: {node: 24.x}
 
@@ -1624,8 +1628,8 @@ packages:
   hash.js@1.1.7:
     resolution: {integrity: sha512-taOaskGt4z4SOANNseOviYDvjEJinIkRgmp7LbKP2YTTmVxWBl87s/uzK9r+44BclBSp2X7K1hqeNfz9JbBeXA==}
 
-  hashprice-oracle@https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/55776ca92c86c69e38e5210e9b63d77d9e4218d8:
-    resolution: {tarball: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/55776ca92c86c69e38e5210e9b63d77d9e4218d8}
+  hashprice-oracle@https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/addc689f9fc69201944caf1bb0066c394742c2ec:
+    resolution: {tarball: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/addc689f9fc69201944caf1bb0066c394742c2ec}
     version: 1.0.0
 
   hashprice-oracle@https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/b65adbfeb7e6c4417747bfd3d94b6e89e162ed50:
@@ -2508,8 +2512,8 @@ packages:
   wrappy@1.0.2:
     resolution: {integrity: sha512-l4Sp/DRseor9wL6EvV2+TuQn63dMkPjZ/sp9XkghTEbV9KlPS1xUsZ3u7/IQO4wxtcFB4bgpQPRcR3QCvezPcQ==}
 
-  ws@7.5.11:
-    resolution: {integrity: sha512-zS54Oen9bITtp7kp2XM3AydrCIq1D+HwJOuH+c+e4LfpL/lotP5osijd+UoMnxwAam1GN8R4KtLAyIrIcBNpiA==}
+  ws@7.5.13:
+    resolution: {integrity: sha512-rsKI6xDBFVf4r/x8XyChGK04QR/XHroxs/jUcoWvtEZM8TPU/X/uIY9B1CsSzYws9ZJb/6bbBu7dPhFW00CAoA==}
     engines: {node: '>=8.3.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -4480,6 +4484,8 @@ snapshots:
 
   collateral-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/a7f89b8fd167655d1157568230bc6779ce37d512: {}
 
+  collateral-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/fe34a2bd35eb12333a57dac83f65807bfbd2956a: {}
+
   color-convert@2.0.1:
     dependencies:
       color-name: 1.1.4
@@ -4844,7 +4850,7 @@ snapshots:
 
   function-bind@1.1.2: {}
 
-  futures-contracts@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/5e28bb346b125d90eb138370a8a78c69487d1c26#path:/contracts(@types/node@22.19.17)(ethers@5.8.0)(typescript@5.9.3):
+  futures-contracts@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/2e2c1b599eec37f2f27973e78bafaf0870e1df7a#path:/contracts(@types/node@22.19.17)(ethers@5.8.0)(typescript@5.9.3):
     dependencies:
       '@chainlink/contracts': 1.5.0(@types/node@22.19.17)(ethers@5.8.0)
       '@noble/curves': 1.9.1
@@ -4853,8 +4859,8 @@ snapshots:
       '@safe-global/api-kit': 3.0.2(typescript@5.9.3)
       '@safe-global/protocol-kit': 6.1.2(typescript@5.9.3)
       '@safe-global/types-kit': 2.0.1(typescript@5.9.3)
-      collateral-margin: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/a7f89b8fd167655d1157568230bc6779ce37d512
-      hashprice-oracle: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/55776ca92c86c69e38e5210e9b63d77d9e4218d8
+      collateral-margin: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/fe34a2bd35eb12333a57dac83f65807bfbd2956a
+      hashprice-oracle: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/addc689f9fc69201944caf1bb0066c394742c2ec
       multicall3: https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012
       solidity-linked-list: 6.5.0
       viem: 2.48.4(typescript@5.9.3)
@@ -4966,7 +4972,7 @@ snapshots:
       tsort: 0.0.1
       undici: 5.29.0
       uuid: 8.3.2
-      ws: 7.5.11
+      ws: 7.5.13
     optionalDependencies:
       typescript: 5.9.3
     transitivePeerDependencies:
@@ -4998,7 +5004,7 @@ snapshots:
       inherits: 2.0.4
       minimalistic-assert: 1.0.1
 
-  hashprice-oracle@https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/55776ca92c86c69e38e5210e9b63d77d9e4218d8: {}
+  hashprice-oracle@https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/addc689f9fc69201944caf1bb0066c394742c2ec: {}
 
   hashprice-oracle@https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/b65adbfeb7e6c4417747bfd3d94b6e89e162ed50: {}
 
@@ -5836,7 +5842,7 @@ snapshots:
 
   wrappy@1.0.2: {}
 
-  ws@7.5.11: {}
+  ws@7.5.13: {}
 
   ws@8.18.0: {}
 

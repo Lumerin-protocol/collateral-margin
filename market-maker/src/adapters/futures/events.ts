@@ -7,8 +7,8 @@ import type {
 import { FuturesAbi } from "futures-contracts/abi/Futures";
 
 /** Instrument id for a futures expiry, e.g. `futures:1893456000`. */
-export function futuresInstrumentId(deliveryDate: bigint): string {
-  return `futures:${deliveryDate.toString()}`;
+export function futuresInstrumentId(expirationAt: bigint): string {
+  return `futures:${expirationAt.toString()}`;
 }
 
 type FuturesLog = Log<
@@ -64,50 +64,70 @@ export class FuturesVenueEvents implements VenueEvents {
 export function decodeEvent(log: FuturesLog): VenueEvent | null {
   switch (log.eventName) {
     case "OrderCreated": {
-      const { orderId, participant, pricePerDay, deliveryAt, isBuy } = log.args;
+      const { orderId, participant, price, quantity, expirationAt } = log.args;
       if (
         !orderId ||
         !participant ||
-        pricePerDay === undefined ||
-        deliveryAt === undefined ||
-        isBuy === undefined
+        price === undefined ||
+        quantity === undefined ||
+        expirationAt === undefined
       )
         return null;
+      const absQty = quantity < 0n ? -quantity : quantity;
+      if (absQty === 0n) return null;
       return {
         type: "order-created",
         orderId,
         participant,
-        price: pricePerDay,
-        side: isBuy ? "buy" : "sell",
-        size: 1n, // futures orders are single-contract per OrderCreated event
-        instrumentId: futuresInstrumentId(deliveryAt),
-        deliveryDate: deliveryAt,
+        price,
+        side: quantity > 0n ? "buy" : "sell",
+        size: absQty,
+        instrumentId: futuresInstrumentId(expirationAt),
+        expirationAt: expirationAt,
       };
     }
-    case "OrderClosed": {
+    case "OrderUpdated": {
+      const { orderId, participant, newQuantity } = log.args;
+      if (!orderId || !participant || newQuantity === undefined) return null;
+      if (newQuantity === 0n) {
+        return { type: "order-cancelled", orderId, participant };
+      }
+      const absQty = newQuantity < 0n ? -newQuantity : newQuantity;
+      return {
+        type: "order-updated",
+        orderId,
+        participant,
+        newSize: absQty,
+      };
+    }
+    case "OrderCancelled": {
       const { orderId } = log.args;
       if (!orderId) return null;
-      // OrderClosed carries neither participant nor deliveryAt; per-expiry
-      // own-order caches resolve ownership + routing by cache membership.
-      return {
-        type: "order-cancelled",
-        orderId,
-      };
+      return { type: "order-cancelled", orderId };
     }
-    case "LotCreated": {
-      const { seller, deliveryAt } = log.args;
-      if (!seller || deliveryAt === undefined) return null;
+    case "OrderMatched": {
+      const { maker, taker, expirationAt } = log.args;
+      if (!maker || !taker || expirationAt === undefined) return null;
+      // Broadcast position-changed for both sides; inventory resyncs via getUserPosition.
       return {
         type: "position-changed",
-        participant: seller,
-        instrumentId: futuresInstrumentId(deliveryAt),
+        participant: maker,
+        instrumentId: futuresInstrumentId(expirationAt),
       };
     }
-    case "LotClosed":
+    case "PositionLiquidated":
+    case "PositionSettled": {
+      const { user, expirationAt } = log.args as {
+        user?: `0x${string}`;
+        expirationAt?: bigint;
+      };
+      if (!user || expirationAt === undefined) return null;
       return {
         type: "position-changed",
-        participant: "0x0" as `0x${string}`,
+        participant: user,
+        instrumentId: futuresInstrumentId(expirationAt),
       };
+    }
     default:
       return null;
   }

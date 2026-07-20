@@ -100,41 +100,38 @@ export async function readPerpsOrderIds(
   })) as readonly Hex[];
 }
 
+/** Active delivery dates for a user's unilateral futures aggregates. */
+export async function readFuturesActiveDates(
+  stack: DeployedStack,
+  user: Address,
+): Promise<readonly bigint[]> {
+  return (await stack.publicClient.readContract({
+    address: stack.addresses.futures,
+    abi: stack.abis.futures,
+    functionName: "getActiveExpirationDates",
+    args: [user],
+  })) as readonly bigint[];
+}
+
+/** @deprecated alias — returns active delivery dates (no longer lot ids). */
 export async function readFuturesPositionIds(
   stack: DeployedStack,
   user: Address,
 ): Promise<readonly Hex[]> {
-  return (await stack.publicClient.readContract({
-    address: stack.addresses.futures,
-    abi: stack.abis.futures,
-    functionName: "getPositionIds",
-    args: [user],
-  })) as readonly Hex[];
+  const dates = await readFuturesActiveDates(stack, user);
+  // Encode expirationAt as bytes32 for callers that still treat them as Hex ids.
+  return dates.map((d) => `0x${d.toString(16).padStart(64, "0")}` as Hex);
 }
 
 /**
- * Reads the `deliveryAt` (expiration timestamp) of each supplied futures lot
- * id via `getPositionById`. Must be called *before* the lots are liquidated —
- * the contract deletes a position from storage on close, so the mapping has to
- * be snapshotted while every lot is still alive. Used by the multi-expiry
- * balancing test to attribute each closed lot back to its book.
+ * Decodes Hex-encoded expirationAt values (from `readFuturesPositionIds`) back
+ * to bigint expiries. Kept for multi-expiry balancing tests.
  */
 export async function readFuturesLotExpiries(
-  stack: DeployedStack,
+  _stack: DeployedStack,
   ids: readonly Hex[],
 ): Promise<Map<Hex, bigint>> {
-  const entries = await Promise.all(
-    ids.map(async (id) => {
-      const pos = (await stack.publicClient.readContract({
-        address: stack.addresses.futures,
-        abi: stack.abis.futures,
-        functionName: "getPositionById",
-        args: [id],
-      })) as { deliveryAt: bigint };
-      return [id, pos.deliveryAt] as const;
-    }),
-  );
-  return new Map(entries);
+  return new Map(ids.map((id) => [id, BigInt(id)] as const));
 }
 
 export async function readFuturesOrderIds(
@@ -144,7 +141,7 @@ export async function readFuturesOrderIds(
   return (await stack.publicClient.readContract({
     address: stack.addresses.futures,
     abi: stack.abis.futures,
-    functionName: "getOrderIds",
+    functionName: "getUserOrders",
     args: [user],
   })) as readonly Hex[];
 }
@@ -248,11 +245,9 @@ export async function expectReducedToImBuffer(
 }
 
 /**
- * Every block a `Futures.LotLiquidated` event was emitted at for `participant`.
- * Unlike the `earliestEventBlock` readers this keeps the full list so tests can
- * assert a batched liquidation collapses all lots into a single block (the
- * anti-churn regression guard) — reusing the `Set<block>` pattern from the
- * delivery-coordinator multicall test.
+ * Every block a `Futures.PositionLiquidated` event was emitted for `user`.
+ * Kept as a list so tests can assert a batched liquidation collapses into a
+ * single block (anti-churn).
  */
 export async function readFuturesLotLiquidatedBlocks(
   stack: DeployedStack,
@@ -261,8 +256,8 @@ export async function readFuturesLotLiquidatedBlocks(
   const logs = await stack.publicClient.getContractEvents({
     address: stack.addresses.futures,
     abi: stack.abis.futures,
-    eventName: "LotLiquidated",
-    args: { participant: user },
+    eventName: "PositionLiquidated",
+    args: { user },
     fromBlock: 0n,
   });
   const blocks: bigint[] = [];
@@ -270,6 +265,41 @@ export async function readFuturesLotLiquidatedBlocks(
     if (log.blockNumber !== null) blocks.push(log.blockNumber);
   }
   return blocks;
+}
+
+/** Absolute contracts closed across all PositionLiquidated events for `user`. */
+export async function readFuturesClosedQuantity(
+  stack: DeployedStack,
+  user: Address,
+): Promise<bigint> {
+  const logs = await stack.publicClient.getContractEvents({
+    address: stack.addresses.futures,
+    abi: stack.abis.futures,
+    eventName: "PositionLiquidated",
+    args: { user },
+    fromBlock: 0n,
+  });
+  let sum = 0n;
+  for (const log of logs) {
+    const q = (log.args as { closedQuantity?: bigint }).closedQuantity;
+    if (q === undefined) continue;
+    sum += q < 0n ? -q : q;
+  }
+  return sum;
+}
+
+export async function readFuturesNetQuantity(
+  stack: DeployedStack,
+  user: Address,
+  expirationAt: bigint,
+): Promise<bigint> {
+  const pos = (await stack.publicClient.readContract({
+    address: stack.addresses.futures,
+    abi: stack.abis.futures,
+    functionName: "getUserPosition",
+    args: [user, expirationAt],
+  })) as { netQuantity: bigint };
+  return pos.netQuantity;
 }
 
 /**
@@ -311,35 +341,35 @@ export async function expectNoOpenOrders(
 // Tests then compare block numbers across helpers to assert the planner's
 // invariants (orders-leg before position-leg, worst-leg first, etc).
 //
-// The perps event indexes `user`; the futures event indexes `participant`.
-// viem doesn't auto-translate, so each helper passes the right kwarg.
+// Both venues index liquidations on `user` in 3.0.
 
 export const readPerpsPositionLiquidationBlock = (s: DeployedStack, u: Address) =>
   earliestEventBlock(s, "perps", "PositionLiquidated", { user: u });
 
 export const readFuturesPositionLiquidationBlock = (s: DeployedStack, u: Address) =>
-  earliestEventBlock(s, "futures", "LotLiquidated", { participant: u });
+  earliestEventBlock(s, "futures", "PositionLiquidated", { user: u });
 
 export const readPerpsOrderLiquidationBlock = (s: DeployedStack, u: Address) =>
   earliestEventBlock(s, "perps", "OrderLiquidated", { user: u });
 
 export const readFuturesOrderLiquidationBlock = (s: DeployedStack, u: Address) =>
-  earliestEventBlock(s, "futures", "OrderLiquidated", { participant: u });
+  earliestEventBlock(s, "futures", "OrderLiquidated", { user: u });
 
 /**
- * Earliest block at which `Futures.LotClosed(lotId)` was
- * emitted. Used by the delivery-coordinator e2e tests to confirm the keeper
- * actually settled a specific position id via `settlePosition`.
+ * Earliest block at which `Futures.PositionSettled(user, expirationAt)` was
+ * emitted. `expirationAtHex` is the bytes32 encoding from `readFuturesPositionIds`.
  */
 export async function readLotClosedBlock(
   stack: DeployedStack,
-  lotId: Hex,
+  user: Address,
+  expirationAtHex: Hex,
 ): Promise<bigint | null> {
+  const expirationAt = BigInt(expirationAtHex);
   const logs = await stack.publicClient.getContractEvents({
     address: stack.addresses.futures,
     abi: stack.abis.futures,
-    eventName: "LotClosed",
-    args: { lotId },
+    eventName: "PositionSettled",
+    args: { user, expirationAt },
     fromBlock: 0n,
   });
   let earliest: bigint | null = null;
@@ -353,7 +383,7 @@ export async function readLotClosedBlock(
 async function earliestEventBlock(
   stack: DeployedStack,
   venue: "perps" | "futures",
-  eventName: "PositionLiquidated" | "LotLiquidated" | "OrderLiquidated",
+  eventName: "PositionLiquidated" | "OrderLiquidated",
   args: Record<string, Address>,
 ): Promise<bigint | null> {
   const logs = await stack.publicClient.getContractEvents({

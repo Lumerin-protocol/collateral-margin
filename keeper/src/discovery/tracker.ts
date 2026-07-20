@@ -18,7 +18,7 @@ import { FuturesAbi as futuresAbi } from "futures-marketplace-abi/Futures.ts";
  *
  *   - Vault Deposited / Withdrawn / Transfer  → adds users on first deposit
  *   - Perps OrderCreated / OrderMatched / PositionLiquidated
- *   - Futures OrderCreated / LotCreated / LotLiquidated
+ *   - Futures OrderCreated / OrderMatched / PositionLiquidated
  *
  * On startup, `backfill(fromBlock)` scans the same six events historically
  * via `getLogs` so the cold-start window doesn't miss participants who
@@ -106,8 +106,8 @@ export class ParticipantTracker {
       this.chain.publicClient.watchContractEvent({
         address: this.config.futures.address,
         abi: futuresAbi,
-        eventName: "LotCreated",
-        onLogs: (logs) => this.onFuturesLotCreated(logs),
+        eventName: "OrderMatched",
+        onLogs: (logs) => this.onFuturesOrderMatched(logs),
       }),
     );
   }
@@ -134,7 +134,7 @@ export class ParticipantTracker {
    * dedupes on checksum.
    *
    * Futures has no `getUsersWithPositions` view on-chain, so historical
-   * `OrderCreated` / `LotCreated` logs are the only source of cold-
+   * `OrderCreated` / `OrderMatched` logs are the only source of cold-
    * start participants. Perps has the view but we use logs uniformly so a
    * single backfill mechanism covers both venues (and the vault).
    *
@@ -245,16 +245,16 @@ export class ParticipantTracker {
         },
       },
       {
-        label: "futures.LotCreated",
+        label: "futures.OrderMatched",
         run: async (from, to) => {
           const logs = await this.chain.publicClient.getContractEvents({
             address: this.config.futures.address,
             abi: futuresAbi,
-            eventName: "LotCreated",
+            eventName: "OrderMatched",
             fromBlock: from,
             toBlock: to,
           });
-          this.onFuturesLotCreated(logs as unknown as readonly Log[]);
+          this.onFuturesOrderMatched(logs as unknown as readonly Log[]);
         },
       },
     ];
@@ -353,7 +353,7 @@ export class ParticipantTracker {
    * Subscribe to "user state may have changed" events. Fires for the same
    * triggers `onAdded` does, plus any time a tracked user's state could
    * have shifted (vault transfer in/out, perps OrderCreated/Matched,
-   * futures OrderCreated/LotCreated).
+   * futures OrderCreated/OrderMatched).
    *
    * The predictive layer uses this to invalidate and rebuild a user's
    * cached MM snapshot. Listeners must tolerate being called for users
@@ -462,8 +462,7 @@ export class ParticipantTracker {
 
   /**
    * `OrderCreated(bytes32 indexed orderId, address indexed participant,
-   *               string destURL, uint256 pricePerDay, uint256 deliveryAt,
-   *               bool isBuy)`.
+   *               uint256 price, int256 quantity, uint256 expirationAt)`.
    */
   private onFuturesOrderCreated(logs: readonly Log[]): void {
     type Args = { orderId?: Hex; participant?: Address };
@@ -474,16 +473,15 @@ export class ParticipantTracker {
   }
 
   /**
-   * `LotCreated(bytes32 indexed lotId, address indexed seller,
-   *            address indexed buyer, uint256 pricePerDay, uint256 deliveryAt, ...)`.
+   * `OrderMatched(..., address indexed maker, address indexed taker, ...)`.
    */
-  private onFuturesLotCreated(logs: readonly Log[]): void {
-    type Args = { lotId?: Hex; seller?: Address; buyer?: Address };
+  private onFuturesOrderMatched(logs: readonly Log[]): void {
+    type Args = { maker?: Address; taker?: Address };
     for (const raw of logs) {
       const args = (raw as unknown as { args?: Args }).args;
       if (args === undefined) continue;
-      if (args.seller !== undefined) this.touch(args.seller);
-      if (args.buyer !== undefined) this.touch(args.buyer);
+      if (args.maker !== undefined) this.touch(args.maker);
+      if (args.taker !== undefined) this.touch(args.taker);
     }
   }
 }

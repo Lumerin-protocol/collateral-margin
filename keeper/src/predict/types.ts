@@ -1,4 +1,4 @@
-import type { Address, Hex } from "viem";
+import type { Address } from "viem";
 
 /**
  * Per-account inputs needed to evaluate `mmRequired(P)` and `imRequired(P)`
@@ -7,7 +7,7 @@ import type { Address, Hex } from "viem";
  *
  * Shapes deliberately mirror the on-chain getters:
  *   - perps: `getUserPosition` + `getOrderMargin` + `getPendingFunding`
- *   - futures: `getPositionIds`/`getPositionById` + `getFuturesOrderMargin`
+ *   - futures: `getActiveExpirationDates`/`getUserPosition` + `getOrderMargin`
  *
  * Bigints throughout because PME math is performed in token-decimal units
  * (typically USDC = 6 decimals) with intermediate WAD scaling. JS numbers
@@ -31,27 +31,20 @@ export interface AccountSnapshot {
   };
 
   /**
-   * One entry per active futures position. Each contract is a single unit that
-   * settles `pricePerDay` of notional (no duration multiplier); PnL accrues
-   * `(P_perDay - entryPricePerDay)` from the holder's perspective (`+` for
-   * buyers, `−` for sellers).
+   * One entry per active futures expiry. Unilateral aggregate per
+   * `(user, expirationAt)`: signed `netQuantity` (whole contracts) +
+   * `netEntryValue` (token decimals) so unrealized PnL is
+   * `P * netQuantity - netEntryValue`.
    */
   futures: {
     positions: Array<{
-      id: Hex;
-      isBuyer: boolean;
-      /** Token decimals. */
-      entryPricePerDay: bigint;
-      /**
-       * Expiration timestamp (unix seconds) this lot delivers at. Lots sharing
-       * a `deliveryAt` are the same market/order-book; the liquidation solver
-       * groups on it to balance closures across expirations rather than
-       * draining one expiry's book. It does NOT affect PnL/margin math — every
-       * lot contributes a single unit.
-       */
-      deliveryAt: bigint;
+      expirationAt: bigint;
+      /** Signed whole contracts (+long / −short). */
+      netQuantity: bigint;
+      /** Token decimals; `sum(fillPrice * signedFillQty)`. */
+      netEntryValue: bigint;
     }>;
-    /** Constant in P: `getFuturesOrderMargin(user)`. */
+    /** Constant in P: `getOrderMargin(user)`. */
     orderMargin: bigint;
   };
 }
@@ -96,4 +89,11 @@ export interface AlertThresholds {
   warnUp: bigint | undefined;
   critDown: bigint | undefined;
   critUp: bigint | undefined;
+}
+
+/** One expiry leg of a futures close-to-IM batch. */
+export interface FuturesCloseLeg {
+  expirationAt: bigint;
+  /** Absolute contracts to close toward zero (≤ |netQuantity|). */
+  closeQty: bigint;
 }

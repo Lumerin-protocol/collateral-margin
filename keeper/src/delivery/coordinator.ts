@@ -2,7 +2,7 @@ import {
   BaseError,
   ContractFunctionRevertedError,
   encodeFunctionData,
-  zeroAddress,
+  getAddress,
   type Address,
   type Hex,
   type Log,
@@ -16,79 +16,33 @@ import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
 import { formatGasCost } from "../tx/gasCost.ts";
 
 /**
- * Optional keeper module that calls `Futures.settlePosition(positionId)` on
- * every active futures position the moment its `deliveryAt` (maturity) is
- * reached. Settlement marks the entire position to the expiration's pinned
- * settlement price (recorded once per `deliveryAt` from the oracle; the first
- * settle lazily pins it) and cash-settles PnL through the insurance fund —
- * there is no physical hashrate delivery, escrow, breach penalty, or validator
- * involvement. Pinning the price per expiration makes settlement deterministic:
- * every position at a `deliveryAt` settles at the same price no matter when its
- * tx lands.
+ * Optional keeper module that calls `Futures.settlePosition(user, expirationAt)`
+ * on every active futures aggregate the moment its `expirationAt` (maturity) is
+ * reached. Settlement pins the expiry price (lazily on first settle) and
+ * cash-settles that user's unilateral PnL through the insurance fund.
  *
- * Authorization: `settlePosition` is permissionless — any address may settle
- * any matured position. The keeper needs no special role; its signer only has
- * to hold enough gas to broadcast. (Contrast the retired validator-gated
- * `closeDelivery`, which required `_msgSender() == validatorAddress` or a
- * position participant.) Because settlement has no upper time bound, a matured
- * position can always be settled later — there are no permanently stuck lots.
+ * Authorization: `settlePosition` is permissionless.
  *
  * Hot path is event-driven:
  *
- *   LotCreated  ─▶  schedule one-shot timer at deliveryAt + settleDelay
- *   LotClosed   ─▶  cancel the timer + drop from index
- *   timer fires      ─▶  settle(lotId)
+ *   OrderMatched     ─▶  re-index maker + taker active expiries
+ *   PositionSettled  ─▶  drop that (user, expirationAt) from the index
+ *   timer fires      ─▶  settle matured tracked aggregates
  *
- * Cold-start safety net (two redundant paths — either alone is sufficient):
+ * Cold-start safety net:
  *
- *   bootstrapFromUsers(addrs) ─▶ for each address, read `getPositionIds(user)`
- *                                and `getPositionById(id)` via multicall, then
- *                                index whatever positions are still alive
- *                                on-chain. View-only — works on any RPC,
- *                                including providers that rate-limit
- *                                `eth_getLogs` (Alchemy free tier caps at
- *                                10 blocks, which makes log backfill
- *                                impractical for any non-trivial range).
- *                                This is the recommended primary path and
- *                                is wired automatically in `index.ts` from
- *                                `tracker.onAdded` and once at boot from
- *                                `tracker.list()`.
- *   backfill(fromBlock)       ─▶ replay LotCreated/LotClosed in
- *                                chunks. Discovers positions even for
- *                                participants the tracker doesn't know
- *                                about, but breaks on rate-limited
- *                                providers — keep `BACKFILL_FROM_BLOCK`
- *                                small or unset on Alchemy free.
- *   sweep()                   ─▶ every `sweepIntervalMs`, scan tracked
- *                                positions for any in
- *                                `[deliveryAt, deliveryAt + duration]` that
- *                                haven't been settled — covers dropped
- *                                events, timer drift, post-restart recovery,
- *                                and oracle-staleness retries.
- *
- * Single source of truth for "is this position alive": the contract emits
- * `LotClosed` at the end of every `_removePosition`, including the
- * cash-settlement path inside `settlePosition` itself. The module never has
- * to track its own settled-set across restarts — once settled, the contract
- * removes the position and `getPositionById(id).seller == 0` permanently.
+ *   bootstrapFromUsers(addrs) ─▶ getActiveExpirationDates + getUserPosition
+ *   backfill(fromBlock)       ─▶ replay OrderMatched / PositionSettled
+ *   sweep()                   ─▶ periodic settle of past-due tracked rows
  */
 export class DeliveryCoordinator {
-  /** Active positions known to the module: lotId → metadata. */
-  private readonly tracked = new Map<Hex, TrackedPosition>();
-  /** One-shot timers keyed by positionId. Cleared on settle / close / stop. */
-  private readonly timers = new Map<Hex, NodeJS.Timeout>();
-  /** Set of positions with an in-flight `settle()` — coalesces duplicate triggers. */
-  private readonly inflight = new Set<Hex>();
-  /**
-   * Serialized broadcast chain: every `attemptSettle` awaits the previous
-   * one before sending its own tx. The keeper has a single signer, so two
-   * concurrent `writeContract` calls would race on the same nonce and one
-   * would revert. Sweeps fire many candidates in parallel (e.g. multiple
-   * positions sharing one `deliveryAt`); without this, the second-onward
-   * txs would be rejected by the node.
-   */
+  /** Active aggregates: trackKey → metadata. */
+  private readonly tracked = new Map<string, TrackedPosition>();
+  /** One-shot timers keyed by trackKey. */
+  private readonly timers = new Map<string, NodeJS.Timeout>();
+  /** In-flight settles — coalesces duplicate triggers. */
+  private readonly inflight = new Set<string>();
   private txChain: Promise<void> = Promise.resolve();
-  /** Disposers returned by `watchContractEvent`. */
   private unwatchers: Array<() => void> = [];
   private sweepTimer: NodeJS.Timeout | undefined;
   private running = false;
@@ -107,20 +61,9 @@ export class DeliveryCoordinator {
     this.chain = chain;
     this.config = config;
     this.logger = logger.child({ component: "deliveryCoordinator" });
-    // Optional — see FuturesVenue for the rationale. Used only to enrich
-    // the two confirmed-tx logs (batched `multicall` and single
-    // `settlePosition`) with a `gasCostUsd` field.
     this.ethUsdFeed = ethUsdFeed;
   }
 
-  /**
-   * Subscribes to `LotCreated` / `LotClosed`, primes the duration
-   * cache, and starts the periodic safety-net sweep. Idempotent.
-   *
-   * Backfill is the caller's responsibility (via `backfill(fromBlock)`) so
-   * the runtime can sequence it after live subscriptions are wired — same
-   * pattern as `ParticipantTracker`.
-   */
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
@@ -134,14 +77,14 @@ export class DeliveryCoordinator {
       this.chain.publicClient.watchContractEvent({
         address: this.config.futures.address,
         abi: FuturesAbi,
-        eventName: "LotCreated",
-        onLogs: (logs) => this.onLotCreated(logs),
+        eventName: "OrderMatched",
+        onLogs: (logs) => this.onOrderMatched(logs),
       }),
       this.chain.publicClient.watchContractEvent({
         address: this.config.futures.address,
         abi: FuturesAbi,
-        eventName: "LotClosed",
-        onLogs: (logs) => this.onLotClosed(logs),
+        eventName: "PositionSettled",
+        onLogs: (logs) => this.onPositionSettled(logs),
       }),
     );
 
@@ -150,7 +93,6 @@ export class DeliveryCoordinator {
     }, this.config.delivery.sweepIntervalMs);
   }
 
-  /** Tears down all subscriptions, timers, and the sweep loop. Idempotent. */
   stop(): void {
     if (!this.running) return;
     this.running = false;
@@ -176,14 +118,8 @@ export class DeliveryCoordinator {
   }
 
   /**
-   * Replay `LotCreated` and `LotClosed` in `[fromBlock, head]` so
-   * the in-memory index reflects every position the contract still considers
-   * active. Closed positions cancel their `created` entry as the same scan
-   * runs in chronological order — no second pass needed.
-   *
-   * After backfill, kicks one immediate sweep so any positions whose
-   * `deliveryAt` has already passed get settled without waiting for the
-   * sweep timer's first tick.
+   * Replay `OrderMatched` / `PositionSettled` in `[fromBlock, head]`.
+   * Matched events re-index users; settled events drop track keys.
    */
   async backfill(fromBlock: bigint, chunkSize: bigint): Promise<void> {
     if (chunkSize <= 0n) {
@@ -209,31 +145,28 @@ export class DeliveryCoordinator {
       "delivery backfill: starting",
     );
 
-    // Single scan over both events per chunk so creates and closes interleave
-    // in block order — a position created and then closed in the same chunk
-    // never lingers in `tracked` after the chunk drains.
     let chunkErrors = 0;
     for (let start = fromBlock; start <= head; start += chunkSize) {
       const end = start + chunkSize - 1n > head ? head : start + chunkSize - 1n;
       try {
-        const [created, closed] = await Promise.all([
+        const [matched, settled] = await Promise.all([
           this.chain.publicClient.getContractEvents({
             address: this.config.futures.address,
             abi: FuturesAbi,
-            eventName: "LotCreated",
+            eventName: "OrderMatched",
             fromBlock: start,
             toBlock: end,
           }),
           this.chain.publicClient.getContractEvents({
             address: this.config.futures.address,
             abi: FuturesAbi,
-            eventName: "LotClosed",
+            eventName: "PositionSettled",
             fromBlock: start,
             toBlock: end,
           }),
         ]);
-        this.onLotCreated(created as unknown as readonly Log[]);
-        this.onLotClosed(closed as unknown as readonly Log[]);
+        this.onOrderMatched(matched as unknown as readonly Log[]);
+        this.onPositionSettled(settled as unknown as readonly Log[]);
       } catch (err) {
         chunkErrors++;
         this.logger.error(
@@ -252,22 +185,8 @@ export class DeliveryCoordinator {
   }
 
   /**
-   * View-based discovery: read every still-alive futures position belonging
-   * to `users` and index them. Trailing `sweep()` settles anything past
-   * `deliveryAt`. Robust against `eth_getLogs` rate-limit caps because it
-   * never scans logs.
-   *
-   * Wired in `index.ts` from
-   *   - `tracker.onAdded` (per-user, on every newly-discovered participant)
-   *   - the boot sequence's `tracker.list()` (one batched pass after
-   *     `tracker.backfill` finishes)
-   * so any participant the tracker eventually discovers — by webhook, live
-   * event, or backfill — also has their futures positions indexed.
-   *
-   * Two-stage multicall to keep the contract surface narrow: stage 1 reads
-   * `getPositionIds(user)` for every user, stage 2 hydrates each id via
-   * `getPositionById`. Closed positions (returned with `seller == address(0)`
-   * by the `delete positions[id]` in `_removePosition`) are filtered out.
+   * View-based discovery: read every still-alive futures aggregate belonging
+   * to `users` and index them.
    */
   async bootstrapFromUsers(users: readonly Address[]): Promise<void> {
     if (users.length === 0) {
@@ -278,52 +197,16 @@ export class DeliveryCoordinator {
       return;
     }
 
-    const positionIdLists = (await this.chain.publicClient.multicall({
-      contracts: users.map((u) => ({
-        address: this.config.futures.address,
-        abi: FuturesAbi,
-        functionName: "getPositionIds" as const,
-        args: [u] as const,
-      })),
-      allowFailure: false,
-    })) as readonly (readonly Hex[])[];
-
-    // `getPositionIds(user)` returns positions where the user is EITHER
-    // buyer OR seller, so a single position with both participants
-    // tracked (typical) shows up twice across the per-user calls. Dedup
-    // so the operator-facing counter reflects distinct positions, not
-    // raw entries — operators kept asking "why does positionsOnChain not
-    // match tracked.size?" because they never see the same id twice on
-    // a block explorer.
-    const uniqueOnChain = new Set<Hex>();
-    const allIds: Hex[] = [];
-    for (const ids of positionIdLists) {
-      for (const id of ids) {
-        uniqueOnChain.add(id);
-        if (this.tracked.has(id)) continue;
-        allIds.push(id);
-      }
-    }
-
     let indexed = 0;
-    if (allIds.length > 0) {
-      indexed = await this.indexPositions(allIds);
+    for (const user of users) {
+      indexed += await this.indexUserPositionsInternal(user);
     }
 
-    // Operator-readable summary regardless of whether anything new was
-    // indexed. The "total" / "pastDue" / "nextDueAt" tuple is the answer
-    // to "is the delivery keeper actually doing anything?":
-    //   - total=0          → wallet has nothing to settle (healthy idle)
-    //   - pastDue>0        → next sweep tick attempts a multicall
-    //   - pastDue=0 + ETA  → keeper is correctly waiting for the timer
-    //                        at `nextDueAt` (no bug — settlement isn't
-    //                        valid before deliveryAt on-chain)
     const pastDue = this.countPastDuePositions();
-    const nextDueAt = this.findEarliestDeliveryAt();
+    const nextDueAt = this.findEarliestExpirationAt();
     this.logger.info(
       {
         users: users.length,
-        uniquePositionsOnChain: uniqueOnChain.size,
         indexed,
         total: this.tracked.size,
         pastDue,
@@ -338,62 +221,28 @@ export class DeliveryCoordinator {
     await this.sweep();
   }
 
-  /** Count tracked positions whose deliveryAt is at or before chain head. */
   private countPastDuePositions(): number {
-    // Approximate using wall-clock — within a block of chain time on
-    // any production network, accurate enough for an operator-facing
-    // summary. The actual sweep uses `block.timestamp` for correctness.
     const nowSec = BigInt(Math.floor(Date.now() / 1000));
     let n = 0;
     for (const pos of this.tracked.values()) {
-      if (nowSec >= pos.deliveryAt) n++;
+      if (nowSec >= pos.expirationAt) n++;
     }
     return n;
   }
 
-  /**
-   * Earliest `deliveryAt` across all tracked positions. Returned to the
-   * boot summary as "the next time the keeper expects to do work" so an
-   * operator can sanity-check "all 5 positions are due in 3 days, that's
-   * why nothing's happening" without having to hop to a block explorer.
-   * `undefined` when there are no tracked positions.
-   */
-  private findEarliestDeliveryAt(): bigint | undefined {
+  private findEarliestExpirationAt(): bigint | undefined {
     let earliest: bigint | undefined;
     for (const pos of this.tracked.values()) {
-      if (earliest === undefined || pos.deliveryAt < earliest)
-        earliest = pos.deliveryAt;
+      if (earliest === undefined || pos.expirationAt < earliest)
+        earliest = pos.expirationAt;
     }
     return earliest;
   }
 
-  /**
-   * Single-user variant of `bootstrapFromUsers` — exposed separately so
-   * `tracker.onAdded` can wire it without paying the multicall overhead
-   * for one user. Errors are caught and logged: the listener path must
-   * never throw into the tracker.
-   */
+  /** Single-user index — wired from `tracker.onAdded`. Never throws. */
   async indexUserPositions(user: Address): Promise<void> {
-    let ids: readonly Hex[];
     try {
-      ids = (await this.chain.publicClient.readContract({
-        address: this.config.futures.address,
-        abi: FuturesAbi,
-        functionName: "getPositionIds",
-        args: [user],
-      })) as readonly Hex[];
-    } catch (err) {
-      this.logger.error({ err, user }, "delivery: getPositionIds failed");
-      return;
-    }
-    const fresh = ids.filter((id) => !this.tracked.has(id));
-    if (fresh.length === 0) return;
-    try {
-      const indexed = await this.indexPositions(fresh);
-      // INFO (not debug): operator-visible signal that the keeper
-      // discovered a user's futures and is now responsible for settling
-      // them. If you ever wonder "did the keeper see my new account?"
-      // this is the line you grep for.
+      const indexed = await this.indexUserPositionsInternal(user);
       if (indexed > 0) {
         this.logger.info(
           { user, indexed, total: this.tracked.size },
@@ -401,107 +250,94 @@ export class DeliveryCoordinator {
         );
       }
     } catch (err) {
-      this.logger.error({ err, user }, "delivery: indexPositions failed");
+      this.logger.error({ err, user }, "delivery: indexUserPositions failed");
     }
   }
 
-  /**
-   * Internal: hydrate `ids` via multicalled `getPositionById` and upsert
-   * the live ones (`seller != 0`) into the tracked map plus a per-position
-   * timer. Returns the number of newly-indexed positions.
-   */
-  private async indexPositions(ids: readonly Hex[]): Promise<number> {
-    const positions = (await this.chain.publicClient.multicall({
-      contracts: ids.map((id) => ({
+  private async indexUserPositionsInternal(user: Address): Promise<number> {
+    let expirationAts: readonly bigint[];
+    try {
+      expirationAts = (await this.chain.publicClient.readContract({
         address: this.config.futures.address,
         abi: FuturesAbi,
-        functionName: "getPositionById" as const,
-        args: [id] as const,
+        functionName: "getActiveExpirationDates",
+        args: [user],
+      })) as readonly bigint[];
+    } catch (err) {
+      this.logger.error({ err, user }, "delivery: getActiveExpirationDates failed");
+      return 0;
+    }
+    if (expirationAts.length === 0) return 0;
+
+    const positions = (await this.chain.publicClient.multicall({
+      contracts: expirationAts.map((expirationAt) => ({
+        address: this.config.futures.address,
+        abi: FuturesAbi,
+        functionName: "getUserPosition" as const,
+        args: [user, expirationAt] as const,
       })),
       allowFailure: false,
-    })) as readonly {
-      seller: Address;
-      buyer: Address;
-      deliveryAt: bigint;
-    }[];
+    })) as readonly { netQuantity: bigint; netEntryValue: bigint }[];
 
     let added = 0;
-    for (let i = 0; i < ids.length; i++) {
-      const id = ids[i] as Hex;
-      const pos = positions[i] as {
-        seller: Address;
-        buyer: Address;
-        deliveryAt: bigint;
-      };
-      // `_removePosition` deletes the slot — `seller == 0` means already
-      // closed/settled. Skip without touching state.
-      if (pos.seller === zeroAddress) continue;
-      if (this.tracked.has(id)) continue;
-      const tracked: TrackedPosition = {
-        positionId: id,
-        deliveryAt: pos.deliveryAt,
-        seller: pos.seller,
-        buyer: pos.buyer,
-      };
-      this.tracked.set(id, tracked);
-      this.scheduleTimer(tracked);
-      added++;
+    for (let i = 0; i < expirationAts.length; i++) {
+      const expirationAt = expirationAts[i]!;
+      const pos = positions[i];
+      if (pos === undefined || pos.netQuantity === 0n) continue;
+      if (this.upsertTracked(user, expirationAt)) added++;
     }
     return added;
   }
 
-  /**
-   * Scan all tracked positions; settle any whose `deliveryAt` (maturity) is
-   * past. Skips positions with an in-flight settle to avoid duplicate sends.
-   * Public for tests.
-   *
-   * Uses the chain's latest `block.timestamp` rather than `Date.now()` so the
-   * sweep agrees with the contract's maturity check (`block.timestamp >=
-   * deliveryAt`). `settlePosition` has no upper time bound, so there is no
-   * "window expired" case — a matured position stays settleable indefinitely.
-   * On hardhat with `evm_setNextBlockTimestamp`, chain time and wall-clock can
-   * diverge by years; in production they're within one block of each other so
-   * this read is essentially free.
-   */
+  /** Insert or refresh a tracked aggregate. Returns true if newly added. */
+  private upsertTracked(user: Address, expirationAt: bigint): boolean {
+    const key = trackKey(user, expirationAt);
+    if (this.tracked.has(key)) return false;
+    const tracked: TrackedPosition = {
+      user: getAddress(user),
+      expirationAt,
+    };
+    this.tracked.set(key, tracked);
+    this.scheduleTimer(tracked);
+    return true;
+  }
+
+  private dropTracked(user: Address, expirationAt: bigint): void {
+    const key = trackKey(user, expirationAt);
+    this.tracked.delete(key);
+    const t = this.timers.get(key);
+    if (t !== undefined) {
+      clearTimeout(t);
+      this.timers.delete(key);
+    }
+  }
+
   async sweep(): Promise<void> {
     const latestBlock = await this.chain.publicClient.getBlock();
     const nowSec = latestBlock.timestamp;
     const candidates: TrackedPosition[] = [];
 
     for (const pos of this.tracked.values()) {
-      if (this.inflight.has(pos.positionId)) continue;
-      if (nowSec < pos.deliveryAt) continue;
+      if (this.inflight.has(trackKey(pos.user, pos.expirationAt))) continue;
+      if (nowSec < pos.expirationAt) continue;
       candidates.push(pos);
     }
 
     if (candidates.length === 0) {
-      // Visibility for "the sweep ran but found nothing" — at debug so
-      // a healthy idle keeper isn't noisy in tails. Tracked-but-not-yet-
-      // due counts in the message let an operator confirm the index is
-      // populated even when no work is pending.
       this.logger.debug(
         { tracked: this.tracked.size, pendingFuture: this.tracked.size },
         "delivery sweep: nothing past-due",
       );
       return;
     }
-    // INFO so an active sweep is visible in default-config tails. Sweeps
-    // are bursty (most ticks find nothing, occasional ticks settle a
-    // batch) so this won't flood logs.
     this.logger.info(
       { candidates: candidates.length, tracked: this.tracked.size },
       "delivery sweep: settling",
     );
-    // Batch via `Futures.multicall(bytes[])` (OZ MulticallUpgradeable) so
-    // every settlement in this sweep tick rides one transaction → one
-    // nonce → no `replacement transaction underpriced` race against
-    // concurrent manual sends or stale pending txs from a previous run.
-    // We cap batch size to keep gas usage bounded; large sweeps spread
-    // across multiple batches, each its own serial txChain entry.
-    const ids = candidates.map((c) => c.positionId);
+
     const max = Math.max(1, this.config.delivery.maxBatchSize);
-    for (let i = 0; i < ids.length; i += max) {
-      const slice = ids.slice(i, i + max);
+    for (let i = 0; i < candidates.length; i += max) {
+      const slice = candidates.slice(i, i + max);
       try {
         await this.settleBatch(slice);
       } catch (err) {
@@ -513,54 +349,26 @@ export class DeliveryCoordinator {
     }
   }
 
-  /** Public for tests. Number of positions currently scheduled for settlement. */
   size(): number {
     return this.tracked.size;
   }
 
-  /** Public for tests. Whether `positionId` is currently scheduled. */
-  has(positionId: Hex): boolean {
-    return this.tracked.has(positionId);
+  /** Public for tests. */
+  has(user: Address, expirationAt: bigint): boolean {
+    return this.tracked.has(trackKey(user, expirationAt));
   }
 
-  /**
-   * Public for tests. Settles a single position via the batch path
-   * (`settleBatch([id])`). Kept for tests and as a stable single-id entry
-   * point — the actual broadcast still goes through `Futures.multicall`
-   * with one entry, so the nonce / serialization model is identical to
-   * multi-id sweeps.
-   */
-  async settle(positionId: Hex): Promise<void> {
-    await this.settleBatch([positionId]);
+  async settle(user: Address, expirationAt: bigint): Promise<void> {
+    await this.settleBatch([{ user: getAddress(user), expirationAt }]);
   }
 
-  /**
-   * Bundles up to `maxBatchSize` `settlePosition` calls into a single
-   * `Futures.multicall(bytes[])` transaction. OZ `MulticallUpgradeable`
-   * uses `delegatecall` per entry, so `msg.sender` is preserved — though
-   * `settlePosition` is permissionless, so no auth depends on the sender.
-   *
-   * Two-phase to keep one bad apple from spoiling the batch:
-   *   1. Per-id `simulateContract` in parallel — drops candidates that
-   *      would revert (already-settled, not yet matured, oracle stale, etc).
-   *      Each revert is reported through the same severity taxonomy as
-   *      individual settles.
-   *   2. One `multicall` write tx for the survivors. If the *write*
-   *      reverts (rare — simulate-then-write race), we fall back to
-   *      per-id `attemptSettle` so a single newly-poisoned id can't
-   *      block the whole sweep tick.
-   *
-   * Serialized through `txChain` so two batches (e.g. two slices of a
-   * sweep larger than `maxBatchSize`) ride sequential nonces. Per-id
-   * `inflight` set still applies so a slow batch can't be re-queued
-   * concurrently from a timer fire mid-sweep.
-   */
-  async settleBatch(positionIds: readonly Hex[]): Promise<void> {
-    const fresh: Hex[] = [];
-    for (const id of positionIds) {
-      if (this.inflight.has(id)) continue;
-      fresh.push(id);
-      this.inflight.add(id);
+  async settleBatch(positions: readonly TrackedPosition[]): Promise<void> {
+    const fresh: TrackedPosition[] = [];
+    for (const pos of positions) {
+      const key = trackKey(pos.user, pos.expirationAt);
+      if (this.inflight.has(key)) continue;
+      fresh.push({ user: getAddress(pos.user), expirationAt: pos.expirationAt });
+      this.inflight.add(key);
     }
     if (fresh.length === 0) return;
     const next = this.txChain.then(() => this.attemptBatch(fresh));
@@ -568,62 +376,53 @@ export class DeliveryCoordinator {
     try {
       await next;
     } finally {
-      for (const id of fresh) this.inflight.delete(id);
+      for (const pos of fresh) {
+        this.inflight.delete(trackKey(pos.user, pos.expirationAt));
+      }
     }
   }
 
-  /**
-   * Phase 1: simulate every candidate, classify outcomes, build the
-   * settleable subset. Phase 2: one batched write or fall through to
-   * per-id retries if the batch tx itself fails.
-   */
-  private async attemptBatch(positionIds: readonly Hex[]): Promise<void> {
+  private async attemptBatch(positions: readonly TrackedPosition[]): Promise<void> {
     type SimParams = Parameters<
       typeof this.chain.publicClient.simulateContract
     >[0];
     const simResults = await Promise.allSettled(
-      positionIds.map((id) =>
+      positions.map((pos) =>
         this.chain.publicClient.simulateContract({
           address: this.config.futures.address,
           abi: FuturesAbi,
           functionName: "settlePosition",
-          args: [id],
+          args: [pos.user, pos.expirationAt],
           account: this.chain.account,
         } as unknown as SimParams),
       ),
     );
 
-    const settleable: Hex[] = [];
-    for (let i = 0; i < positionIds.length; i++) {
-      const id = positionIds[i] as Hex;
+    const settleable: TrackedPosition[] = [];
+    for (let i = 0; i < positions.length; i++) {
+      const pos = positions[i]!;
       const r = simResults[i] as PromiseSettledResult<unknown>;
       if (r.status === "fulfilled") {
-        settleable.push(id);
+        settleable.push(pos);
         continue;
       }
       const decoded = decodeRecoverableRevert(r.reason);
       if (decoded !== undefined) {
-        this.logRecoverableRevert(decoded, id);
+        this.logRecoverableRevert(decoded, pos);
         if (decoded === "PositionNotExists") {
-          this.tracked.delete(id);
-          const t = this.timers.get(id);
-          if (t !== undefined) {
-            clearTimeout(t);
-            this.timers.delete(id);
-          }
+          this.dropTracked(pos.user, pos.expirationAt);
         }
         continue;
       }
-      // Unknown revert — log error but don't kill the rest of the batch.
       this.logger.error(
-        { err: r.reason, positionId: id },
+        { err: r.reason, user: pos.user, expirationAt: pos.expirationAt.toString() },
         "delivery: simulate failed with non-recoverable error — skipping from batch",
       );
     }
 
     if (settleable.length === 0) {
       this.logger.debug(
-        { batchSize: positionIds.length },
+        { batchSize: positions.length },
         "delivery batch: nothing to broadcast after simulate filter",
       );
       return;
@@ -634,30 +433,25 @@ export class DeliveryCoordinator {
         { batchSize: settleable.length },
         "[dryRun] would call Futures.multicall(settlePosition × N)",
       );
-      for (const id of settleable) this.tracked.delete(id);
+      for (const pos of settleable) this.dropTracked(pos.user, pos.expirationAt);
       return;
     }
 
-    // Encode each settlePosition into bytes for OZ multicall(bytes[]).
-    // Encoding can only fail on a malformed positionId (e.g. wrong
-    // bytes32 width from a corrupted RPC read). We isolate that
-    // per-position rather than letting one bad id swallow the whole
-    // batch — same "one bad apple" guarantee we extend through simulate.
     const calldatas: Hex[] = [];
-    const encodableIds: Hex[] = [];
-    for (const id of settleable) {
+    const encodable: TrackedPosition[] = [];
+    for (const pos of settleable) {
       try {
         const data = encodeFunctionData({
           abi: FuturesAbi,
           functionName: "settlePosition",
-          args: [id],
+          args: [pos.user, pos.expirationAt],
         });
         calldatas.push(data);
-        encodableIds.push(id);
+        encodable.push(pos);
       } catch (err) {
         this.logger.error(
-          { err, positionId: id },
-          "delivery: encodeFunctionData threw — dropping malformed id from batch",
+          { err, user: pos.user, expirationAt: pos.expirationAt.toString() },
+          "delivery: encodeFunctionData threw — dropping malformed entry from batch",
         );
       }
     }
@@ -668,13 +462,6 @@ export class DeliveryCoordinator {
     >[0];
     let hash: Hex;
     try {
-      // `withUnstickRetry` is the auto-recovery for the most common
-      // tx-submission failure on this signer: a stuck pending tx from
-      // a previous keeper run (or a previous attempt that timed out
-      // mid-broadcast). On `replacement transaction underpriced` it
-      // walks the wallet's pending nonces, evicts each with a 0-value
-      // self-transfer at 3× current gas, then retries our multicall
-      // exactly once. Anything still wrong on retry surfaces normally.
       hash = await withUnstickRetry(this.chain, this.logger, () =>
         this.chain.walletClient.writeContract({
           address: this.config.futures.address,
@@ -686,11 +473,6 @@ export class DeliveryCoordinator {
         } as unknown as WriteParams),
       );
     } catch (err) {
-      // Tx-submission failures (nonce races, replacement underpriced,
-      // mempool-full, transient RPC errors) are recoverable: the next
-      // sweep will retry. We do NOT want to crash the keeper here —
-      // unhandled rejection on a setTimeout-fired batch took the whole
-      // process down in production.
       if (isTransientTxError(err)) {
         this.logger.warn(
           { err, batchSize: settleable.length },
@@ -698,19 +480,16 @@ export class DeliveryCoordinator {
         );
         return;
       }
-      // Non-transient revert — could be one position turned bad between
-      // simulate and write (state moved). Fall back to per-id attempts
-      // so the others still settle on this sweep.
       this.logger.warn(
-        { err, batchSize: encodableIds.length },
+        { err, batchSize: encodable.length },
         "delivery batch: write reverted — falling back to per-position retries",
       );
-      for (const id of encodableIds) {
+      for (const pos of encodable) {
         try {
-          await this.attemptSettle(id);
+          await this.attemptSettle(pos);
         } catch (innerErr) {
           this.logger.error(
-            { err: innerErr, positionId: id },
+            { err: innerErr, user: pos.user, expirationAt: pos.expirationAt.toString() },
             "delivery: per-position fallback failed — leaving for next sweep",
           );
         }
@@ -726,24 +505,19 @@ export class DeliveryCoordinator {
       {
         hash,
         blockNumber: receipt.blockNumber.toString(),
-        batchSize: encodableIds.length,
+        batchSize: encodable.length,
         ...formatGasCost(receipt, this.ethUsdFeed),
       },
       "delivery batch: multicall confirmed",
     );
 
-    for (const id of encodableIds) {
-      this.tracked.delete(id);
-      const t = this.timers.get(id);
-      if (t !== undefined) {
-        clearTimeout(t);
-        this.timers.delete(id);
-      }
+    for (const pos of encodable) {
+      this.dropTracked(pos.user, pos.expirationAt);
     }
   }
 
-  private async attemptSettle(positionId: Hex): Promise<void> {
-    const args = [positionId] as const;
+  private async attemptSettle(pos: TrackedPosition): Promise<void> {
+    const args = [pos.user, pos.expirationAt] as const;
 
     type SimParams = Parameters<
       typeof this.chain.publicClient.simulateContract
@@ -764,16 +538,9 @@ export class DeliveryCoordinator {
     } catch (err) {
       const decoded = decodeRecoverableRevert(err);
       if (decoded !== undefined) {
-        this.logRecoverableRevert(decoded, positionId);
-        // PositionNotExists → contract no longer accepts settlement (already
-        // settled). Drop from the index so we don't keep retrying.
+        this.logRecoverableRevert(decoded, pos);
         if (decoded === "PositionNotExists") {
-          this.tracked.delete(positionId);
-          const t = this.timers.get(positionId);
-          if (t !== undefined) {
-            clearTimeout(t);
-            this.timers.delete(positionId);
-          }
+          this.dropTracked(pos.user, pos.expirationAt);
         }
         return;
       }
@@ -781,8 +548,11 @@ export class DeliveryCoordinator {
     }
 
     if (this.config.keeper.dryRun) {
-      this.logger.info({ positionId }, "[dryRun] would call settlePosition");
-      this.tracked.delete(positionId);
+      this.logger.info(
+        { user: pos.user, expirationAt: pos.expirationAt.toString() },
+        "[dryRun] would call settlePosition",
+      );
+      this.dropTracked(pos.user, pos.expirationAt);
       return;
     }
 
@@ -798,186 +568,120 @@ export class DeliveryCoordinator {
     });
     this.logger.info(
       {
-        positionId,
+        user: pos.user,
+        expirationAt: pos.expirationAt.toString(),
         hash,
         blockNumber: receipt.blockNumber.toString(),
         ...formatGasCost(receipt, this.ethUsdFeed),
       },
       "delivery: settlePosition confirmed",
     );
-    this.tracked.delete(positionId);
-    const t = this.timers.get(positionId);
-    if (t !== undefined) {
-      clearTimeout(t);
-      this.timers.delete(positionId);
-    }
+    this.dropTracked(pos.user, pos.expirationAt);
   }
 
-  // ── log handlers ─────────────────────────────────────────────────────────
-  // Mirror the live-and-backfill duality used by ParticipantTracker — the
-  // same handler is fed both `watchContractEvent` callbacks and historical
-  // `getContractEvents` results, so a future ABI rename surfaces here once.
-
-  private onLotCreated(logs: readonly Log[]): void {
+  private onOrderMatched(logs: readonly Log[]): void {
     type Args = {
-      lotId?: Hex;
-      seller?: Address;
-      buyer?: Address;
-      deliveryAt?: bigint;
+      maker?: Address;
+      taker?: Address;
+      expirationAt?: bigint;
+      makerNetQtyAfter?: bigint;
+      takerNetQtyAfter?: bigint;
     };
-    let added = 0;
+    const users = new Set<Address>();
     for (const raw of logs) {
       const args = (raw as unknown as { args?: Args }).args;
-      if (
-        args === undefined ||
-        args.lotId === undefined ||
-        args.deliveryAt === undefined ||
-        args.seller === undefined ||
-        args.buyer === undefined
-      ) {
-        continue;
+      if (args === undefined) continue;
+      // Fast path: if post-match qty is available, upsert/drop without RPC.
+      if (args.expirationAt !== undefined) {
+        if (args.maker !== undefined && args.makerNetQtyAfter !== undefined) {
+          if (args.makerNetQtyAfter === 0n) this.dropTracked(args.maker, args.expirationAt);
+          else this.upsertTracked(args.maker, args.expirationAt);
+        } else if (args.maker !== undefined) {
+          users.add(args.maker);
+        }
+        if (args.taker !== undefined && args.takerNetQtyAfter !== undefined) {
+          if (args.takerNetQtyAfter === 0n) this.dropTracked(args.taker, args.expirationAt);
+          else this.upsertTracked(args.taker, args.expirationAt);
+        } else if (args.taker !== undefined) {
+          users.add(args.taker);
+        }
+      } else {
+        if (args.maker !== undefined) users.add(args.maker);
+        if (args.taker !== undefined) users.add(args.taker);
       }
-      const lotId = args.lotId;
-      // Backfill can replay an event we already indexed (live watcher
-      // overlap). De-dupe on lotId so we don't double-schedule.
-      if (this.tracked.has(lotId)) continue;
-      const tracked: TrackedPosition = {
-        positionId: lotId,
-        deliveryAt: args.deliveryAt,
-        seller: args.seller,
-        buyer: args.buyer,
-      };
-      this.tracked.set(lotId, tracked);
-      this.scheduleTimer(tracked);
-      added++;
-      // INFO per *new* position so the operator sees live activity in
-      // real time. We log inside the loop (not after) so each id and
-      // its `deliveryAt` is searchable in tails — useful when chasing
-      // a specific position's lifecycle. Backfill replays go through
-      // the dedupe `continue` above and stay silent.
-      this.logger.info(
-        {
-          lotId,
-          seller: args.seller,
-          buyer: args.buyer,
-          deliveryAt: args.deliveryAt.toString(),
-          total: this.tracked.size,
-        },
-        "delivery: new position indexed from live event",
-      );
     }
-    if (added === 0) return;
-  }
-
-  private onLotClosed(logs: readonly Log[]): void {
-    type Args = { lotId?: Hex };
-    for (const raw of logs) {
-      const args = (raw as unknown as { args?: Args }).args;
-      if (args?.lotId === undefined) continue;
-      const lotId = args.lotId;
-      this.tracked.delete(lotId);
-      const t = this.timers.get(lotId);
-      if (t !== undefined) {
-        clearTimeout(t);
-        this.timers.delete(lotId);
-      }
+    for (const user of users) {
+      void this.indexUserPositions(user);
     }
   }
 
-  /**
-   * Differentiated logging for the recoverable-revert taxonomy. Two buckets:
-   *
-   *   info  — terminal but benign: the contract no longer accepts settlement
-   *           because someone else already settled it (`PositionNotExists`).
-   *           We drop and move on.
-   *   debug — transient, will retry on the next sweep with no operator action
-   *           needed (not yet matured, oracle stale, oracle invalid).
-   *
-   * Since `settlePosition` is permissionless and has no upper time bound, the
-   * old operator-paging cases (wrong validator key, expired settlement window)
-   * no longer exist — every revert here is either benign or self-healing.
-   */
-  private logRecoverableRevert(revert: RecoverableRevert, positionId: Hex): void {
+  private onPositionSettled(logs: readonly Log[]): void {
+    type Args = { user?: Address; expirationAt?: bigint };
+    for (const raw of logs) {
+      const args = (raw as unknown as { args?: Args }).args;
+      if (args?.user === undefined || args.expirationAt === undefined) continue;
+      this.dropTracked(args.user, args.expirationAt);
+    }
+  }
+
+  private logRecoverableRevert(revert: RecoverableRevert, pos: TrackedPosition): void {
     if (revert === "PositionNotExists") {
       this.logger.info(
-        { positionId, revert },
+        { user: pos.user, expirationAt: pos.expirationAt.toString(), revert },
         "delivery: position already settled by someone else — dropping from index",
       );
       return;
     }
-    // PositionDeliveryNotStartedYet, OracleStale, InvalidOracle — sweep retries.
     this.logger.debug(
-      { positionId, revert },
+      { user: pos.user, expirationAt: pos.expirationAt.toString(), revert },
       "delivery: settlePosition skipped (transient revert, will retry)",
     );
   }
 
-  /**
-   * Fire-and-forget timer at `deliveryAt + settleDelay`. If the time has
-   * already passed we still schedule a 0ms timer rather than calling
-   * `settle()` synchronously — keeps the log-handler hot path non-blocking
-   * and lets the periodic sweep idempotently retry on failure.
-   *
-   * `setTimeout` is bounded at ~24.8 days (int32 ms). Positions further out
-   * than that fall through to the periodic sweep — a daily-ish settlement
-   * cadence is far below that ceiling, so this only matters for synthetic
-   * test fixtures and far-future markets.
-   */
   private scheduleTimer(pos: TrackedPosition): void {
-    const existing = this.timers.get(pos.positionId);
+    const key = trackKey(pos.user, pos.expirationAt);
+    const existing = this.timers.get(key);
     if (existing !== undefined) clearTimeout(existing);
 
     const targetMs =
-      Number(pos.deliveryAt) * 1000 + this.config.delivery.settleDelayMs;
+      Number(pos.expirationAt) * 1000 + this.config.delivery.settleDelayMs;
     const delayMs = Math.max(0, targetMs - Date.now());
     if (delayMs > MAX_TIMEOUT_MS) {
-      // Out of `setTimeout`'s safe range — let the sweep handle it.
       return;
     }
-    // Kick a sweep rather than calling `settle` directly. When many
-    // positions share the same `deliveryAt` (typical for a single-trader
-    // book), all their timers fire on the same tick — routing through
-    // sweep coalesces them into one batched `Futures.multicall` tx
-    // instead of N serial single-id txs racing for the next nonce.
     const timer = setTimeout(() => {
       void this.sweep().catch((err) => {
         this.logger.error(
-          { err, positionId: pos.positionId },
+          { err, user: pos.user, expirationAt: pos.expirationAt.toString() },
           "delivery: timer-fired sweep threw",
         );
       });
     }, delayMs);
-    // Don't keep the event loop alive solely for delivery timers — the
-    // process should exit cleanly when other components shut down.
     if (typeof timer.unref === "function") timer.unref();
-    this.timers.set(pos.positionId, timer);
+    this.timers.set(key, timer);
   }
 }
 
-interface TrackedPosition {
-  positionId: Hex;
-  deliveryAt: bigint;
-  seller: Address;
-  buyer: Address;
+export function trackKey(user: Address, expirationAt: bigint): string {
+  return `${getAddress(user).toLowerCase()}:${expirationAt.toString()}`;
 }
 
-/** `setTimeout`'s int32 ms ceiling — values above are clamped silently to 1ms. */
+interface TrackedPosition {
+  user: Address;
+  expirationAt: bigint;
+}
+
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
-/** Reverts the module treats as "skip this attempt" rather than fatal. */
 type RecoverableRevert =
   | "PositionNotExists"
-  | "PositionDeliveryNotStartedYet"
-  // Hashprice oracle hasn't ticked within `MAX_ORACLE_STALENESS` (1h). The
-  // periodic sweep keeps the position queued; the next attempt succeeds as
-  // soon as the oracle posts a fresh round.
+  | "PositionExpirationNotStartedYet"
   | "OracleStale"
-  // Oracle returned a non-positive answer — same retry semantics.
   | "InvalidOracle";
 
 const RECOVERABLE_REVERTS = new Set<RecoverableRevert>([
   "PositionNotExists",
-  "PositionDeliveryNotStartedYet",
+  "PositionExpirationNotStartedYet",
   "OracleStale",
   "InvalidOracle",
 ]);
@@ -993,27 +697,6 @@ function decodeRecoverableRevert(err: unknown): RecoverableRevert | undefined {
     : undefined;
 }
 
-/**
- * Tx-submission errors that mean "the broadcast didn't take, try again
- * next sweep" rather than "the call would revert". We treat these as
- * recoverable so a transient mempool / nonce / RPC issue doesn't crash
- * the keeper via unhandled rejection on a setTimeout-fired path.
- *
- * Patterns we've actually seen in production logs (all `code: -32000`
- * from Alchemy / Geth-flavoured nodes):
- *   - "replacement transaction underpriced" — same nonce already in
- *     mempool (e.g. concurrent manual `cast send`, or stale tx from a
- *     previous keeper run)
- *   - "nonce too low" — node just reflected the previous tx, our cached
- *     nonce is stale
- *   - "already known" — same tx hash already pending
- *   - "transaction underpriced" — new tx below current minGasPrice
- *   - generic timeout / 5xx / network errors
- *
- * Match by message substring because viem flattens RPC errors into
- * `BaseError.shortMessage` / `details` and there's no stable code we can
- * key off of across providers.
- */
 function isTransientTxError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const haystack =
@@ -1026,7 +709,7 @@ function isTransientTxError(err: unknown): boolean {
     haystack.includes("nonce too low") ||
     haystack.includes("already known") ||
     haystack.includes("known transaction") ||
-    haystack.includes("could not coalesce") || // node-side mempool flap
+    haystack.includes("could not coalesce") ||
     haystack.includes("timeout") ||
     haystack.includes("econnreset") ||
     haystack.includes("etimedout") ||
@@ -1034,4 +717,4 @@ function isTransientTxError(err: unknown): boolean {
   );
 }
 
-export const __testing = { decodeRecoverableRevert, isTransientTxError };
+export const __testing = { decodeRecoverableRevert, isTransientTxError, trackKey };

@@ -1,4 +1,4 @@
-import type { Address, Hex } from "viem";
+import type { Address } from "viem";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
 import { CollateralVaultAbi } from "collateral-margin-abi/CollateralVault.ts";
@@ -56,9 +56,8 @@ export async function readMMParams(
  * function of price. Two RPC round-trips:
  *
  *   1. Bulk multicall: balance, perp position/orderMargin/funding,
- *      futures orderMargin/positionIds.
- *   2. Per-position multicall: hydrate each futures position so we know its
- *      `(buyer, buyPricePerDay, sellPricePerDay)` for off-chain PnL.
+ *      futures orderMargin/activeExpirationAts.
+ *   2. Per-expiry multicall: hydrate each aggregate via `getUserPosition`.
  *
  * Round-trip 2 collapses to zero calls when the user has no futures
  * positions (the common case for perps-only users).
@@ -74,7 +73,7 @@ export async function readAccountSnapshot(
     perpOrderMargin,
     perpFunding,
     futuresOrderMargin,
-    futuresPositionIds,
+    activeExpirationAts,
   ] = await chain.publicClient.multicall({
     contracts: [
       {
@@ -104,42 +103,40 @@ export async function readAccountSnapshot(
       {
         address: config.futures.address,
         abi: FuturesAbi,
-        functionName: "getFuturesOrderMargin" as const,
+        functionName: "getOrderMargin" as const,
         args: [user] as const,
       },
       {
         address: config.futures.address,
         abi: FuturesAbi,
-        functionName: "getPositionIds" as const,
+        functionName: "getActiveExpirationDates" as const,
         args: [user] as const,
       },
     ] as const,
     allowFailure: false,
   });
 
-  const positionIds = futuresPositionIds as readonly Hex[];
+  const expirationAts = activeExpirationAts as readonly bigint[];
   const futuresPositions: AccountSnapshot["futures"]["positions"] = [];
-  if (positionIds.length > 0) {
+  if (expirationAts.length > 0) {
     const positions = await chain.publicClient.multicall({
-      contracts: positionIds.map((id) => ({
+      contracts: expirationAts.map((expirationAt) => ({
         address: config.futures.address,
         abi: FuturesAbi,
-        functionName: "getPositionById" as const,
-        args: [id] as const,
+        functionName: "getUserPosition" as const,
+        args: [user, expirationAt] as const,
       })),
       allowFailure: false,
     });
-    const userLower = user.toLowerCase();
-    for (let i = 0; i < positionIds.length; i++) {
+    for (let i = 0; i < expirationAts.length; i++) {
       const pos = positions[i];
-      const id = positionIds[i];
-      if (pos === undefined || id === undefined) continue;
-      const isBuyer = pos.buyer.toLowerCase() === userLower;
+      const expirationAt = expirationAts[i];
+      if (pos === undefined || expirationAt === undefined) continue;
+      if (pos.netQuantity === 0n) continue;
       futuresPositions.push({
-        id,
-        isBuyer,
-        entryPricePerDay: isBuyer ? pos.buyPricePerDay : pos.sellPricePerDay,
-        deliveryAt: pos.deliveryAt,
+        expirationAt,
+        netQuantity: pos.netQuantity,
+        netEntryValue: pos.netEntryValue,
       });
     }
   }

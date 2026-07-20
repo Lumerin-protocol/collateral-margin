@@ -10,8 +10,9 @@ const PME = "0x000000000000000000000000000000000000aa02" as Address;
 const PERPS = "0x000000000000000000000000000000000000aa03" as Address;
 const FUTURES = "0x000000000000000000000000000000000000aa04" as Address;
 const USER = "0x1111111111111111111111111111111111111111" as Address;
-const BUYER_POS_ID = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const SELLER_POS_ID = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+const EXPIRY_A = 1_756_416_000n;
+const EXPIRY_B = 1_759_008_000n;
 
 function makeConfig(): Config {
   return {
@@ -22,18 +23,9 @@ function makeConfig(): Config {
   } as Config;
 }
 
-/**
- * Builds a chain stub with scripted multicall responses keyed on
- * `functionName` — same pattern as the coordinator harness, kept local so
- * each test reads as a self-contained record of the on-chain shape it
- * exercises.
- */
 function makeChain(scripted: {
-  futuresPositionIds?: readonly string[];
-  futuresPositions?: Record<
-    string,
-    { buyer: string; seller: string; buyPricePerDay: bigint; sellPricePerDay: bigint; deliveryAt: bigint }
-  >;
+  activeExpirationAts?: readonly bigint[];
+  futuresPositions?: Record<string, { netQuantity: bigint; netEntryValue: bigint }>;
   perpNetQty?: bigint;
   perpEntry?: bigint;
   perpOrderMargin?: bigint;
@@ -50,31 +42,33 @@ function makeChain(scripted: {
       multicall: async ({
         contracts,
       }: {
-        contracts: readonly { functionName: string; args?: readonly unknown[] }[];
+        contracts: readonly { functionName: string; args?: readonly unknown[]; address?: Address }[];
       }) => {
         return contracts.map((c) => {
           switch (c.functionName) {
             case "balanceOf":
               return scripted.balance ?? 0n;
-            case "getUserPosition":
+            case "getUserPosition": {
+              // Perps: getUserPosition(user). Futures: getUserPosition(user, expirationAt).
+              if ((c.args?.length ?? 0) >= 2) {
+                const expirationAt = c.args?.[1] as bigint;
+                const pos = scripted.futuresPositions?.[expirationAt.toString()];
+                if (pos === undefined) throw new Error(`unscripted futures position ${expirationAt}`);
+                return pos;
+              }
               return {
                 netQuantity: scripted.perpNetQty ?? 0n,
                 aggregatedEntryPrice: scripted.perpEntry ?? 0n,
               };
+            }
             case "getOrderMargin":
               return scripted.perpOrderMargin ?? 0n;
             case "getPendingFunding":
               return scripted.perpFunding ?? 0n;
-            case "getFuturesOrderMargin":
+            case "getOrderMargin":
               return scripted.futuresOrderMargin ?? 0n;
-            case "getPositionIds":
-              return scripted.futuresPositionIds ?? [];
-            case "getPositionById": {
-              const id = c.args?.[0] as string;
-              const pos = scripted.futuresPositions?.[id];
-              if (pos === undefined) throw new Error(`unscripted position ${id}`);
-              return pos;
-            }
+            case "getActiveExpirationDates":
+              return scripted.activeExpirationAts ?? [];
             case "imSpotShock":
               return scripted.imShock ?? 10n ** 17n;
             case "mmSpotShock":
@@ -125,35 +119,21 @@ describe("predict/snapshot: readAccountSnapshot", () => {
     assert.equal(snap.perp.fundingOwed, 1_000n);
   });
 
-  it("hydrates futures positions and assigns isBuyer based on the buyer field", async () => {
+  it("hydrates futures aggregates from active delivery dates", async () => {
     const chain = makeChain({
-      futuresPositionIds: [BUYER_POS_ID, SELLER_POS_ID],
+      activeExpirationAts: [EXPIRY_A, EXPIRY_B],
       futuresPositions: {
-        [BUYER_POS_ID]: {
-          buyer: USER,
-          seller: "0x000000000000000000000000000000000000feed",
-          buyPricePerDay: 50n,
-          sellPricePerDay: 51n,
-          deliveryAt: 1_756_416_000n,
-        },
-        [SELLER_POS_ID]: {
-          buyer: "0x000000000000000000000000000000000000feed",
-          seller: USER,
-          buyPricePerDay: 60n,
-          sellPricePerDay: 59n,
-          deliveryAt: 1_759_008_000n,
-        },
+        [EXPIRY_A.toString()]: { netQuantity: 1n, netEntryValue: 50n },
+        [EXPIRY_B.toString()]: { netQuantity: -2n, netEntryValue: -118n },
       },
     });
     const snap = await readAccountSnapshot(chain, makeConfig(), USER);
     assert.equal(snap.futures.positions.length, 2);
-    const buyer = snap.futures.positions.find((p) => p.id === BUYER_POS_ID);
-    const seller = snap.futures.positions.find((p) => p.id === SELLER_POS_ID);
-    assert.equal(buyer?.isBuyer, true);
-    assert.equal(buyer?.entryPricePerDay, 50n);
-    assert.equal(buyer?.deliveryAt, 1_756_416_000n);
-    assert.equal(seller?.isBuyer, false);
-    assert.equal(seller?.entryPricePerDay, 59n);
-    assert.equal(seller?.deliveryAt, 1_759_008_000n);
+    const long = snap.futures.positions.find((p) => p.expirationAt === EXPIRY_A);
+    const short = snap.futures.positions.find((p) => p.expirationAt === EXPIRY_B);
+    assert.equal(long?.netQuantity, 1n);
+    assert.equal(long?.netEntryValue, 50n);
+    assert.equal(short?.netQuantity, -2n);
+    assert.equal(short?.netEntryValue, -118n);
   });
 });

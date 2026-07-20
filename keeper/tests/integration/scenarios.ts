@@ -113,7 +113,7 @@ export interface FuturesLongFixture extends BaseFixture {
 /** Alice holds futures longs across multiple delivery dates. */
 export interface MultiFuturesFixture extends BaseFixture {
   aliceDeposit: bigint;
-  deliveryDates: readonly bigint[];
+  expirationAts: readonly bigint[];
   makeLiquidatable(): Promise<void>;
 }
 
@@ -155,7 +155,7 @@ export interface PerpsPartialCrashFixture extends BaseFixture {
 export interface MultiExpiryFuturesPartialCrashFixture extends BaseFixture {
   aliceDeposit: bigint;
   /** The two delivery dates Alice holds lots on. */
-  deliveryDates: readonly [bigint, bigint];
+  expirationAts: readonly [bigint, bigint];
   /** Lots per delivery date (equal split). */
   perExpiryQty: number;
   makeLiquidatable(): Promise<void>;
@@ -423,7 +423,7 @@ export function futuresLongCrashFixtureBuilder(rpcUrl: string) {
       buyer: base.accounts.alice,
       seller: base.accounts.bob,
       price: base.config.initialMarketPrice,
-      deliveryAt: base.config.futuresFirstDeliveryDate,
+      expirationAt: base.config.futuresFirstExpirationAt,
       quantity: aliceFuturesQty,
     });
 
@@ -461,7 +461,7 @@ export function futuresOrdersAndPositionFixtureBuilder(rpcUrl: string) {
       buyer: base.accounts.alice,
       seller: base.accounts.bob,
       price: base.config.initialMarketPrice,
-      deliveryAt: base.config.futuresFirstDeliveryDate,
+      expirationAt: base.config.futuresFirstExpirationAt,
       quantity: aliceFuturesQty,
     });
 
@@ -472,7 +472,7 @@ export function futuresOrdersAndPositionFixtureBuilder(rpcUrl: string) {
       base,
       base.accounts.alice,
       restingPrice,
-      base.config.futuresFirstDeliveryDate,
+      base.config.futuresFirstExpirationAt,
       1,
     );
 
@@ -497,19 +497,19 @@ export function multiFuturesFixtureBuilder(rpcUrl: string) {
     const base = await baseFixture(rpcUrl);
     const aliceDeposit = parseUnits("40", base.config.tokenDecimals);
     const bobDeposit = parseUnits("3000", base.config.tokenDecimals);
-    const firstDeliveryAt = base.config.futuresFirstDeliveryDate;
-    const secondDeliveryAt =
-      firstDeliveryAt + BigInt(7 * 24 * 3600); // matches `FUTURES_EXPIRATION_INTERVAL_DAYS`.
+    const firstExpirationAt = base.config.futuresFirstExpirationAt;
+    // Must match on-chain Futures.EXPIRATION_INTERVAL_DAYS (= 30).
+    const secondExpirationAt = firstExpirationAt + BigInt(30 * 24 * 3600);
 
     await base.deposit(base.accounts.alice.account.address, aliceDeposit);
     await base.deposit(base.accounts.bob.account.address, bobDeposit);
 
-    for (const deliveryAt of [firstDeliveryAt, secondDeliveryAt]) {
+    for (const expirationAt of [firstExpirationAt, secondExpirationAt]) {
       await matchFuturesTrade(base, {
         buyer: base.accounts.alice,
         seller: base.accounts.bob,
         price: base.config.initialMarketPrice,
-        deliveryAt,
+        expirationAt,
         quantity: 6,
       });
     }
@@ -517,7 +517,7 @@ export function multiFuturesFixtureBuilder(rpcUrl: string) {
     return {
       ...base,
       aliceDeposit,
-      deliveryDates: [firstDeliveryAt, secondDeliveryAt] as const,
+      expirationAts: [firstExpirationAt, secondExpirationAt] as const,
       makeLiquidatable: () =>
         base.crashOracles(parseUnits("0.01", base.config.tokenDecimals)),
     };
@@ -571,7 +571,7 @@ export function futuresPartialCrashFixtureBuilder(rpcUrl: string) {
       buyer: base.accounts.alice,
       seller: base.accounts.bob,
       price: entryMark,
-      deliveryAt: base.config.futuresFirstDeliveryDate,
+      expirationAt: base.config.futuresFirstExpirationAt,
       quantity: aliceFuturesQty,
     });
 
@@ -607,8 +607,8 @@ export function futuresMultiExpiryPartialCrashFixtureBuilder(rpcUrl: string) {
     const aliceDeposit = parseUnits("136", base.config.tokenDecimals);
     const bobDeposit = parseUnits("3000", base.config.tokenDecimals);
     const perExpiryQty = 6;
-    const firstDeliveryAt = base.config.futuresFirstDeliveryDate;
-    const secondDeliveryAt = firstDeliveryAt + BigInt(7 * 24 * 3600); // FUTURES_EXPIRATION_INTERVAL_DAYS
+    const firstExpirationAt = base.config.futuresFirstExpirationAt;
+    const secondExpirationAt = firstExpirationAt + BigInt(30 * 24 * 3600); // Futures.EXPIRATION_INTERVAL_DAYS
 
     // Zero the taker fee (see `futuresPartialCrashFixtureBuilder`) so the 12-lot
     // entry IM ($48) fits the $136 deposit; the liquidation fee still applies.
@@ -617,12 +617,12 @@ export function futuresMultiExpiryPartialCrashFixtureBuilder(rpcUrl: string) {
     await base.deposit(base.accounts.alice.account.address, aliceDeposit);
     await base.deposit(base.accounts.bob.account.address, bobDeposit);
 
-    for (const deliveryAt of [firstDeliveryAt, secondDeliveryAt]) {
+    for (const expirationAt of [firstExpirationAt, secondExpirationAt]) {
       await matchFuturesTrade(base, {
         buyer: base.accounts.alice,
         seller: base.accounts.bob,
         price: entryMark,
-        deliveryAt,
+        expirationAt,
         quantity: perExpiryQty,
       });
     }
@@ -630,7 +630,7 @@ export function futuresMultiExpiryPartialCrashFixtureBuilder(rpcUrl: string) {
     return {
       ...base,
       aliceDeposit,
-      deliveryDates: [firstDeliveryAt, secondDeliveryAt] as const,
+      expirationAts: [firstExpirationAt, secondExpirationAt] as const,
       perExpiryQty,
       makeLiquidatable: () => base.crashOracles(parseUnits("30", base.config.tokenDecimals)),
     };
@@ -728,7 +728,7 @@ export function crossVenuePartialCrashFixtureBuilder(rpcUrl: string) {
       buyer: base.accounts.alice,
       seller: base.accounts.bob,
       price: base.config.initialMarketPrice,
-      deliveryAt: base.config.futuresFirstDeliveryDate,
+      expirationAt: base.config.futuresFirstExpirationAt,
       quantity: aliceFuturesQty,
     });
 
@@ -808,7 +808,7 @@ export function crossVenueBothLegsCrashFixtureBuilder(rpcUrl: string) {
       buyer: base.accounts.alice,
       seller: base.accounts.bob,
       price: entryMark,
-      deliveryAt: base.config.futuresFirstDeliveryDate,
+      expirationAt: base.config.futuresFirstExpirationAt,
       quantity: aliceFuturesQty,
     });
 
@@ -856,7 +856,7 @@ function crossVenueFixtureBody(
       buyer: base.accounts.alice,
       seller: base.accounts.bob,
       price: base.config.initialMarketPrice,
-      deliveryAt: base.config.futuresFirstDeliveryDate,
+      expirationAt: base.config.futuresFirstExpirationAt,
       quantity: aliceFuturesQty,
     });
 
@@ -928,7 +928,7 @@ export function crossVenueOrdersAndPositionsFixtureBuilder(rpcUrl: string) {
       buyer: base.accounts.alice,
       seller: base.accounts.bob,
       price: base.config.initialMarketPrice,
-      deliveryAt: base.config.futuresFirstDeliveryDate,
+      expirationAt: base.config.futuresFirstExpirationAt,
       quantity: aliceFuturesQty,
     });
 
@@ -945,7 +945,7 @@ export function crossVenueOrdersAndPositionsFixtureBuilder(rpcUrl: string) {
       base,
       base.accounts.alice,
       parseUnits("2.00", base.config.oracleDecimals),
-      base.config.futuresFirstDeliveryDate,
+      base.config.futuresFirstExpirationAt,
       1,
     );
 
@@ -967,9 +967,8 @@ export function crossVenueOrdersAndPositionsFixtureBuilder(rpcUrl: string) {
  * 12-unit futures long ($50.40 loss, duration-free: 12 · ($4.21 − $0.01 mark)).
  * The planner must liquidate futures first.
  *
- * The futures qty is capped at 12 because `createOrder` loops once per
- * contract in the matching engine; larger values blow past Hardhat's
- * per-tx gas cap (16M).
+ * Futures qty is a single signed createOrder in 3.0; 12 contracts remains a
+ * convenient fixture size for margin math (not a gas/looping constraint).
  */
 export function crossVenueFuturesDominantFixtureBuilder(rpcUrl: string) {
   return async (): Promise<CrossVenueFixture> => {
@@ -1009,15 +1008,15 @@ interface FuturesTrade {
   buyer: Wallet;
   seller: Wallet;
   price: bigint;
-  deliveryAt: bigint;
-  /** int8 — number of contracts. */
+  expirationAt: bigint;
+  /** Whole contracts (signed at placement: +buy / −sell). */
   quantity: number;
 }
 
 /** Same shape as `matchPerpsTrade`, but for the Futures venue. */
 async function matchFuturesTrade(base: BaseFixture, t: FuturesTrade): Promise<void> {
-  await placeFuturesOrder(base, t.seller, t.price, t.deliveryAt, -t.quantity);
-  await placeFuturesOrder(base, t.buyer, t.price, t.deliveryAt, t.quantity);
+  await placeFuturesOrder(base, t.seller, t.price, t.expirationAt, -t.quantity);
+  await placeFuturesOrder(base, t.buyer, t.price, t.expirationAt, t.quantity);
 }
 
 async function placePerpsOrder(
@@ -1041,16 +1040,15 @@ async function placeFuturesOrder(
   base: BaseFixture,
   wallet: Wallet,
   price: bigint,
-  deliveryAt: bigint,
+  expirationAt: bigint,
   qty: number,
 ): Promise<void> {
-  // Futures takes a packed (price, deliveryDate, destURL, qty) tuple.
-  // `qty` is `int8` — positive = buyer-side, negative = seller-side.
+  // Futures 3.0: createOrder(price, expirationAt, signedQuantity) — whole contracts.
   const hash = await wallet.client.writeContract({
     address: base.addresses.futures,
     abi: base.abis.futures,
     functionName: "createOrder",
-    args: [price, deliveryAt, "//keeper-test", qty],
+    args: [price, expirationAt, BigInt(qty)],
     chain: hardhat,
     account: wallet.account,
   });

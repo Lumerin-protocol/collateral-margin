@@ -29,7 +29,7 @@ contract PortfolioMarginEngine is
     OwnableUpgradeable
 {
     uint256 private constant WAD = 1e18;
-    string public constant VERSION = "1.0.0";
+    string public constant VERSION = "1.0.1";
 
     // ── Storage ─────────────────────────────────────────────────────────────
 
@@ -172,8 +172,8 @@ contract PortfolioMarginEngine is
         uint256 futuresOrderMargin = 0;
         uint256 futuresUnrealizedLoss = 0;
         if (address(futures) != address(0)) {
-            futuresOrderMargin = futures.getFuturesOrderMargin(user);
-            int256 futuresPnl = futures.getFuturesUnrealizedPnl(user);
+            futuresOrderMargin = futures.getOrderMargin(user);
+            int256 futuresPnl = futures.getUnrealizedPnl(user);
             futuresUnrealizedLoss = futuresPnl < 0 ? uint256(-futuresPnl) : 0;
         }
 
