@@ -28,26 +28,26 @@ console.log("RPC:", RPC_URL.replace(ALCHEMY, "***"));
 console.log("FUTURES:", FUTURES);
 console.log("USERS:", USERS);
 
-console.log("\n--- Stage 1: getActiveDeliveryDates via multicall ---");
+console.log("\n--- Stage 1: getActiveExpirationDates via multicall ---");
 const dateLists = await client.multicall({
   contracts: USERS.map((u) => ({
     address: FUTURES,
     abi: FuturesAbi,
-    functionName: "getActiveDeliveryDates" as const,
+    functionName: "getActiveExpirationDates" as const,
     args: [u] as const,
   })),
   allowFailure: false,
 });
 
-type Pair = { user: Address; deliveryAt: bigint };
+type Pair = { user: Address; expirationAt: bigint };
 const pairs: Pair[] = [];
 for (let i = 0; i < USERS.length; i++) {
   const user = USERS[i]!;
   const dates = dateLists[i] as readonly bigint[];
   console.log(`  ${user} → ${dates.length} expiries`);
-  for (const deliveryAt of dates) {
-    console.log(`    ${deliveryAt}`);
-    pairs.push({ user, deliveryAt });
+  for (const expirationAt of dates) {
+    console.log(`    ${expirationAt}`);
+    pairs.push({ user, expirationAt });
   }
 }
 
@@ -62,7 +62,7 @@ const positions = await client.multicall({
     address: FUTURES,
     abi: FuturesAbi,
     functionName: "getUserPosition" as const,
-    args: [p.user, p.deliveryAt] as const,
+    args: [p.user, p.expirationAt] as const,
   })),
   allowFailure: false,
 });
@@ -78,10 +78,10 @@ for (let i = 0; i < pairs.length; i++) {
   const pos = positions[i] as { netQuantity: bigint; netEntryValue: bigint };
   if (pos.netQuantity === 0n) continue;
   live++;
-  const due = block.timestamp >= pair.deliveryAt;
+  const due = block.timestamp >= pair.expirationAt;
   if (due) pastDue++;
   console.log(
-    `  ${pair.user} @ ${pair.deliveryAt}: qty=${pos.netQuantity} entryValue=${pos.netEntryValue}` +
+    `  ${pair.user} @ ${pair.expirationAt}: qty=${pos.netQuantity} entryValue=${pos.netEntryValue}` +
       (due ? " PAST_DUE" : ""),
   );
 }

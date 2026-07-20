@@ -7,7 +7,7 @@ import type { Address } from "viem";
  *
  * Shapes deliberately mirror the on-chain getters:
  *   - perps: `getUserPosition` + `getOrderMargin` + `getPendingFunding`
- *   - futures: `getActiveDeliveryDates`/`getUserPosition` + `getFuturesOrderMargin`
+ *   - futures: `getActiveExpirationDates`/`getUserPosition` + `getOrderMargin`
  *
  * Bigints throughout because PME math is performed in token-decimal units
  * (typically USDC = 6 decimals) with intermediate WAD scaling. JS numbers
@@ -32,19 +32,19 @@ export interface AccountSnapshot {
 
   /**
    * One entry per active futures expiry. Unilateral aggregate per
-   * `(user, deliveryAt)`: signed `netQuantity` (whole contracts) +
+   * `(user, expirationAt)`: signed `netQuantity` (whole contracts) +
    * `netEntryValue` (token decimals) so unrealized PnL is
    * `P * netQuantity - netEntryValue`.
    */
   futures: {
     positions: Array<{
-      deliveryAt: bigint;
+      expirationAt: bigint;
       /** Signed whole contracts (+long / −short). */
       netQuantity: bigint;
       /** Token decimals; `sum(fillPrice * signedFillQty)`. */
       netEntryValue: bigint;
     }>;
-    /** Constant in P: `getFuturesOrderMargin(user)`. */
+    /** Constant in P: `getOrderMargin(user)`. */
     orderMargin: bigint;
   };
 }
@@ -93,7 +93,7 @@ export interface AlertThresholds {
 
 /** One expiry leg of a futures close-to-IM batch. */
 export interface FuturesCloseLeg {
-  deliveryAt: bigint;
+  expirationAt: bigint;
   /** Absolute contracts to close toward zero (≤ |netQuantity|). */
   closeQty: bigint;
 }

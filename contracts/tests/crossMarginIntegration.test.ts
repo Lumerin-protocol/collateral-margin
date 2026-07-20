@@ -282,8 +282,8 @@ describe("Cross-Margin Integration", () => {
       const futuresLoss = -2_500_000_000n;
       const perpsOrder = 1_500_000_000n;
 
-      await futuresMock.write.setFuturesOrderMargin([aliceAddr, futuresOrder]);
-      await futuresMock.write.setFuturesUnrealizedPnl([aliceAddr, futuresLoss]);
+      await futuresMock.write.setOrderMargin([aliceAddr, futuresOrder]);
+      await futuresMock.write.setUnrealizedPnl([aliceAddr, futuresLoss]);
       await perpsMock.write.setOrderMargin([aliceAddr, perpsOrder]);
 
       const im = await pme.read.computePortfolioIM([aliceAddr]);

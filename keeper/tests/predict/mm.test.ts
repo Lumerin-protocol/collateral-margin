@@ -62,7 +62,7 @@ describe("predict/mm: netDeltaWad", () => {
     // Buyer of 1 contract → +1 * 1e18 WAD delta.
     const snap = emptySnapshot({
       futures: {
-        positions: [{ deliveryAt: 1_756_416_000n, netQuantity: 1n, netEntryValue: 50n }],
+        positions: [{ expirationAt: 1_756_416_000n, netQuantity: 1n, netEntryValue: 50n }],
         orderMargin: 0n,
       },
     });
@@ -72,7 +72,7 @@ describe("predict/mm: netDeltaWad", () => {
   it("subtracts futures seller delta", () => {
     const snap = emptySnapshot({
       futures: {
-        positions: [{ deliveryAt: 1_756_416_000n, netQuantity: -1n, netEntryValue: -50n }],
+        positions: [{ expirationAt: 1_756_416_000n, netQuantity: -1n, netEntryValue: -50n }],
         orderMargin: 0n,
       },
     });
@@ -84,8 +84,8 @@ describe("predict/mm: netDeltaWad", () => {
       perp: { netQty: 1_000_000n, entryPrice: 100n, orderMargin: 0n, fundingOwed: 0n }, // +1e18
       futures: {
         positions: [
-          { deliveryAt: 1_756_416_000n, netQuantity: 1n, netEntryValue: 50n },
-          { deliveryAt: 1_756_416_000n, netQuantity: -1n, netEntryValue: -60n },
+          { expirationAt: 1_756_416_000n, netQuantity: 1n, netEntryValue: 50n },
+          { expirationAt: 1_756_416_000n, netQuantity: -1n, netEntryValue: -60n },
         ],
         orderMargin: 0n,
       },
@@ -168,7 +168,7 @@ describe("predict/mm: futuresUnrealizedLoss", () => {
   it("buyer loses when P drops below entry (no duration factor)", () => {
     const snap = emptySnapshot({
       futures: {
-        positions: [{ deliveryAt: 1_756_416_000n, netQuantity: 1n, netEntryValue: 50n }],
+        positions: [{ expirationAt: 1_756_416_000n, netQuantity: 1n, netEntryValue: 50n }],
         orderMargin: 0n,
       },
     });
@@ -179,7 +179,7 @@ describe("predict/mm: futuresUnrealizedLoss", () => {
   it("seller loses when P rises above entry", () => {
     const snap = emptySnapshot({
       futures: {
-        positions: [{ deliveryAt: 1_756_416_000n, netQuantity: -1n, netEntryValue: -50n }],
+        positions: [{ expirationAt: 1_756_416_000n, netQuantity: -1n, netEntryValue: -50n }],
         orderMargin: 0n,
       },
     });
@@ -190,14 +190,14 @@ describe("predict/mm: futuresUnrealizedLoss", () => {
     const snap = emptySnapshot({
       futures: {
         positions: [
-          { deliveryAt: 1_756_416_000n, netQuantity: 1n, netEntryValue: 50n }, // P=40 → loses 10
-          { deliveryAt: 1_756_416_000n, netQuantity: -1n, netEntryValue: -30n }, // P=40 → loses 10
+          { expirationAt: 1_756_416_000n, netQuantity: 1n, netEntryValue: 50n }, // P=40 → loses 10
+          { expirationAt: 1_756_416_000n, netQuantity: -1n, netEntryValue: -30n }, // P=40 → loses 10
         ],
         orderMargin: 0n,
       },
     });
     // Loss is sum of *losing* legs only (consistent with `max(0, -pnl)` per leg
-    // mirroring the on-chain `getFuturesUnrealizedPnl` aggregation, which
+    // mirroring the on-chain `getUnrealizedPnl` aggregation, which
     // would be 0 net but PME treats them piecewise via stress + per-leg PnL).
     // Here both happen to be losing — buyer down, seller up.
     assert.equal(futuresUnrealizedLoss(snap, 40n), 20n);

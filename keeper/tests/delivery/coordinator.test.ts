@@ -46,20 +46,20 @@ interface MatchedLog {
   args: {
     maker: Address;
     taker: Address;
-    deliveryAt: bigint;
+    expirationAt: bigint;
     makerNetQtyAfter: bigint;
     takerNetQtyAfter: bigint;
   };
 }
 
 interface SettledLog {
-  args: { user: Address; deliveryAt: bigint };
+  args: { user: Address; expirationAt: bigint };
 }
 
 function matchedLog(
   maker: Address,
   taker: Address,
-  deliveryAt: bigint,
+  expirationAt: bigint,
   makerQty: bigint,
   takerQty: bigint,
 ): MatchedLog {
@@ -67,15 +67,15 @@ function matchedLog(
     args: {
       maker,
       taker,
-      deliveryAt,
+      expirationAt,
       makerNetQtyAfter: makerQty,
       takerNetQtyAfter: takerQty,
     },
   };
 }
 
-function settledLog(user: Address, deliveryAt: bigint): SettledLog {
-  return { args: { user, deliveryAt } };
+function settledLog(user: Address, expirationAt: bigint): SettledLog {
+  return { args: { user, expirationAt } };
 }
 
 interface ChainStubOptions {
@@ -97,8 +97,8 @@ interface ChainStubOptions {
   readContractError?: (functionName: string) => Error | undefined;
 }
 
-function posKey(user: Address, deliveryAt: bigint): string {
-  return `${user.toLowerCase()}:${deliveryAt}`;
+function posKey(user: Address, expirationAt: bigint): string {
+  return `${user.toLowerCase()}:${expirationAt}`;
 }
 
 function makeChain(opts: ChainStubOptions = {}): Chain {
@@ -120,7 +120,7 @@ function makeChain(opts: ChainStubOptions = {}): Chain {
       readContract: async ({ functionName, args }: { functionName: string; args?: readonly unknown[] }) => {
         const err = opts.readContractError?.(functionName);
         if (err) throw err;
-        if (functionName === "getActiveDeliveryDates") {
+        if (functionName === "getActiveExpirationDates") {
           const user = (args?.[0] as Address).toLowerCase();
           return opts.activeDatesByUser?.[user] ?? [];
         }
@@ -134,13 +134,13 @@ function makeChain(opts: ChainStubOptions = {}): Chain {
         return contracts.map((c) => {
           if (c.functionName === "getUserPosition") {
             const user = (c.args?.[0] as Address).toLowerCase();
-            const deliveryAt = c.args?.[1] as bigint;
-            const key = `${user}:${deliveryAt}`;
+            const expirationAt = c.args?.[1] as bigint;
+            const key = `${user}:${expirationAt}`;
             return (
               opts.positionsByUserDate?.[key] ?? { netQuantity: 0n, netEntryValue: 0n }
             );
           }
-          if (c.functionName === "getActiveDeliveryDates") {
+          if (c.functionName === "getActiveExpirationDates") {
             const user = (c.args?.[0] as Address).toLowerCase();
             return opts.activeDatesByUser?.[user] ?? [];
           }
@@ -273,17 +273,17 @@ describe("delivery/coordinator: bootstrap + settle", () => {
     assert.equal(coord.has(USER_A, DELIVERY_B), true);
   });
 
-  it("indexUserPositions swallows getActiveDeliveryDates RPC errors", async () => {
+  it("indexUserPositions swallows getActiveExpirationDates RPC errors", async () => {
     const chain = makeChain({
       readContractError: (fn) =>
-        fn === "getActiveDeliveryDates" ? new Error("rpc down") : undefined,
+        fn === "getActiveExpirationDates" ? new Error("rpc down") : undefined,
     });
     const coord = new DeliveryCoordinator(chain, makeConfig(), silentLogger);
     await coord.indexUserPositions(USER_A); // must not throw
     assert.equal(coord.size(), 0);
   });
 
-  it("settleBatch simulates settlePosition(user, deliveryAt) and drops on success", async () => {
+  it("settleBatch simulates settlePosition(user, expirationAt) and drops on success", async () => {
     const simulated: unknown[][] = [];
     const chain = makeChain({
       // Far-future timestamp so bootstrap's trailing sweep is a no-op.

@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { Address, Hex } from "viem";
-import { FuturesVenue, deliveryAtMarketId } from "../../src/venues/futures.ts";
+import { FuturesVenue, expirationAtMarketId } from "../../src/venues/futures.ts";
 import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
 
@@ -50,7 +50,7 @@ const DELIVERY_AT = 1_756_416_000n;
 function makeReadHandler(marketPrice: bigint, listResult: readonly unknown[]) {
   return (call: ReadCall): unknown => {
     if (call.functionName === "getMarketPrice") return marketPrice;
-    if (call.functionName === "getUserOrders" || call.functionName === "getActiveDeliveryDates") {
+    if (call.functionName === "getUserOrders" || call.functionName === "getActiveExpirationDates") {
       return listResult;
     }
     throw new Error(`unexpected readContract call: ${call.functionName}`);
@@ -58,9 +58,9 @@ function makeReadHandler(marketPrice: bigint, listResult: readonly unknown[]) {
 }
 
 describe("futures venue: marketLabel", () => {
-  it("renders deliveryAt as an ISO date prefix", () => {
+  it("renders expirationAt as an ISO date prefix", () => {
     const venue = new FuturesVenue(makeChainStub({}), makeConfigStub(), silentLogger);
-    const id = deliveryAtMarketId(DELIVERY_AT);
+    const id = expirationAtMarketId(DELIVERY_AT);
     assert.equal(venue.marketLabel(id), "futures 2025-08-28");
   });
 });
@@ -81,7 +81,7 @@ describe("futures venue: readOpenOrders", () => {
     assert.equal(multicallCount, 0, "no multicall when no orders");
   });
 
-  it("hydrates each order's deliveryAt as its marketId", async () => {
+  it("hydrates each order's expirationAt as its marketId", async () => {
     const orderIds: Hex[] = [
       "0x000000000000000000000000000000000000000000000000000000000000000a",
       "0x000000000000000000000000000000000000000000000000000000000000000b",
@@ -92,8 +92,8 @@ describe("futures venue: readOpenOrders", () => {
         assert.equal(calls.length, 2);
         for (const c of calls) assert.equal(c.functionName, "getOrder");
         return [
-          { participant: BUYER, deliveryAt: DELIVERY_AT, price: 50n, quantity: 1n },
-          { participant: BUYER, deliveryAt: DELIVERY_AT + 86_400n, price: 60n, quantity: -1n },
+          { participant: BUYER, expirationAt: DELIVERY_AT, price: 50n, quantity: 1n },
+          { participant: BUYER, expirationAt: DELIVERY_AT + 86_400n, price: 60n, quantity: -1n },
         ];
       },
     });
@@ -101,13 +101,13 @@ describe("futures venue: readOpenOrders", () => {
     const orders = await venue.readOpenOrders(BUYER);
     assert.equal(orders.length, 2);
     assert.equal(orders[0]?.id, orderIds[0]);
-    assert.equal(orders[0]?.marketId, deliveryAtMarketId(DELIVERY_AT));
-    assert.equal(orders[1]?.marketId, deliveryAtMarketId(DELIVERY_AT + 86_400n));
+    assert.equal(orders[0]?.marketId, expirationAtMarketId(DELIVERY_AT));
+    assert.equal(orders[1]?.marketId, expirationAtMarketId(DELIVERY_AT + 86_400n));
   });
 });
 
 describe("futures venue: readPositions", () => {
-  it("returns empty when getActiveDeliveryDates is empty", async () => {
+  it("returns empty when getActiveExpirationDates is empty", async () => {
     const chain = makeChainStub({
       readContract: makeReadHandler(100n, []),
       multicall: () => [],
@@ -133,7 +133,7 @@ describe("futures venue: readPositions", () => {
     assert.ok(pos);
     assert.equal(pos.unrealizedLoss, entry - marketPrice);
     assert.equal(pos.notional, entry);
-    assert.equal(pos.marketId, deliveryAtMarketId(DELIVERY_AT));
+    assert.equal(pos.marketId, expirationAtMarketId(DELIVERY_AT));
   });
 
   it("computes short-side underwater PnL when market rises above entry", async () => {

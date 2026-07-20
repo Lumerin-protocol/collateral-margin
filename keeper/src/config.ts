@@ -70,7 +70,7 @@ export interface Config {
     /**
      * Max futures expiry legs closed per `liquidatePositions` tx (gas-bounded
      * chunking). `reduceToTarget` sends ONE worst-first chunk of at most this
-     * many `(deliveryAt, closeQty)` pairs; the planner loop re-invokes it
+     * many `(expirationAt, closeQty)` pairs; the planner loop re-invokes it
      * (re-snapshotting each time) until the account is healthy. Keep ≤ ~50 so
      * a full chunk stays well under Base's block gas limit.
      */
@@ -189,7 +189,7 @@ export interface Config {
     /**
      * Opt-in: when true, the keeper permissionlessly calls
      * `settlePosition(positionId)` on every active futures position the moment
-     * its `deliveryAt` (maturity) is reached, cash-settling it at the oracle
+     * its `expirationAt` (maturity) is reached, cash-settling it at the oracle
      * mark. Defaults to `false` so a stock keeper deployment doesn't start
      * settling positions unless explicitly enabled.
      *
@@ -206,8 +206,8 @@ export interface Config {
      */
     sweepIntervalMs: number;
     /**
-     * Delay after `position.deliveryAt` before attempting `settlePosition`.
-     * Adds a small cushion so the on-chain `block.timestamp >= deliveryAt`
+     * Delay after `position.expirationAt` before attempting `settlePosition`.
+     * Adds a small cushion so the on-chain `block.timestamp >= expirationAt`
      * guard is satisfied even when local and miner clocks drift slightly.
      */
     settleDelayMs: number;

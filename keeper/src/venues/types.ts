@@ -6,7 +6,7 @@ import type { Address, Hex } from "viem";
  * Encoded forms (callers MUST treat this as opaque — only the venue itself
  * decodes it):
  *   - perps:   sentinel `keccak256("perps")` (single market)
- *   - futures: bytes32(uint256(deliveryAt))
+ *   - futures: bytes32(uint256(expirationAt))
  *   - options: keccak256(abi.encode(strike, expiry))
  *
  * Kept opaque so the coordinator can rank cross-market positions without
@@ -96,7 +96,7 @@ export interface Venue {
    *      `[MM, IM]` band (futures: per-expiry `closeQty` legs; perps: a partial
    *      `closeQty`). Deep-underwater accounts with no in-band partial size to
    *      a full close.
-   *   3. Submit ONE tx — futures `liquidatePositions(user, deliveryAts[],
+   *   3. Submit ONE tx — futures `liquidatePositions(user, expirationAts[],
    *      closeQtys[])`, perps `liquidatePosition(user, closeQty)`.
    *
    * Reverts on-chain with `OrdersStillOpen` (orders must be cleared first) or

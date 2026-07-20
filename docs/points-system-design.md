@@ -43,7 +43,7 @@ Explicitly **not** rewarded:
 Both venues distinguish maker and taker on-chain:
 
 - perps: the `OrderMatched` event carries `maker`, `taker`, and separate `makerFee` / `takerFee`.
-- futures (3.0): `OrderMatched` carries `maker`, `taker`, `makerFee` / `takerFee` (same shape as perps, plus `deliveryAt`).
+- futures (3.0): `OrderMatched` carries `maker`, `taker`, `makerFee` / `takerFee` (same shape as perps, plus `expirationAt`).
 
 This lets the points hook (Section 5) apply different weights to each side without any off-chain inference.
 

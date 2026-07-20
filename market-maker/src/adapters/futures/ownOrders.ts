@@ -16,10 +16,10 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
  *
  * The contract has no per-participant order view scoped by delivery date, so
  * we read all of the wallet's orders and keep only those matching this
- * instrument's `deliveryDate`:
+ * instrument's `expirationAt`:
  *
  *   1. `bootstrap()` reads `getUserOrders(wallet)` + `getOrder(id)` and
- *      caches the orders whose `deliveryAt === deliveryDate`.
+ *      caches the orders whose `expirationAt === expirationAt`.
  *   2. `subscribe()` listens to venue events. `order-created` is filtered by
  *      participant AND instrumentId (which encodes the expiry). `order-cancelled`
  *      carries no expiry, so we apply it only if the id is in *this* cache —
@@ -33,20 +33,20 @@ export class FuturesOwnOrders implements OwnOrderSource {
   private bootstrapped = false;
 
   private readonly venue: FuturesVenueAdapter;
-  private readonly deliveryDate: bigint;
+  private readonly expirationAt: bigint;
   private readonly instrumentId: string;
   private readonly logger: pino.Logger;
   private readonly readBatchSize: number;
 
   constructor(
     venue: FuturesVenueAdapter,
-    deliveryDate: bigint,
+    expirationAt: bigint,
     logger: pino.Logger,
     readBatchSize: number,
   ) {
     this.venue = venue;
-    this.deliveryDate = deliveryDate;
-    this.instrumentId = futuresInstrumentId(deliveryDate);
+    this.expirationAt = expirationAt;
+    this.instrumentId = futuresInstrumentId(expirationAt);
     this.logger = logger.child({ component: "futures-own-orders" });
     this.readBatchSize = readBatchSize;
   }
@@ -107,11 +107,11 @@ export class FuturesOwnOrders implements OwnOrderSource {
         participant: string;
         price: bigint;
         quantity: bigint;
-        deliveryAt: bigint;
+        expirationAt: bigint;
       };
       if (!o.participant || o.participant === ZERO_ADDRESS) continue;
       // Keep only orders belonging to this expiry.
-      if (o.deliveryAt !== this.deliveryDate) continue;
+      if (o.expirationAt !== this.expirationAt) continue;
       if (o.quantity === 0n) continue;
       const absQty = o.quantity < 0n ? -o.quantity : o.quantity;
       this.cache.set(orderIds[i], {
@@ -125,7 +125,7 @@ export class FuturesOwnOrders implements OwnOrderSource {
 
     this.bootstrapped = true;
     this.logger.info(
-      { orders: this.cache.size, deliveryDate: this.deliveryDate.toString() },
+      { orders: this.cache.size, expirationAt: this.expirationAt.toString() },
       "futures own-orders bootstrapped",
     );
   }

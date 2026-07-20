@@ -462,7 +462,7 @@ export class ParticipantTracker {
 
   /**
    * `OrderCreated(bytes32 indexed orderId, address indexed participant,
-   *               uint256 price, int256 quantity, uint256 deliveryAt)`.
+   *               uint256 price, int256 quantity, uint256 expirationAt)`.
    */
   private onFuturesOrderCreated(logs: readonly Log[]): void {
     type Args = { orderId?: Hex; participant?: Address };

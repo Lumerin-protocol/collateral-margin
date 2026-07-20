@@ -80,7 +80,7 @@ function makeChainStub(opts: {
 }
 
 describe("futures venue: reduceToTarget", () => {
-  it("sizes a closeQty and submits liquidatePositions(deliveryAts, closeQtys)", async () => {
+  it("sizes a closeQty and submits liquidatePositions(expirationAts, closeQtys)", async () => {
     let simulated: ReadCall | undefined;
     const chain = makeChainStub({
       balance: 136_000_000n,
@@ -96,14 +96,14 @@ describe("futures venue: reduceToTarget", () => {
 
     assert.ok(simulated, "should simulate a liquidatePositions call");
     assert.equal(simulated?.functionName, "liquidatePositions");
-    const [participant, deliveryAts, closeQtys] = simulated?.args as [
+    const [participant, expirationAts, closeQtys] = simulated?.args as [
       Address,
       bigint[],
       bigint[],
     ];
     assert.equal(participant, USER);
-    assert.equal(deliveryAts.length, 1);
-    assert.equal(deliveryAts[0], EXPIRY);
+    assert.equal(expirationAts.length, 1);
+    assert.equal(expirationAts[0], EXPIRY);
     assert.ok(closeQtys[0]! > 0n && closeQtys[0]! < 12n, "strict subset of contracts");
     assert.ok("feeEarned" in outcome && outcome.positionsClosed === Number(closeQtys[0]));
   });
@@ -133,11 +133,11 @@ describe("futures venue: reduceToTarget", () => {
           }
           if (fns[0] === "getUserPosition") {
             return contracts.map((c) => {
-              const deliveryAt = c.args?.[1] as bigint;
+              const expirationAt = c.args?.[1] as bigint;
               return {
                 netQuantity: 4n,
                 netEntryValue: 4n * 40_000_000n,
-                _deliveryAt: deliveryAt,
+                _expirationAt: expirationAt,
               };
             });
           }
@@ -153,8 +153,8 @@ describe("futures venue: reduceToTarget", () => {
     const venue = new FuturesVenue(chain, makeConfigStub(true, 2), silentLogger);
     const outcome = await venue.reduceToTarget(USER);
     assert.ok(simulated);
-    const [, deliveryAts] = simulated?.args as [Address, bigint[], bigint[]];
-    assert.equal(deliveryAts.length, 2, "capped to 2 expiry legs");
+    const [, expirationAts] = simulated?.args as [Address, bigint[], bigint[]];
+    assert.equal(expirationAts.length, 2, "capped to 2 expiry legs");
     assert.ok("feeEarned" in outcome);
   });
 

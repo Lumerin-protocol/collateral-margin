@@ -56,7 +56,7 @@ export async function readMMParams(
  * function of price. Two RPC round-trips:
  *
  *   1. Bulk multicall: balance, perp position/orderMargin/funding,
- *      futures orderMargin/activeDeliveryDates.
+ *      futures orderMargin/activeExpirationAts.
  *   2. Per-expiry multicall: hydrate each aggregate via `getUserPosition`.
  *
  * Round-trip 2 collapses to zero calls when the user has no futures
@@ -73,7 +73,7 @@ export async function readAccountSnapshot(
     perpOrderMargin,
     perpFunding,
     futuresOrderMargin,
-    activeDeliveryDates,
+    activeExpirationAts,
   ] = await chain.publicClient.multicall({
     contracts: [
       {
@@ -103,38 +103,38 @@ export async function readAccountSnapshot(
       {
         address: config.futures.address,
         abi: FuturesAbi,
-        functionName: "getFuturesOrderMargin" as const,
+        functionName: "getOrderMargin" as const,
         args: [user] as const,
       },
       {
         address: config.futures.address,
         abi: FuturesAbi,
-        functionName: "getActiveDeliveryDates" as const,
+        functionName: "getActiveExpirationDates" as const,
         args: [user] as const,
       },
     ] as const,
     allowFailure: false,
   });
 
-  const deliveryAts = activeDeliveryDates as readonly bigint[];
+  const expirationAts = activeExpirationAts as readonly bigint[];
   const futuresPositions: AccountSnapshot["futures"]["positions"] = [];
-  if (deliveryAts.length > 0) {
+  if (expirationAts.length > 0) {
     const positions = await chain.publicClient.multicall({
-      contracts: deliveryAts.map((deliveryAt) => ({
+      contracts: expirationAts.map((expirationAt) => ({
         address: config.futures.address,
         abi: FuturesAbi,
         functionName: "getUserPosition" as const,
-        args: [user, deliveryAt] as const,
+        args: [user, expirationAt] as const,
       })),
       allowFailure: false,
     });
-    for (let i = 0; i < deliveryAts.length; i++) {
+    for (let i = 0; i < expirationAts.length; i++) {
       const pos = positions[i];
-      const deliveryAt = deliveryAts[i];
-      if (pos === undefined || deliveryAt === undefined) continue;
+      const expirationAt = expirationAts[i];
+      if (pos === undefined || expirationAt === undefined) continue;
       if (pos.netQuantity === 0n) continue;
       futuresPositions.push({
-        deliveryAt,
+        expirationAt,
         netQuantity: pos.netQuantity,
         netEntryValue: pos.netEntryValue,
       });

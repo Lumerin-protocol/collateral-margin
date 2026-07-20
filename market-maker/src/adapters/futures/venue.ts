@@ -24,7 +24,7 @@ import { FuturesVenueEvents } from "./events.ts";
 
 /**
  * How the venue picks which delivery dates to quote out of the rolling window
- * returned by `getDeliveryDates()` (ordered nearest-first).
+ * returned by `getExpirationDates()` (ordered nearest-first).
  *
  *  - `nearest`: the first `count` dates (count=1 reproduces the legacy MVP).
  *  - `indices`: explicit relative offsets into the window (0 = nearest).
@@ -86,9 +86,9 @@ export class FuturesVenueAdapter implements VenueAdapter {
   readonly readBatchSize: number;
   readonly writeBatchSize: number;
   private readonly marketSelection: FuturesMarketSelection;
-  /** deliveryDate → instrument, memoized so each expiry has one adapter. */
+  /** expirationAt → instrument, memoized so each expiry has one adapter. */
   private readonly instruments = new Map<string, FuturesInstrumentAdapter>();
-  /** deliveryDates currently selected (as strings), from the last resolve. */
+  /** expirationAts currently selected (as strings), from the last resolve. */
   private activeKeys: string[] = [];
 
   private vaultAddressCache: `0x${string}` | null = null;
@@ -157,7 +157,7 @@ export class FuturesVenueAdapter implements VenueAdapter {
 
   /** Nearest-expiry instrument. Back-compat / single-market entrypoint. */
   async getInstrument(): Promise<InstrumentAdapter> {
-    const dates = await this.readDeliveryDates();
+    const dates = await this.readExpirationAts();
     if (dates.length === 0) throw new Error("futures contract returned no delivery dates");
     return this.instrumentFor(dates[0]);
   }
@@ -175,7 +175,7 @@ export class FuturesVenueAdapter implements VenueAdapter {
    * down matured ones without disturbing the survivors.
    */
   async resolveMarkets(): Promise<FuturesMarketSet> {
-    const dates = await this.readDeliveryDates();
+    const dates = await this.readExpirationAts();
     const selected = this.selectDates(dates);
     const selectedKeys = selected.map((d) => d.toString());
 
@@ -201,9 +201,9 @@ export class FuturesVenueAdapter implements VenueAdapter {
     if (added.length > 0 || dropped.length > 0) {
       this.logger.info(
         {
-          active: active.map((i) => i.deliveryDate.toString()),
-          added: added.map((i) => i.deliveryDate.toString()),
-          dropped: dropped.map((i) => i.deliveryDate.toString()),
+          active: active.map((i) => i.expirationAt.toString()),
+          added: added.map((i) => i.expirationAt.toString()),
+          dropped: dropped.map((i) => i.expirationAt.toString()),
         },
         "futures markets resolved",
       );
@@ -211,21 +211,21 @@ export class FuturesVenueAdapter implements VenueAdapter {
     return { active, added, dropped };
   }
 
-  private instrumentFor(deliveryDate: bigint): FuturesInstrumentAdapter {
-    const key = deliveryDate.toString();
+  private instrumentFor(expirationAt: bigint): FuturesInstrumentAdapter {
+    const key = expirationAt.toString();
     let inst = this.instruments.get(key);
     if (!inst) {
-      inst = new FuturesInstrumentAdapter(this, deliveryDate, this.logger);
+      inst = new FuturesInstrumentAdapter(this, expirationAt, this.logger);
       this.instruments.set(key, inst);
     }
     return inst;
   }
 
-  private async readDeliveryDates(): Promise<bigint[]> {
+  private async readExpirationAts(): Promise<bigint[]> {
     const dates = await this.publicClient.readContract({
       address: this.address,
       abi: FuturesAbi,
-      functionName: "getDeliveryDates",
+      functionName: "getExpirationDates",
     });
     return [...dates];
   }
@@ -387,8 +387,8 @@ class FuturesCollateralAccount implements BatchableCollateralAccount {
     ] as MarginReadPlan["shared"];
 
     const venue = [
-      { address: this.venue.address, abi: FuturesAbi, functionName: "getFuturesOrderMargin", args: [owner] },
-      { address: this.venue.address, abi: FuturesAbi, functionName: "getFuturesUnrealizedPnl", args: [owner] },
+      { address: this.venue.address, abi: FuturesAbi, functionName: "getOrderMargin", args: [owner] },
+      { address: this.venue.address, abi: FuturesAbi, functionName: "getUnrealizedPnl", args: [owner] },
     ] as MarginReadPlan["venue"];
 
     const decode = (results: readonly unknown[]): CollateralSnapshot => {

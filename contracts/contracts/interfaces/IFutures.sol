@@ -6,25 +6,25 @@ pragma solidity ^0.8.20;
 ///         incorporate hashrate futures into cross-product margin calculation.
 ///
 ///         Delta convention (WAD = 1e18):
-///           A long position of 1 contract over D delivery days contributes
-///           delta = D * WAD (token-decimals of PnL per token-decimal move in
-///           the daily hashrate price), matching the scaling used for perp delta.
+///           Whole-contract futures 3.0: each contract of net quantity contributes
+///           ±1 WAD of delta (token-decimals of PnL per token-decimal move in
+///           the hashrate price), matching the scaling used for perp delta.
 interface IFutures {
     /// @notice Net linear delta of all *active positions* (WAD-scaled, signed).
     ///         Positive = net long exposure; negative = net short.
     ///         Only counts matched positions, not resting orders (those are
-    ///         captured via `getFuturesOrderMargin`).
+    ///         captured via `getOrderMargin`).
     function getNetPositionDelta(address participant) external view returns (int256);
 
     /// @notice Minimum margin locked by resting orders (token decimals).
     ///         Mirrors `getOrderMargin` in IHashPowerPerpsDEX: it is the
     ///         maintenance-margin-less-unrealized-PnL component for unmatched
     ///         orders, clamped to zero (orders can't produce a net credit).
-    function getFuturesOrderMargin(address participant) external view returns (uint256);
+    function getOrderMargin(address participant) external view returns (uint256);
 
     /// @notice Aggregate unrealized PnL across active positions (token decimals).
     ///         Positive = mark-to-market gain; negative = mark-to-market loss.
-    function getFuturesUnrealizedPnl(address participant) external view returns (int256);
+    function getUnrealizedPnl(address participant) external view returns (int256);
 
     /// @notice Current oracle-derived hashrate spot price (token decimals).
     ///         Used as a fallback price source when no perps DEX is registered.

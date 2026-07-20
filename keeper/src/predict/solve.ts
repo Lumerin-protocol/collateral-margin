@@ -205,13 +205,13 @@ export function simulateFuturesClose(
 ): AccountSnapshot {
   const closeByExpiry = new Map<bigint, bigint>();
   for (const c of closes) {
-    closeByExpiry.set(c.deliveryAt, (closeByExpiry.get(c.deliveryAt) ?? 0n) + c.closeQty);
+    closeByExpiry.set(c.expirationAt, (closeByExpiry.get(c.expirationAt) ?? 0n) + c.closeQty);
   }
 
   const remaining: AccountSnapshot["futures"]["positions"] = [];
   let balanceDelta = 0n;
   for (const pos of snap.futures.positions) {
-    const want = closeByExpiry.get(pos.deliveryAt) ?? 0n;
+    const want = closeByExpiry.get(pos.expirationAt) ?? 0n;
     if (want <= 0n) {
       remaining.push(pos);
       continue;
@@ -231,7 +231,7 @@ export function simulateFuturesClose(
     if (closeAbs >= absNet) continue;
     const newAbs = absNet - closeAbs;
     remaining.push({
-      deliveryAt: pos.deliveryAt,
+      expirationAt: pos.expirationAt,
       netQuantity: pos.netQuantity > 0n ? newAbs : -newAbs,
       netEntryValue: (pos.netEntryValue * newAbs) / absNet,
     });
@@ -322,7 +322,7 @@ export function solveFuturesClosesToTarget(
   if (!foundInBand) {
     // Full close every aggregate.
     return positions.map((p) => ({
-      deliveryAt: p.deliveryAt,
+      expirationAt: p.expirationAt,
       closeQty: abs(p.netQuantity),
     }));
   }
@@ -398,7 +398,7 @@ type FuturesAggregate = AccountSnapshot["futures"]["positions"][number];
 
 /**
  * Expand aggregates into a unit-close sequence interleaved across expiries.
- * Each unit is one whole contract at a `deliveryAt`. Groups (expiries) are
+ * Each unit is one whole contract at a `expirationAt`. Groups (expiries) are
  * ordered by total unrealized loss desc; within the sequence we round-robin
  * one unit from each group until books are exhausted.
  */
@@ -416,7 +416,7 @@ function rankUnitClosesBalancedAcrossExpirations(
       const na = abs(a.netQuantity) * avgEntry(a);
       const nb = abs(b.netQuantity) * avgEntry(b);
       if (na !== nb) return na < nb ? 1 : -1;
-      return a.deliveryAt < b.deliveryAt ? -1 : a.deliveryAt > b.deliveryAt ? 1 : 0;
+      return a.expirationAt < b.expirationAt ? -1 : a.expirationAt > b.expirationAt ? 1 : 0;
     });
 
   const remaining = ordered.map((p) => abs(p.netQuantity));
@@ -428,7 +428,7 @@ function rankUnitClosesBalancedAcrossExpirations(
       const left = remaining[i] ?? 0n;
       if (left <= 0n) continue;
       remaining[i] = left - 1n;
-      result.push(ordered[i]!.deliveryAt);
+      result.push(ordered[i]!.expirationAt);
       progress = true;
     }
   }
@@ -443,7 +443,7 @@ function coalesceUnitPrefix(unitSequence: readonly bigint[], prefixLen: number):
   }
   return [...counts.entries()]
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-    .map(([deliveryAt, closeQty]) => ({ deliveryAt, closeQty }));
+    .map(([expirationAt, closeQty]) => ({ expirationAt, closeQty }));
 }
 
 /** Per-aggregate unrealized loss at `P` (token decimals); 0 when in profit. */

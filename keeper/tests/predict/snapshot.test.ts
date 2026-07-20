@@ -24,7 +24,7 @@ function makeConfig(): Config {
 }
 
 function makeChain(scripted: {
-  activeDeliveryDates?: readonly bigint[];
+  activeExpirationAts?: readonly bigint[];
   futuresPositions?: Record<string, { netQuantity: bigint; netEntryValue: bigint }>;
   perpNetQty?: bigint;
   perpEntry?: bigint;
@@ -49,11 +49,11 @@ function makeChain(scripted: {
             case "balanceOf":
               return scripted.balance ?? 0n;
             case "getUserPosition": {
-              // Perps: getUserPosition(user). Futures: getUserPosition(user, deliveryAt).
+              // Perps: getUserPosition(user). Futures: getUserPosition(user, expirationAt).
               if ((c.args?.length ?? 0) >= 2) {
-                const deliveryAt = c.args?.[1] as bigint;
-                const pos = scripted.futuresPositions?.[deliveryAt.toString()];
-                if (pos === undefined) throw new Error(`unscripted futures position ${deliveryAt}`);
+                const expirationAt = c.args?.[1] as bigint;
+                const pos = scripted.futuresPositions?.[expirationAt.toString()];
+                if (pos === undefined) throw new Error(`unscripted futures position ${expirationAt}`);
                 return pos;
               }
               return {
@@ -65,10 +65,10 @@ function makeChain(scripted: {
               return scripted.perpOrderMargin ?? 0n;
             case "getPendingFunding":
               return scripted.perpFunding ?? 0n;
-            case "getFuturesOrderMargin":
+            case "getOrderMargin":
               return scripted.futuresOrderMargin ?? 0n;
-            case "getActiveDeliveryDates":
-              return scripted.activeDeliveryDates ?? [];
+            case "getActiveExpirationDates":
+              return scripted.activeExpirationAts ?? [];
             case "imSpotShock":
               return scripted.imShock ?? 10n ** 17n;
             case "mmSpotShock":
@@ -121,7 +121,7 @@ describe("predict/snapshot: readAccountSnapshot", () => {
 
   it("hydrates futures aggregates from active delivery dates", async () => {
     const chain = makeChain({
-      activeDeliveryDates: [EXPIRY_A, EXPIRY_B],
+      activeExpirationAts: [EXPIRY_A, EXPIRY_B],
       futuresPositions: {
         [EXPIRY_A.toString()]: { netQuantity: 1n, netEntryValue: 50n },
         [EXPIRY_B.toString()]: { netQuantity: -2n, netEntryValue: -118n },
@@ -129,8 +129,8 @@ describe("predict/snapshot: readAccountSnapshot", () => {
     });
     const snap = await readAccountSnapshot(chain, makeConfig(), USER);
     assert.equal(snap.futures.positions.length, 2);
-    const long = snap.futures.positions.find((p) => p.deliveryAt === EXPIRY_A);
-    const short = snap.futures.positions.find((p) => p.deliveryAt === EXPIRY_B);
+    const long = snap.futures.positions.find((p) => p.expirationAt === EXPIRY_A);
+    const short = snap.futures.positions.find((p) => p.expirationAt === EXPIRY_B);
     assert.equal(long?.netQuantity, 1n);
     assert.equal(long?.netEntryValue, 50n);
     assert.equal(short?.netQuantity, -2n);

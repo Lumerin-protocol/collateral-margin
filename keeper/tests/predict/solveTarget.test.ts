@@ -28,9 +28,9 @@ const ENTRY = 40_000_000n; // $40/contract entry
 const P_MODERATE = 30_000_000n; // $30: underwater but recoverable
 const BALANCE = 136_000_000n;
 
-function futuresAgg(netQuantity: bigint, entry: bigint, deliveryAt = EXPIRY_A) {
+function futuresAgg(netQuantity: bigint, entry: bigint, expirationAt = EXPIRY_A) {
   return {
-    deliveryAt,
+    expirationAt,
     netQuantity,
     netEntryValue: entry * netQuantity,
   };
@@ -90,7 +90,7 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
     const qty = totalCloseQty(closes);
     if (qty < 11n) {
       const oneMore: FuturesCloseLeg[] = [
-        { deliveryAt: EXPIRY_A, closeQty: qty + 1n },
+        { expirationAt: EXPIRY_A, closeQty: qty + 1n },
       ];
       const after = simulateFuturesClose(snap, oneMore, P, FEE);
       assert.ok(
@@ -135,8 +135,8 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
     const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE);
     assert.ok(totalCloseQty(closes) > 1n);
 
-    const countA = closes.find((c) => c.deliveryAt === EXPIRY_A)?.closeQty ?? 0n;
-    const countB = closes.find((c) => c.deliveryAt === EXPIRY_B)?.closeQty ?? 0n;
+    const countA = closes.find((c) => c.expirationAt === EXPIRY_A)?.closeQty ?? 0n;
+    const countB = closes.find((c) => c.expirationAt === EXPIRY_B)?.closeQty ?? 0n;
     assert.ok(countA >= 1n && countB >= 1n, `both expirations must be reduced (A=${countA}, B=${countB})`);
     assert.ok(
       countA - countB <= 1n && countB - countA <= 1n,
@@ -161,8 +161,8 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
     });
     const P = P_MODERATE;
     const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE);
-    const countA = closes.find((c) => c.deliveryAt === EXPIRY_A)?.closeQty ?? 0n;
-    const countB = closes.find((c) => c.deliveryAt === EXPIRY_B)?.closeQty ?? 0n;
+    const countA = closes.find((c) => c.expirationAt === EXPIRY_A)?.closeQty ?? 0n;
+    const countB = closes.find((c) => c.expirationAt === EXPIRY_B)?.closeQty ?? 0n;
     // A is twice B → roughly 2:1 close ratio when both are touched.
     if (countA > 0n && countB > 0n) {
       assert.ok(countA >= countB, `A=${countA} should close at least as many as B=${countB}`);

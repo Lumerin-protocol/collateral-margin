@@ -16,7 +16,7 @@
  *   ask             = r · (1 + half_spread_bps / 1e4)
  *
  *   q   = netQuantity / QUANTITY_SCALE   (signed, in "contracts")
- *   T   = max(0, deliveryDate − now)     (seconds, fallback marginCallTimeSeconds)
+ *   T   = max(0, expirationAt − now)     (seconds, fallback marginCallTimeSeconds)
  *   H   = vol horizon                    (seconds; defaults to pollInterval)
  *   σ_s = OracleTracker.volatilityPerSecond  (units s^-1/2)
  *
@@ -55,7 +55,7 @@
  *     Section 3.2 derives r = S − q · γ · σ² · T and shows half-spread widens
  *     with γ and σ; the "min_spread floor" used here is a practitioner add-on
  *     to handle gas costs and exchange minimums that A-S abstracts away.
- *   - For futures, T is bounded above by deliveryDate (margin-call point);
+ *   - For futures, T is bounded above by expirationAt (margin-call point);
  *     after delivery the position settles and there's no more inventory risk.
  */
 
@@ -74,7 +74,7 @@ const VOL_HORIZON_PRECISION_BITS = 48;
 export interface ReservationPriceConfig {
   /** Avellaneda–Stoikov risk aversion γ. */
   riskAversion: number;
-  /** Fallback remaining time (seconds) when InstrumentContext.deliveryDate is absent. */
+  /** Fallback remaining time (seconds) when InstrumentContext.expirationAt is absent. */
   marginCallTimeSeconds: number;
   /** Floor full-spread in basis points; one-side half-spread is half this. */
   minSpreadBps: number;
@@ -103,8 +103,8 @@ export function computeReservationMidQuote(opts: {
   const sigma2 = sigma.mul(sigma);
   const gamma = fromNumber(cfg.riskAversion);
 
-  const remainingSeconds: Fraction = context.deliveryDate !== undefined
-    ? fromNumber(Math.max(0, context.deliveryDate - nowMs / 1000))
+  const remainingSeconds: Fraction = context.expirationAt !== undefined
+    ? fromNumber(Math.max(0, context.expirationAt - nowMs / 1000))
     : fromNumber(cfg.marginCallTimeSeconds);
 
   const q = new Fraction(inventory.netQuantity, QUANTITY_SCALE);

@@ -88,7 +88,7 @@ export class Quoter {
     this.tick = await this.instrument.book.tick();
     this.context = await this.instrument.getContext();
     this.logger.info(
-      { tick: this.tick.toString(), deliveryDate: this.context.deliveryDate },
+      { tick: this.tick.toString(), expirationAt: this.context.expirationAt },
       "quoter initialized",
     );
   }

@@ -385,18 +385,18 @@ describe("Liquidate down to the IM buffer", () => {
     async () => {
       // Precondition: alice holds one aggregate long of 12 contracts; a moderate
       // crash ($40 → $30 mark) breaks MM but a partial closeQty restores the IM
-      // buffer. A single `liquidatePositions(user, deliveryAts[], closeQtys[])`
+      // buffer. A single `liquidatePositions(user, expirationAts[], closeQtys[])`
       // must land `MM <= balance <= IM` without full-closing the aggregate.
       const ctx = await loadFixture(futuresPartialCrashFixture, testClient);
       keeper = buildKeeper(ctx);
       await keeper.start();
 
       const alice = ctx.accounts.alice.account.address;
-      const deliveryAt = ctx.config.futuresFirstDeliveryDate;
+      const expirationAt = ctx.config.futuresFirstExpirationAt;
       const datesBefore = await readFuturesPositionIds(ctx, alice);
       assert.equal(datesBefore.length, 1, "precondition: one active expiry");
       assert.equal(
-        await readFuturesNetQuantity(ctx, alice, deliveryAt),
+        await readFuturesNetQuantity(ctx, alice, expirationAt),
         BigInt(ctx.aliceFuturesQty),
         "precondition: aggregate net qty equals matched contracts",
       );
@@ -406,7 +406,7 @@ describe("Liquidate down to the IM buffer", () => {
 
       await expectReducedToImBuffer(ctx, alice);
 
-      const netAfter = await readFuturesNetQuantity(ctx, alice, deliveryAt);
+      const netAfter = await readFuturesNetQuantity(ctx, alice, expirationAt);
       assert.ok(netAfter > 0n, `expected partial close (qty remaining), got ${netAfter}`);
       assert.ok(
         netAfter < BigInt(ctx.aliceFuturesQty),
@@ -437,10 +437,10 @@ describe("Liquidate down to the IM buffer", () => {
       const datesBefore = await readFuturesPositionIds(ctx, alice);
       assert.equal(
         datesBefore.length,
-        ctx.deliveryDates.length,
+        ctx.expirationAts.length,
         "precondition: one aggregate per delivery date",
       );
-      const [firstDelivery, secondDelivery] = ctx.deliveryDates;
+      const [firstDelivery, secondDelivery] = ctx.expirationAts;
       assert.ok(firstDelivery !== undefined && secondDelivery !== undefined);
       assert.equal(
         await readFuturesNetQuantity(ctx, alice, firstDelivery),
@@ -536,7 +536,7 @@ describe("Liquidate down to the IM buffer", () => {
       const futuresBefore = await readFuturesPositionIds(ctx, alice);
       assert.equal(futuresBefore.length, 1, "precondition: one futures aggregate");
       assert.equal(
-        await readFuturesNetQuantity(ctx, alice, ctx.config.futuresFirstDeliveryDate),
+        await readFuturesNetQuantity(ctx, alice, ctx.config.futuresFirstExpirationAt),
         BigInt(ctx.aliceFuturesQty),
       );
 
@@ -562,7 +562,7 @@ describe("Liquidate down to the IM buffer", () => {
         `expected the futures leg untouched, before=${futuresBefore.length} after=${futuresAfter.length}`,
       );
       assert.equal(
-        await readFuturesNetQuantity(ctx, alice, ctx.config.futuresFirstDeliveryDate),
+        await readFuturesNetQuantity(ctx, alice, ctx.config.futuresFirstExpirationAt),
         BigInt(ctx.aliceFuturesQty),
         "futures net qty unchanged",
       );
@@ -596,7 +596,7 @@ describe("Liquidate down to the IM buffer", () => {
       const futuresBefore = await readFuturesPositionIds(ctx, alice);
       assert.equal(futuresBefore.length, 1, "precondition: one futures aggregate");
       assert.equal(
-        await readFuturesNetQuantity(ctx, alice, ctx.config.futuresFirstDeliveryDate),
+        await readFuturesNetQuantity(ctx, alice, ctx.config.futuresFirstExpirationAt),
         BigInt(ctx.aliceFuturesQty),
         "precondition: alice holds 12 futures contracts",
       );
@@ -935,7 +935,7 @@ describe("DeliveryCoordinator (live RPC)", () => {
       // validator key is used here for historical parity, but `settlePosition`
       // is permissionless — see the dedicated non-validator test below.)
       //
-      // We then fast-forward the chain past `deliveryAt` and trigger one
+      // We then fast-forward the chain past `expirationAt` and trigger one
       // sweep. `settlePosition` cash-settles the full position notional at the
       // current market price and emits `PositionSettled`.
       const ctx = await loadFixture(futuresLongCrashFixture, testClient);
@@ -951,7 +951,7 @@ describe("DeliveryCoordinator (live RPC)", () => {
       // 3.0: one unilateral aggregate per expiry (12 contracts → 1 active date).
       assert.equal(positionsBefore.length, 1);
       assert.equal(
-        await readFuturesNetQuantity(ctx, alice, ctx.config.futuresFirstDeliveryDate),
+        await readFuturesNetQuantity(ctx, alice, ctx.config.futuresFirstExpirationAt),
         BigInt(ctx.aliceFuturesQty),
       );
 
@@ -962,11 +962,11 @@ describe("DeliveryCoordinator (live RPC)", () => {
         assert.ok(keeper.delivery.has(alice, BigInt(id)), `backfill should index position ${id}`);
       }
 
-      // Fast-forward past `deliveryAt`. `settlePosition` requires
-      // `block.timestamp >= position.deliveryAt`, and `block.timestamp` is
+      // Fast-forward past `expirationAt`. `settlePosition` requires
+      // `block.timestamp >= position.expirationAt`, and `block.timestamp` is
       // only advanced once a block is mined at the new clock.
-      const deliveryAt = ctx.config.futuresFirstDeliveryDate;
-      await testClient.setNextBlockTimestamp({ timestamp: deliveryAt + 60n });
+      const expirationAt = ctx.config.futuresFirstExpirationAt;
+      await testClient.setNextBlockTimestamp({ timestamp: expirationAt + 60n });
       await testClient.mine({ blocks: 1 });
 
       // The hashprice oracle has been silent for 7 days — refresh it so
@@ -1019,7 +1019,7 @@ describe("DeliveryCoordinator (live RPC)", () => {
     { timeout: 60_000 },
     async () => {
       // Precondition: alice's position was created at fixture time and
-      // its `deliveryAt` is *already in the past* by the time the keeper
+      // its `expirationAt` is *already in the past* by the time the keeper
       // boots. The contract is the spec for "missing delivery": until
       // someone calls `settlePosition` the position lingers, and (unlike the
       // old closeDelivery window) it stays settleable indefinitely.
@@ -1029,10 +1029,10 @@ describe("DeliveryCoordinator (live RPC)", () => {
       // no live event, no scheduler tick required.
       const ctx = await loadFixture(futuresLongCrashFixture, testClient);
 
-      // Move time past deliveryAt *before* the keeper boots, so the live
+      // Move time past expirationAt *before* the keeper boots, so the live
       // subscription would miss the (long-past) OrderMatched event.
-      const deliveryAt = ctx.config.futuresFirstDeliveryDate;
-      await testClient.setNextBlockTimestamp({ timestamp: deliveryAt + 120n });
+      const expirationAt = ctx.config.futuresFirstExpirationAt;
+      await testClient.setNextBlockTimestamp({ timestamp: expirationAt + 120n });
       await testClient.mine({ blocks: 1 });
       // Refresh the oracle so `_getHashpriceUsd` doesn't revert `OracleStale`
       // when settlement reads the mark.
@@ -1070,7 +1070,7 @@ describe("DeliveryCoordinator (live RPC)", () => {
       // Production reality: on Alchemy free tier `eth_getLogs` is capped
       // at 10 blocks, so log-based backfill is unusable for any non-trivial
       // window. The view-based discovery path (`bootstrapFromUsers`) reads
-      // ``getActiveDeliveryDates` + `getUserPosition` directly from contract storage,
+      // ``getActiveExpirationDates` + `getUserPosition` directly from contract storage,
       // sidestepping the log limit entirely. This test exercises that exact
       // recovery shape: we never call `backfill()` — only `bootstrapFromUsers`
       // — and verify every still-alive position is found and settled.
@@ -1091,8 +1091,8 @@ describe("DeliveryCoordinator (live RPC)", () => {
         assert.ok(keeper.delivery.has(alice, BigInt(id)), `bootstrap should index position ${id}`);
       }
 
-      const deliveryAt = ctx.config.futuresFirstDeliveryDate;
-      await testClient.setNextBlockTimestamp({ timestamp: deliveryAt + 60n });
+      const expirationAt = ctx.config.futuresFirstExpirationAt;
+      await testClient.setNextBlockTimestamp({ timestamp: expirationAt + 60n });
       await testClient.mine({ blocks: 1 });
       await ctx.bumpHashprice(ctx.config.initialHashprice);
 
@@ -1121,11 +1121,11 @@ describe("DeliveryCoordinator (live RPC)", () => {
       // the view path and settles them on the first sweep.
       const ctx = await loadFixture(futuresLongCrashFixture, testClient);
 
-      // Move past deliveryAt before boot — same shape as the production
+      // Move past expirationAt before boot — same shape as the production
       // outage where the keeper has been down/blind during the delivery
       // window.
-      const deliveryAt = ctx.config.futuresFirstDeliveryDate;
-      await testClient.setNextBlockTimestamp({ timestamp: deliveryAt + 120n });
+      const expirationAt = ctx.config.futuresFirstExpirationAt;
+      await testClient.setNextBlockTimestamp({ timestamp: expirationAt + 120n });
       await testClient.mine({ blocks: 1 });
       await ctx.bumpHashprice(ctx.config.initialHashprice);
 
@@ -1183,8 +1183,8 @@ describe("DeliveryCoordinator (live RPC)", () => {
 
       await keeper.delivery.backfill(0n, 10_000n);
 
-      const deliveryAt = ctx.config.futuresFirstDeliveryDate;
-      await testClient.setNextBlockTimestamp({ timestamp: deliveryAt + 60n });
+      const expirationAt = ctx.config.futuresFirstExpirationAt;
+      await testClient.setNextBlockTimestamp({ timestamp: expirationAt + 60n });
       await testClient.mine({ blocks: 1 });
       await ctx.bumpHashprice(ctx.config.initialHashprice);
 

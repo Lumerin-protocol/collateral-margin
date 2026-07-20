@@ -225,7 +225,7 @@ though the *final* state is perfectly in-band.
 
 Prerequisite (already satisfied): `PortfolioMarginEngine.computePortfolioIM/MM`
 spans **all three legs** — it holds an `IFutures` ref and folds in
-`getFuturesOrderMargin`, `getFuturesUnrealizedPnl`, `getNetPositionDelta`
+`getOrderMargin`, `getUnrealizedPnl`, `getNetPositionDelta`
 alongside perps + options. So a single on-chain portfolio-margin check that
 covers both venues already exists.
 

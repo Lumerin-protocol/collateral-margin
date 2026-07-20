@@ -23,7 +23,7 @@ export { futuresInstrumentId } from "./events.ts";
 /**
  * One futures market = one delivery date (expiry). The venue creates one
  * adapter per selected expiry; each owns its own book snapshot, own-order
- * cache, and order encoding, all scoped to `deliveryDate`.
+ * cache, and order encoding, all scoped to `expirationAt`.
  *
  * Position and margin reads are per-expiry (client-side), while the shared
  * portfolio collateral/IM/MM lives on the venue's `CollateralAccount`.
@@ -33,19 +33,19 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
   readonly venue: FuturesVenueAdapter;
   readonly book: FuturesBook;
   readonly ownOrders: FuturesOwnOrders;
-  readonly deliveryDate: bigint;
+  readonly expirationAt: bigint;
 
   private tickCache: bigint | null = null;
   private marginPercentCache: bigint | null = null;
 
-  constructor(venue: FuturesVenueAdapter, deliveryDate: bigint, logger: pino.Logger) {
+  constructor(venue: FuturesVenueAdapter, expirationAt: bigint, logger: pino.Logger) {
     this.venue = venue;
-    this.deliveryDate = deliveryDate;
-    this.id = futuresInstrumentId(deliveryDate);
+    this.expirationAt = expirationAt;
+    this.id = futuresInstrumentId(expirationAt);
     this.book = new FuturesBook(this, venue.readBatchSize);
     this.ownOrders = new FuturesOwnOrders(
       venue,
-      deliveryDate,
+      expirationAt,
       logger.child({ instrument: this.id }),
       venue.readBatchSize,
     );
@@ -63,7 +63,7 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
       address: this.venue.address,
       abi: FuturesAbi,
       functionName: "getUserPosition",
-      args: [this.venue.wallet.account.address, this.deliveryDate],
+      args: [this.venue.wallet.account.address, this.expirationAt],
     });
     const netQuantity = pos.netQuantity;
     if (netQuantity === 0n) {
@@ -79,7 +79,7 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
     const { marginPct } = await this.venue.getMarginInputs();
     this.marginPercentCache = marginPct;
     return {
-      deliveryDate: Number(this.deliveryDate),
+      expirationAt: Number(this.expirationAt),
     };
   }
 
@@ -92,7 +92,7 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
     return encodeFunctionData({
       abi: FuturesAbi,
       functionName: "createOrder",
-      args: [intent.price, this.deliveryDate, signed],
+      args: [intent.price, this.expirationAt, signed],
     });
   }
 
@@ -225,8 +225,8 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
         address: this.venue.address,
         abi: FuturesAbi,
         functionName: "createOrder",
-        // Futures 3.0: createOrder(price, deliveryAt, signedQuantity)
-        args: [1_000_000n, this.deliveryDate, 1n],
+        // Futures 3.0: createOrder(price, expirationAt, signedQuantity)
+        args: [1_000_000n, this.expirationAt, 1n],
         account,
       });
     } catch {
@@ -262,7 +262,7 @@ class FuturesBook implements BookSource {
 
   async snapshot(opts: { depth?: number } = {}): Promise<OrderBookSnapshot> {
     const v = this.inst.venue;
-    const dd = this.inst.deliveryDate;
+    const dd = this.inst.expirationAt;
     const depth = BigInt(opts.depth ?? 200);
 
     const [bidPrices, askPrices] = await v.publicClient.multicall({

@@ -114,7 +114,7 @@ export interface DeployedStack {
     perpsMakerFeeBps: bigint;
     futuresTakerFee: bigint;
     futuresLiquidationFee: bigint;
-    futuresFirstDeliveryDate: bigint;
+    futuresFirstExpirationAt: bigint;
     insuranceFund: bigint;
     initialUserBalance: bigint;
   };
@@ -253,10 +253,10 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
   const latestBlock = await publicClient.getBlock();
   // First expiry sits one interval out from now (the duration constant is gone —
   // hashpower settles per-day, so only the expiry spacing schedules the book).
-  const firstDeliveryDate =
+  const firstExpirationAt =
     latestBlock.timestamp + BigInt(FUTURES_EXPIRATION_INTERVAL_DAYS * 24 * 3600);
   // initialize(hashrateOracle, liquidationMarginPercent, minimumPriceIncrement,
-  //            expirationIntervalDays, futureDeliveryDatesCount, firstFutureDeliveryDate)
+  //            expirationIntervalDays, futureExpirationDatesCount, firstFutureExpirationDate)
   const futures = await deployProxy(
     publicClient,
     owner.client,
@@ -269,7 +269,7 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
       MIN_PRICE_INCREMENT,
       FUTURES_EXPIRATION_INTERVAL_DAYS,
       FUTURES_FUTURE_DELIVERY_DATES_COUNT,
-      firstDeliveryDate,
+      firstExpirationAt,
     ],
   );
 
@@ -428,7 +428,7 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
       perpsMakerFeeBps: PERPS_MAKER_FEE_BPS,
       futuresTakerFee: FUTURES_TAKER_FEE,
       futuresLiquidationFee: FUTURES_LIQUIDATION_FEE,
-      futuresFirstDeliveryDate: firstDeliveryDate,
+      futuresFirstExpirationAt: firstExpirationAt,
       insuranceFund: INSURANCE_FUND,
       initialUserBalance: INITIAL_USER_BALANCE,
     },

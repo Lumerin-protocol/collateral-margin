@@ -125,9 +125,9 @@ function buildHarness({
               return 0n;
             case "getPendingFunding":
               return 0n;
-            case "getFuturesOrderMargin":
+            case "getOrderMargin":
               return 0n;
-            case "getActiveDeliveryDates":
+            case "getActiveExpirationDates":
               return [];
             case "computePortfolioIM":
               return balance / 2n;

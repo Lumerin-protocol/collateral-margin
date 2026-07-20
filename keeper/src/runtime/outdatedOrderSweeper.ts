@@ -57,7 +57,7 @@ const RECOVERABLE_REVERTS = new Set(["OrderNotExists", "OrderNotExpired"]);
 interface ExpiredOrder {
   user: Address;
   orderId: Hex;
-  deliveryAt: bigint;
+  expirationAt: bigint;
 }
 
 export class OutdatedOrderSweeper {
@@ -187,7 +187,7 @@ export class OutdatedOrderSweeper {
 
   /**
    * For each tracked user, read its order ids and hydrate to find
-   * `deliveryAt < blockTimestamp`. Per-user RPC failure is logged and
+   * `expirationAt < blockTimestamp`. Per-user RPC failure is logged and
    * skipped — one bad address (e.g. recently dropped from the tracker)
    * shouldn't block the rest of the sweep.
    */
@@ -215,7 +215,7 @@ export class OutdatedOrderSweeper {
       }
       if (orderIds.length === 0) continue;
 
-      let orders: ReadonlyArray<{ deliveryAt: bigint }>;
+      let orders: ReadonlyArray<{ expirationAt: bigint }>;
       try {
         orders = (await this.chain.publicClient.multicall({
           contracts: orderIds.map((id) => ({
@@ -225,7 +225,7 @@ export class OutdatedOrderSweeper {
             args: [id] as const,
           })),
           allowFailure: false,
-        })) as ReadonlyArray<{ deliveryAt: bigint }>;
+        })) as ReadonlyArray<{ expirationAt: bigint }>;
       } catch (err) {
         this.logger.warn(
           { err, user, orderCount: orderIds.length },
@@ -238,12 +238,12 @@ export class OutdatedOrderSweeper {
         const order = orders[i];
         const orderId = orderIds[i] as Hex;
         if (order === undefined) continue;
-        // Matches the contract guard: `deliveryAt >= block.timestamp` reverts
+        // Matches the contract guard: `expirationAt >= block.timestamp` reverts
         // `OrderNotExpired`. Use strict-less-than here so we don't broadcast
-        // a tx in the very-edge case `deliveryAt == blockTimestamp` (next
+        // a tx in the very-edge case `expirationAt == blockTimestamp` (next
         // block will satisfy it cleanly).
-        if (order.deliveryAt < blockTimestamp) {
-          expired.push({ user, orderId, deliveryAt: order.deliveryAt });
+        if (order.expirationAt < blockTimestamp) {
+          expired.push({ user, orderId, expirationAt: order.expirationAt });
         }
       }
     }

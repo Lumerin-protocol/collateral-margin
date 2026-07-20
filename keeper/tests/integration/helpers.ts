@@ -108,7 +108,7 @@ export async function readFuturesActiveDates(
   return (await stack.publicClient.readContract({
     address: stack.addresses.futures,
     abi: stack.abis.futures,
-    functionName: "getActiveDeliveryDates",
+    functionName: "getActiveExpirationDates",
     args: [user],
   })) as readonly bigint[];
 }
@@ -119,12 +119,12 @@ export async function readFuturesPositionIds(
   user: Address,
 ): Promise<readonly Hex[]> {
   const dates = await readFuturesActiveDates(stack, user);
-  // Encode deliveryAt as bytes32 for callers that still treat them as Hex ids.
+  // Encode expirationAt as bytes32 for callers that still treat them as Hex ids.
   return dates.map((d) => `0x${d.toString(16).padStart(64, "0")}` as Hex);
 }
 
 /**
- * Decodes Hex-encoded deliveryAt values (from `readFuturesPositionIds`) back
+ * Decodes Hex-encoded expirationAt values (from `readFuturesPositionIds`) back
  * to bigint expiries. Kept for multi-expiry balancing tests.
  */
 export async function readFuturesLotExpiries(
@@ -291,13 +291,13 @@ export async function readFuturesClosedQuantity(
 export async function readFuturesNetQuantity(
   stack: DeployedStack,
   user: Address,
-  deliveryAt: bigint,
+  expirationAt: bigint,
 ): Promise<bigint> {
   const pos = (await stack.publicClient.readContract({
     address: stack.addresses.futures,
     abi: stack.abis.futures,
     functionName: "getUserPosition",
-    args: [user, deliveryAt],
+    args: [user, expirationAt],
   })) as { netQuantity: bigint };
   return pos.netQuantity;
 }
@@ -356,20 +356,20 @@ export const readFuturesOrderLiquidationBlock = (s: DeployedStack, u: Address) =
   earliestEventBlock(s, "futures", "OrderLiquidated", { user: u });
 
 /**
- * Earliest block at which `Futures.PositionSettled(user, deliveryAt)` was
- * emitted. `deliveryAtHex` is the bytes32 encoding from `readFuturesPositionIds`.
+ * Earliest block at which `Futures.PositionSettled(user, expirationAt)` was
+ * emitted. `expirationAtHex` is the bytes32 encoding from `readFuturesPositionIds`.
  */
 export async function readLotClosedBlock(
   stack: DeployedStack,
   user: Address,
-  deliveryAtHex: Hex,
+  expirationAtHex: Hex,
 ): Promise<bigint | null> {
-  const deliveryAt = BigInt(deliveryAtHex);
+  const expirationAt = BigInt(expirationAtHex);
   const logs = await stack.publicClient.getContractEvents({
     address: stack.addresses.futures,
     abi: stack.abis.futures,
     eventName: "PositionSettled",
-    args: { user, deliveryAt },
+    args: { user, expirationAt },
     fromBlock: 0n,
   });
   let earliest: bigint | null = null;

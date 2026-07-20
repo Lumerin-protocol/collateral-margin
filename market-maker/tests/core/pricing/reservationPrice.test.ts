@@ -96,10 +96,10 @@ describe("computeReservationMidQuote", () => {
     assert.ok(shortInv.askMid >= noInv.askMid, "short inventory should push ask mid up or equal");
   });
 
-  it("uses deliveryDate from context when provided", () => {
+  it("uses expirationAt from context when provided", () => {
     const nowMs = Date.now();
     const futureDelivery = Math.floor(nowMs / 1000) + 7200; // 2 hours from now
-    const context: InstrumentContext = { deliveryDate: futureDelivery };
+    const context: InstrumentContext = { expirationAt: futureDelivery };
 
     const { bidMid, askMid } = computeReservationMidQuote({
       oracle: makeOracle(1_000_000_000n),
@@ -115,7 +115,7 @@ describe("computeReservationMidQuote", () => {
     assert.ok(bidMid > 0n);
   });
 
-  it("expired deliveryDate (T=0) produces no inventory adjustment", () => {
+  it("expired expirationAt (T=0) produces no inventory adjustment", () => {
     const nowMs = Date.now();
     const pastDelivery = Math.floor(nowMs / 1000) - 100; // already expired
     const bigInventory = makeInventory(100_000_000n);
@@ -125,7 +125,7 @@ describe("computeReservationMidQuote", () => {
       oracle: makeOracle(1_000_000_000n, new Fraction(1n, 100n)),
       gas: makeGas(),
       inventory: bigInventory,
-      context: { deliveryDate: pastDelivery },
+      context: { expirationAt: pastDelivery },
       cfg,
       tick: TICK,
       volHorizonSec: HORIZON_SEC,

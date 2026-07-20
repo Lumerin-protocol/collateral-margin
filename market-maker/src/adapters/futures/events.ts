@@ -7,8 +7,8 @@ import type {
 import { FuturesAbi } from "futures-contracts/abi/Futures";
 
 /** Instrument id for a futures expiry, e.g. `futures:1893456000`. */
-export function futuresInstrumentId(deliveryDate: bigint): string {
-  return `futures:${deliveryDate.toString()}`;
+export function futuresInstrumentId(expirationAt: bigint): string {
+  return `futures:${expirationAt.toString()}`;
 }
 
 type FuturesLog = Log<
@@ -64,13 +64,13 @@ export class FuturesVenueEvents implements VenueEvents {
 export function decodeEvent(log: FuturesLog): VenueEvent | null {
   switch (log.eventName) {
     case "OrderCreated": {
-      const { orderId, participant, price, quantity, deliveryAt } = log.args;
+      const { orderId, participant, price, quantity, expirationAt } = log.args;
       if (
         !orderId ||
         !participant ||
         price === undefined ||
         quantity === undefined ||
-        deliveryAt === undefined
+        expirationAt === undefined
       )
         return null;
       const absQty = quantity < 0n ? -quantity : quantity;
@@ -82,8 +82,8 @@ export function decodeEvent(log: FuturesLog): VenueEvent | null {
         price,
         side: quantity > 0n ? "buy" : "sell",
         size: absQty,
-        instrumentId: futuresInstrumentId(deliveryAt),
-        deliveryDate: deliveryAt,
+        instrumentId: futuresInstrumentId(expirationAt),
+        expirationAt: expirationAt,
       };
     }
     case "OrderUpdated": {
@@ -106,26 +106,26 @@ export function decodeEvent(log: FuturesLog): VenueEvent | null {
       return { type: "order-cancelled", orderId };
     }
     case "OrderMatched": {
-      const { maker, taker, deliveryAt } = log.args;
-      if (!maker || !taker || deliveryAt === undefined) return null;
+      const { maker, taker, expirationAt } = log.args;
+      if (!maker || !taker || expirationAt === undefined) return null;
       // Broadcast position-changed for both sides; inventory resyncs via getUserPosition.
       return {
         type: "position-changed",
         participant: maker,
-        instrumentId: futuresInstrumentId(deliveryAt),
+        instrumentId: futuresInstrumentId(expirationAt),
       };
     }
     case "PositionLiquidated":
     case "PositionSettled": {
-      const { user, deliveryAt } = log.args as {
+      const { user, expirationAt } = log.args as {
         user?: `0x${string}`;
-        deliveryAt?: bigint;
+        expirationAt?: bigint;
       };
-      if (!user || deliveryAt === undefined) return null;
+      if (!user || expirationAt === undefined) return null;
       return {
         type: "position-changed",
         participant: user,
-        instrumentId: futuresInstrumentId(deliveryAt),
+        instrumentId: futuresInstrumentId(expirationAt),
       };
     }
     default:

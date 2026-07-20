@@ -218,7 +218,7 @@
               "description": "Environment variable interpolation (resolved at startup)"
             }
           ],
-          "description": "Seconds. Fallback time-to-margin-call when InstrumentContext.deliveryDate is unavailable."
+          "description": "Seconds. Fallback time-to-margin-call when InstrumentContext.expirationAt is unavailable."
         },
         "minSpreadBps": {
           "anyOf": [

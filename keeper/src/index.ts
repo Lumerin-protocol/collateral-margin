@@ -141,7 +141,7 @@ async function main(): Promise<void> {
     webhookIngester = new WebhookIngester(config, tracker, logger);
   }
 
-  // Optional: cash-settle futures positions at their maturity (`deliveryAt`)
+  // Optional: cash-settle futures positions at their maturity (`expirationAt`)
   // via the permissionless `Futures.settlePosition`. Off by default. Any keeper
   // signer can settle — no validator role required. See `delivery/coordinator.ts`.
   let deliveryCoordinator: DeliveryCoordinator | undefined;
@@ -163,7 +163,7 @@ async function main(): Promise<void> {
   const balanceMonitor = new BalanceMonitor(chain, config, logger);
 
   // Futures-specific maintenance: walks tracked participants and closes
-  // any of their orders past `deliveryAt` via the permissionless
+  // any of their orders past `expirationAt` via the permissionless
   // `Futures.removeOutdatedOrder` entrypoint (Futures v2.11.0+ no longer
   // auto-sweeps on `createOrder`). Cheap, off the hot path — see
   // `runtime/outdatedOrderSweeper.ts` for the gas-trade reasoning. Set
@@ -270,7 +270,7 @@ async function main(): Promise<void> {
     //      its own positions). Their positions may pre-date
     //      BACKFILL_FROM_BLOCK, in which case the tracker has no
     //      record of them — but we know the address at boot, so the
-    //      one extra `getActiveDeliveryDates` read is a free safety net.
+    //      one extra `getActiveExpirationDates` read is a free safety net.
     //   2. The manual seed list (`DELIVERY_BOOTSTRAP_USERS`). Used to
     //      recover a known-stuck user when the tracker hasn't found
     //      them — typical when log backfill is failing on the

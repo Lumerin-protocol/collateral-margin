@@ -96,7 +96,7 @@ src/
   venues/
     types.ts           # Venue interface (multi-market aware: perps, futures, options)
     perps.ts           # Perps adapter (HashPowerPerpsDEX)
-    futures.ts         # Futures adapter (deliveryAt → marketId)
+    futures.ts         # Futures adapter (expirationAt → marketId)
   coordinator/
     queue.ts           # mmSurplus-ordered cross-account priority queue
     planner.ts         # Per-account orders → positions liquidation plan
@@ -216,7 +216,7 @@ Suites cover:
 
 - `pme/health` — multicall batching + `imUtilization` precision
 - `venues/perps` — long/short PnL math, `PERPS_MARKET_ID` sentinel, position id
-- `venues/futures` — buyer/seller PnL (one contract = 1 PH/s·day, duration-free), `deliveryAt` → marketId
+- `venues/futures` — buyer/seller PnL (one contract = 1 PH/s·day, duration-free), `expirationAt` → marketId
 - `coordinator/queue` — BigInt-safe ordering, `upsert` re-ranking, snapshot semantics
 - `coordinator/planner` — orders-leg, position ranking, `OrdersStillOpen`-replay, bad-debt
 - `alert/notifier` — dedupe window, severity promotion, ordering, retry-on-failure

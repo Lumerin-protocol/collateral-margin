@@ -16,8 +16,8 @@ import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
 import { formatGasCost } from "../tx/gasCost.ts";
 
 /**
- * Optional keeper module that calls `Futures.settlePosition(user, deliveryAt)`
- * on every active futures aggregate the moment its `deliveryAt` (maturity) is
+ * Optional keeper module that calls `Futures.settlePosition(user, expirationAt)`
+ * on every active futures aggregate the moment its `expirationAt` (maturity) is
  * reached. Settlement pins the expiry price (lazily on first settle) and
  * cash-settles that user's unilateral PnL through the insurance fund.
  *
@@ -26,12 +26,12 @@ import { formatGasCost } from "../tx/gasCost.ts";
  * Hot path is event-driven:
  *
  *   OrderMatched     ─▶  re-index maker + taker active expiries
- *   PositionSettled  ─▶  drop that (user, deliveryAt) from the index
+ *   PositionSettled  ─▶  drop that (user, expirationAt) from the index
  *   timer fires      ─▶  settle matured tracked aggregates
  *
  * Cold-start safety net:
  *
- *   bootstrapFromUsers(addrs) ─▶ getActiveDeliveryDates + getUserPosition
+ *   bootstrapFromUsers(addrs) ─▶ getActiveExpirationDates + getUserPosition
  *   backfill(fromBlock)       ─▶ replay OrderMatched / PositionSettled
  *   sweep()                   ─▶ periodic settle of past-due tracked rows
  */
@@ -203,7 +203,7 @@ export class DeliveryCoordinator {
     }
 
     const pastDue = this.countPastDuePositions();
-    const nextDueAt = this.findEarliestDeliveryAt();
+    const nextDueAt = this.findEarliestExpirationAt();
     this.logger.info(
       {
         users: users.length,
@@ -225,16 +225,16 @@ export class DeliveryCoordinator {
     const nowSec = BigInt(Math.floor(Date.now() / 1000));
     let n = 0;
     for (const pos of this.tracked.values()) {
-      if (nowSec >= pos.deliveryAt) n++;
+      if (nowSec >= pos.expirationAt) n++;
     }
     return n;
   }
 
-  private findEarliestDeliveryAt(): bigint | undefined {
+  private findEarliestExpirationAt(): bigint | undefined {
     let earliest: bigint | undefined;
     for (const pos of this.tracked.values()) {
-      if (earliest === undefined || pos.deliveryAt < earliest)
-        earliest = pos.deliveryAt;
+      if (earliest === undefined || pos.expirationAt < earliest)
+        earliest = pos.expirationAt;
     }
     return earliest;
   }
@@ -255,55 +255,55 @@ export class DeliveryCoordinator {
   }
 
   private async indexUserPositionsInternal(user: Address): Promise<number> {
-    let deliveryAts: readonly bigint[];
+    let expirationAts: readonly bigint[];
     try {
-      deliveryAts = (await this.chain.publicClient.readContract({
+      expirationAts = (await this.chain.publicClient.readContract({
         address: this.config.futures.address,
         abi: FuturesAbi,
-        functionName: "getActiveDeliveryDates",
+        functionName: "getActiveExpirationDates",
         args: [user],
       })) as readonly bigint[];
     } catch (err) {
-      this.logger.error({ err, user }, "delivery: getActiveDeliveryDates failed");
+      this.logger.error({ err, user }, "delivery: getActiveExpirationDates failed");
       return 0;
     }
-    if (deliveryAts.length === 0) return 0;
+    if (expirationAts.length === 0) return 0;
 
     const positions = (await this.chain.publicClient.multicall({
-      contracts: deliveryAts.map((deliveryAt) => ({
+      contracts: expirationAts.map((expirationAt) => ({
         address: this.config.futures.address,
         abi: FuturesAbi,
         functionName: "getUserPosition" as const,
-        args: [user, deliveryAt] as const,
+        args: [user, expirationAt] as const,
       })),
       allowFailure: false,
     })) as readonly { netQuantity: bigint; netEntryValue: bigint }[];
 
     let added = 0;
-    for (let i = 0; i < deliveryAts.length; i++) {
-      const deliveryAt = deliveryAts[i]!;
+    for (let i = 0; i < expirationAts.length; i++) {
+      const expirationAt = expirationAts[i]!;
       const pos = positions[i];
       if (pos === undefined || pos.netQuantity === 0n) continue;
-      if (this.upsertTracked(user, deliveryAt)) added++;
+      if (this.upsertTracked(user, expirationAt)) added++;
     }
     return added;
   }
 
   /** Insert or refresh a tracked aggregate. Returns true if newly added. */
-  private upsertTracked(user: Address, deliveryAt: bigint): boolean {
-    const key = trackKey(user, deliveryAt);
+  private upsertTracked(user: Address, expirationAt: bigint): boolean {
+    const key = trackKey(user, expirationAt);
     if (this.tracked.has(key)) return false;
     const tracked: TrackedPosition = {
       user: getAddress(user),
-      deliveryAt,
+      expirationAt,
     };
     this.tracked.set(key, tracked);
     this.scheduleTimer(tracked);
     return true;
   }
 
-  private dropTracked(user: Address, deliveryAt: bigint): void {
-    const key = trackKey(user, deliveryAt);
+  private dropTracked(user: Address, expirationAt: bigint): void {
+    const key = trackKey(user, expirationAt);
     this.tracked.delete(key);
     const t = this.timers.get(key);
     if (t !== undefined) {
@@ -318,8 +318,8 @@ export class DeliveryCoordinator {
     const candidates: TrackedPosition[] = [];
 
     for (const pos of this.tracked.values()) {
-      if (this.inflight.has(trackKey(pos.user, pos.deliveryAt))) continue;
-      if (nowSec < pos.deliveryAt) continue;
+      if (this.inflight.has(trackKey(pos.user, pos.expirationAt))) continue;
+      if (nowSec < pos.expirationAt) continue;
       candidates.push(pos);
     }
 
@@ -354,20 +354,20 @@ export class DeliveryCoordinator {
   }
 
   /** Public for tests. */
-  has(user: Address, deliveryAt: bigint): boolean {
-    return this.tracked.has(trackKey(user, deliveryAt));
+  has(user: Address, expirationAt: bigint): boolean {
+    return this.tracked.has(trackKey(user, expirationAt));
   }
 
-  async settle(user: Address, deliveryAt: bigint): Promise<void> {
-    await this.settleBatch([{ user: getAddress(user), deliveryAt }]);
+  async settle(user: Address, expirationAt: bigint): Promise<void> {
+    await this.settleBatch([{ user: getAddress(user), expirationAt }]);
   }
 
   async settleBatch(positions: readonly TrackedPosition[]): Promise<void> {
     const fresh: TrackedPosition[] = [];
     for (const pos of positions) {
-      const key = trackKey(pos.user, pos.deliveryAt);
+      const key = trackKey(pos.user, pos.expirationAt);
       if (this.inflight.has(key)) continue;
-      fresh.push({ user: getAddress(pos.user), deliveryAt: pos.deliveryAt });
+      fresh.push({ user: getAddress(pos.user), expirationAt: pos.expirationAt });
       this.inflight.add(key);
     }
     if (fresh.length === 0) return;
@@ -377,7 +377,7 @@ export class DeliveryCoordinator {
       await next;
     } finally {
       for (const pos of fresh) {
-        this.inflight.delete(trackKey(pos.user, pos.deliveryAt));
+        this.inflight.delete(trackKey(pos.user, pos.expirationAt));
       }
     }
   }
@@ -392,7 +392,7 @@ export class DeliveryCoordinator {
           address: this.config.futures.address,
           abi: FuturesAbi,
           functionName: "settlePosition",
-          args: [pos.user, pos.deliveryAt],
+          args: [pos.user, pos.expirationAt],
           account: this.chain.account,
         } as unknown as SimParams),
       ),
@@ -410,12 +410,12 @@ export class DeliveryCoordinator {
       if (decoded !== undefined) {
         this.logRecoverableRevert(decoded, pos);
         if (decoded === "PositionNotExists") {
-          this.dropTracked(pos.user, pos.deliveryAt);
+          this.dropTracked(pos.user, pos.expirationAt);
         }
         continue;
       }
       this.logger.error(
-        { err: r.reason, user: pos.user, deliveryAt: pos.deliveryAt.toString() },
+        { err: r.reason, user: pos.user, expirationAt: pos.expirationAt.toString() },
         "delivery: simulate failed with non-recoverable error — skipping from batch",
       );
     }
@@ -433,7 +433,7 @@ export class DeliveryCoordinator {
         { batchSize: settleable.length },
         "[dryRun] would call Futures.multicall(settlePosition × N)",
       );
-      for (const pos of settleable) this.dropTracked(pos.user, pos.deliveryAt);
+      for (const pos of settleable) this.dropTracked(pos.user, pos.expirationAt);
       return;
     }
 
@@ -444,13 +444,13 @@ export class DeliveryCoordinator {
         const data = encodeFunctionData({
           abi: FuturesAbi,
           functionName: "settlePosition",
-          args: [pos.user, pos.deliveryAt],
+          args: [pos.user, pos.expirationAt],
         });
         calldatas.push(data);
         encodable.push(pos);
       } catch (err) {
         this.logger.error(
-          { err, user: pos.user, deliveryAt: pos.deliveryAt.toString() },
+          { err, user: pos.user, expirationAt: pos.expirationAt.toString() },
           "delivery: encodeFunctionData threw — dropping malformed entry from batch",
         );
       }
@@ -489,7 +489,7 @@ export class DeliveryCoordinator {
           await this.attemptSettle(pos);
         } catch (innerErr) {
           this.logger.error(
-            { err: innerErr, user: pos.user, deliveryAt: pos.deliveryAt.toString() },
+            { err: innerErr, user: pos.user, expirationAt: pos.expirationAt.toString() },
             "delivery: per-position fallback failed — leaving for next sweep",
           );
         }
@@ -512,12 +512,12 @@ export class DeliveryCoordinator {
     );
 
     for (const pos of encodable) {
-      this.dropTracked(pos.user, pos.deliveryAt);
+      this.dropTracked(pos.user, pos.expirationAt);
     }
   }
 
   private async attemptSettle(pos: TrackedPosition): Promise<void> {
-    const args = [pos.user, pos.deliveryAt] as const;
+    const args = [pos.user, pos.expirationAt] as const;
 
     type SimParams = Parameters<
       typeof this.chain.publicClient.simulateContract
@@ -540,7 +540,7 @@ export class DeliveryCoordinator {
       if (decoded !== undefined) {
         this.logRecoverableRevert(decoded, pos);
         if (decoded === "PositionNotExists") {
-          this.dropTracked(pos.user, pos.deliveryAt);
+          this.dropTracked(pos.user, pos.expirationAt);
         }
         return;
       }
@@ -549,10 +549,10 @@ export class DeliveryCoordinator {
 
     if (this.config.keeper.dryRun) {
       this.logger.info(
-        { user: pos.user, deliveryAt: pos.deliveryAt.toString() },
+        { user: pos.user, expirationAt: pos.expirationAt.toString() },
         "[dryRun] would call settlePosition",
       );
-      this.dropTracked(pos.user, pos.deliveryAt);
+      this.dropTracked(pos.user, pos.expirationAt);
       return;
     }
 
@@ -569,21 +569,21 @@ export class DeliveryCoordinator {
     this.logger.info(
       {
         user: pos.user,
-        deliveryAt: pos.deliveryAt.toString(),
+        expirationAt: pos.expirationAt.toString(),
         hash,
         blockNumber: receipt.blockNumber.toString(),
         ...formatGasCost(receipt, this.ethUsdFeed),
       },
       "delivery: settlePosition confirmed",
     );
-    this.dropTracked(pos.user, pos.deliveryAt);
+    this.dropTracked(pos.user, pos.expirationAt);
   }
 
   private onOrderMatched(logs: readonly Log[]): void {
     type Args = {
       maker?: Address;
       taker?: Address;
-      deliveryAt?: bigint;
+      expirationAt?: bigint;
       makerNetQtyAfter?: bigint;
       takerNetQtyAfter?: bigint;
     };
@@ -592,16 +592,16 @@ export class DeliveryCoordinator {
       const args = (raw as unknown as { args?: Args }).args;
       if (args === undefined) continue;
       // Fast path: if post-match qty is available, upsert/drop without RPC.
-      if (args.deliveryAt !== undefined) {
+      if (args.expirationAt !== undefined) {
         if (args.maker !== undefined && args.makerNetQtyAfter !== undefined) {
-          if (args.makerNetQtyAfter === 0n) this.dropTracked(args.maker, args.deliveryAt);
-          else this.upsertTracked(args.maker, args.deliveryAt);
+          if (args.makerNetQtyAfter === 0n) this.dropTracked(args.maker, args.expirationAt);
+          else this.upsertTracked(args.maker, args.expirationAt);
         } else if (args.maker !== undefined) {
           users.add(args.maker);
         }
         if (args.taker !== undefined && args.takerNetQtyAfter !== undefined) {
-          if (args.takerNetQtyAfter === 0n) this.dropTracked(args.taker, args.deliveryAt);
-          else this.upsertTracked(args.taker, args.deliveryAt);
+          if (args.takerNetQtyAfter === 0n) this.dropTracked(args.taker, args.expirationAt);
+          else this.upsertTracked(args.taker, args.expirationAt);
         } else if (args.taker !== undefined) {
           users.add(args.taker);
         }
@@ -616,35 +616,35 @@ export class DeliveryCoordinator {
   }
 
   private onPositionSettled(logs: readonly Log[]): void {
-    type Args = { user?: Address; deliveryAt?: bigint };
+    type Args = { user?: Address; expirationAt?: bigint };
     for (const raw of logs) {
       const args = (raw as unknown as { args?: Args }).args;
-      if (args?.user === undefined || args.deliveryAt === undefined) continue;
-      this.dropTracked(args.user, args.deliveryAt);
+      if (args?.user === undefined || args.expirationAt === undefined) continue;
+      this.dropTracked(args.user, args.expirationAt);
     }
   }
 
   private logRecoverableRevert(revert: RecoverableRevert, pos: TrackedPosition): void {
     if (revert === "PositionNotExists") {
       this.logger.info(
-        { user: pos.user, deliveryAt: pos.deliveryAt.toString(), revert },
+        { user: pos.user, expirationAt: pos.expirationAt.toString(), revert },
         "delivery: position already settled by someone else — dropping from index",
       );
       return;
     }
     this.logger.debug(
-      { user: pos.user, deliveryAt: pos.deliveryAt.toString(), revert },
+      { user: pos.user, expirationAt: pos.expirationAt.toString(), revert },
       "delivery: settlePosition skipped (transient revert, will retry)",
     );
   }
 
   private scheduleTimer(pos: TrackedPosition): void {
-    const key = trackKey(pos.user, pos.deliveryAt);
+    const key = trackKey(pos.user, pos.expirationAt);
     const existing = this.timers.get(key);
     if (existing !== undefined) clearTimeout(existing);
 
     const targetMs =
-      Number(pos.deliveryAt) * 1000 + this.config.delivery.settleDelayMs;
+      Number(pos.expirationAt) * 1000 + this.config.delivery.settleDelayMs;
     const delayMs = Math.max(0, targetMs - Date.now());
     if (delayMs > MAX_TIMEOUT_MS) {
       return;
@@ -652,7 +652,7 @@ export class DeliveryCoordinator {
     const timer = setTimeout(() => {
       void this.sweep().catch((err) => {
         this.logger.error(
-          { err, user: pos.user, deliveryAt: pos.deliveryAt.toString() },
+          { err, user: pos.user, expirationAt: pos.expirationAt.toString() },
           "delivery: timer-fired sweep threw",
         );
       });
@@ -662,26 +662,26 @@ export class DeliveryCoordinator {
   }
 }
 
-export function trackKey(user: Address, deliveryAt: bigint): string {
-  return `${getAddress(user).toLowerCase()}:${deliveryAt.toString()}`;
+export function trackKey(user: Address, expirationAt: bigint): string {
+  return `${getAddress(user).toLowerCase()}:${expirationAt.toString()}`;
 }
 
 interface TrackedPosition {
   user: Address;
-  deliveryAt: bigint;
+  expirationAt: bigint;
 }
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
 type RecoverableRevert =
   | "PositionNotExists"
-  | "PositionDeliveryNotStartedYet"
+  | "PositionExpirationNotStartedYet"
   | "OracleStale"
   | "InvalidOracle";
 
 const RECOVERABLE_REVERTS = new Set<RecoverableRevert>([
   "PositionNotExists",
-  "PositionDeliveryNotStartedYet",
+  "PositionExpirationNotStartedYet",
   "OracleStale",
   "InvalidOracle",
 ]);

@@ -46,8 +46,8 @@ export class FuturesVenue implements Venue {
   }
 
   marketLabel(marketId: MarketId): string {
-    const deliveryAt = marketIdToDeliveryAt(marketId);
-    const iso = new Date(Number(deliveryAt) * 1000).toISOString().slice(0, 10);
+    const expirationAt = marketIdToExpirationAt(marketId);
+    const iso = new Date(Number(expirationAt) * 1000).toISOString().slice(0, 10);
     return `futures ${iso}`;
   }
 
@@ -73,16 +73,16 @@ export class FuturesVenue implements Venue {
 
     return orderIds.map((id, i) => ({
       id,
-      marketId: deliveryAtMarketId(orders[i].deliveryAt),
+      marketId: expirationAtMarketId(orders[i].expirationAt),
     }));
   }
 
   async readPositions(user: Address): Promise<VenuePosition[]> {
-    const [deliveryAts, marketPrice] = await Promise.all([
+    const [expirationAts, marketPrice] = await Promise.all([
       this.chain.publicClient.readContract({
         address: this.config.futures.address,
         abi: FuturesAbi,
-        functionName: "getActiveDeliveryDates",
+        functionName: "getActiveExpirationDates",
         args: [user],
       }) as Promise<readonly bigint[]>,
       this.chain.publicClient.readContract({
@@ -92,21 +92,21 @@ export class FuturesVenue implements Venue {
       }) as Promise<bigint>,
     ]);
 
-    if (deliveryAts.length === 0) return [];
+    if (expirationAts.length === 0) return [];
 
     const positions = await this.chain.publicClient.multicall({
-      contracts: deliveryAts.map((deliveryAt) => ({
+      contracts: expirationAts.map((expirationAt) => ({
         address: this.config.futures.address,
         abi: FuturesAbi,
         functionName: "getUserPosition" as const,
-        args: [user, deliveryAt] as const,
+        args: [user, expirationAt] as const,
       })),
       allowFailure: false,
     });
 
     const out: VenuePosition[] = [];
-    for (let i = 0; i < deliveryAts.length; i++) {
-      const deliveryAt = deliveryAts[i]!;
+    for (let i = 0; i < expirationAts.length; i++) {
+      const expirationAt = expirationAts[i]!;
       const pos = positions[i]!;
       if (pos.netQuantity === 0n) continue;
 
@@ -117,8 +117,8 @@ export class FuturesVenue implements Venue {
       const notional = avgEntry * absQty;
 
       out.push({
-        id: deliveryAtMarketId(deliveryAt),
-        marketId: deliveryAtMarketId(deliveryAt),
+        id: expirationAtMarketId(expirationAt),
+        marketId: expirationAtMarketId(expirationAt),
         unrealizedLoss,
         notional,
       });
@@ -167,7 +167,7 @@ export class FuturesVenue implements Venue {
     // Gas-bounded chunking: send at most `maxLotsPerLiquidationTx` expiry legs.
     const cap = this.config.futures.maxLotsPerLiquidationTx;
     const chunk = cap > 0 && closes.length > cap ? closes.slice(0, cap) : closes;
-    const deliveryAts = chunk.map((c) => c.deliveryAt);
+    const expirationAts = chunk.map((c) => c.expirationAt);
     const closeQtys = chunk.map((c) => c.closeQty);
     const contractsClosed = closeQtys.reduce((s, q) => s + q, 0n);
 
@@ -190,7 +190,7 @@ export class FuturesVenue implements Venue {
       address: this.config.futures.address,
       abi: FuturesAbi,
       functionName: "liquidatePositions",
-      args: [user, deliveryAts, closeQtys],
+      args: [user, expirationAts, closeQtys],
       feeEventName: "PositionLiquidated",
       mapSkip: (errorName) => {
         if (errorName === "OrdersStillOpen") return "ordersStillOpen";
@@ -215,12 +215,12 @@ function abs(x: bigint): bigint {
   return x < 0n ? -x : x;
 }
 
-/** `bytes32(uint256(deliveryAt))` — same encoding the indexer uses. */
-export function deliveryAtMarketId(deliveryAt: bigint): MarketId {
-  return pad(toHex(deliveryAt), { size: 32 });
+/** `bytes32(uint256(expirationAt))` — same encoding the indexer uses. */
+export function expirationAtMarketId(expirationAt: bigint): MarketId {
+  return pad(toHex(expirationAt), { size: 32 });
 }
 
-/** Inverse of `deliveryAtMarketId` — used by the planner / labels. */
-export function marketIdToDeliveryAt(marketId: MarketId): bigint {
+/** Inverse of `expirationAtMarketId` — used by the planner / labels. */
+export function marketIdToExpirationAt(marketId: MarketId): bigint {
   return BigInt(marketId);
 }
