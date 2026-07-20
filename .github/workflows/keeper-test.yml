@@ -74,7 +74,9 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: Lumerin-protocol/futures-marketplace
-          ref: 5e28bb346b125d90eb138370a8a78c69487d1c26
+          # Futures 3.0 aggregate positions (PR Lumerin-protocol/futures-marketplace#215).
+          # After that merges to dev, retarget this pin to the merge commit / dev tip.
+          ref: d5cf8b9154276efdbe583c5be4c81eb0eedbaadc
           path: futures-marketplace
 
       - name: Install perps contracts dependencies
