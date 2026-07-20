@@ -50,7 +50,8 @@ import {
   expectHealthy,
   expectReducedToImBuffer,
   readFuturesLotLiquidatedBlocks,
-  readFuturesLotExpiries,
+  readFuturesNetQuantity,
+  readFuturesClosedQuantity,
   assertSingleBlock,
   isCriticalAlert,
   waitFor,
@@ -379,51 +380,44 @@ describe("Futures liquidation", () => {
 
 describe("Liquidate down to the IM buffer", () => {
   it(
-    "futures: one batched sweep closes a strict subset of lots into the [MM, IM] band",
+    "futures: one batched sweep closes a strict subset of qty into the [MM, IM] band",
     { timeout: 60_000 },
     async () => {
-      // Precondition: alice holds 12 long futures lots; a moderate crash
-      // ($40 → $30 mark) breaks MM but a subset close restores the IM buffer.
-      // Contract under test (the screenshot bug fix): the planner must NOT
-      // fan out into one-lot-per-tx churn. Instead a single
-      // `liquidatePositions(user, ids[])` closes the worst-first subset in
-      // ONE block, leaves ≥1 lot open, and lands `MM <= balance <= IM`.
+      // Precondition: alice holds one aggregate long of 12 contracts; a moderate
+      // crash ($40 → $30 mark) breaks MM but a partial closeQty restores the IM
+      // buffer. A single `liquidatePositions(user, deliveryAts[], closeQtys[])`
+      // must land `MM <= balance <= IM` without full-closing the aggregate.
       const ctx = await loadFixture(futuresPartialCrashFixture, testClient);
       keeper = buildKeeper(ctx);
       await keeper.start();
 
       const alice = ctx.accounts.alice.account.address;
-      const lotsBefore = await readFuturesPositionIds(ctx, alice);
+      const deliveryAt = ctx.config.futuresFirstDeliveryDate;
+      const datesBefore = await readFuturesPositionIds(ctx, alice);
+      assert.equal(datesBefore.length, 1, "precondition: one active expiry");
       assert.equal(
-        lotsBefore.length,
-        ctx.aliceFuturesQty,
-        "precondition: alice should hold one lot per matched contract",
+        await readFuturesNetQuantity(ctx, alice, deliveryAt),
+        BigInt(ctx.aliceFuturesQty),
+        "precondition: aggregate net qty equals matched contracts",
       );
 
       await ctx.makeLiquidatable();
       await runOneSweep(keeper, alice);
 
-      // Landed in the buffer band — healthy but not over-liquidated.
       await expectReducedToImBuffer(ctx, alice);
 
-      // A strict subset closed: at least one lot remains open.
-      const lotsAfter = await readFuturesPositionIds(ctx, alice);
+      const netAfter = await readFuturesNetQuantity(ctx, alice, deliveryAt);
+      assert.ok(netAfter > 0n, `expected partial close (qty remaining), got ${netAfter}`);
       assert.ok(
-        lotsAfter.length > 0,
-        `expected a strict subset closed (>=1 lot open), got ${lotsAfter.length} remaining`,
-      );
-      assert.ok(
-        lotsAfter.length < lotsBefore.length,
-        `expected some lots closed, before=${lotsBefore.length} after=${lotsAfter.length}`,
+        netAfter < BigInt(ctx.aliceFuturesQty),
+        `expected some contracts closed, before=${ctx.aliceFuturesQty} after=${netAfter}`,
       );
 
-      // Anti-churn regression guard: every closed lot rides a SINGLE block.
+      const closed = await readFuturesClosedQuantity(ctx, alice);
+      assert.equal(closed, BigInt(ctx.aliceFuturesQty) - netAfter);
+
       const liqBlocks = await readFuturesLotLiquidatedBlocks(ctx, alice);
-      assert.equal(
-        liqBlocks.length,
-        lotsBefore.length - lotsAfter.length,
-        "expected one LotLiquidated event per closed lot",
-      );
+      assert.ok(liqBlocks.length >= 1, "expected PositionLiquidated");
       assertSingleBlock(liqBlocks, "futures liquidatePositions batch");
     },
   );
@@ -432,80 +426,55 @@ describe("Liquidate down to the IM buffer", () => {
     "futures: one batched sweep balances the subset close across two expirations",
     { timeout: 60_000 },
     async () => {
-      // Precondition: alice holds 6 long futures lots on EACH of two delivery
-      // dates (12 total). The moderate crash ($40 → $30 mark) breaks MM; because
-      // the duration-free risk model weights every lot by the same per-day value
-      // (±1 delta each) regardless of expiry, the aggregate margin equals the
-      // single-expiry 12-lot case, so a worst-first subset restores the IM buffer.
-      //
-      // Contract under test (the balancing feature): the ONE
-      // `liquidatePositions(user, ids[])` call must draw its closed lots from
-      // BOTH books — not empty the first expiry before touching the second.
-      // We snapshot each lot's `deliveryAt` *before* the close (positions are
-      // deleted on liquidation), diff the surviving ids to find what closed,
-      // and assert the per-expiry counts are balanced (differ by ≤ 1) with at
-      // least one lot closed on each date.
+      // Precondition: alice holds 6-contract aggregates on EACH of two delivery
+      // dates. Moderate crash breaks MM; balanced unit closes restore the IM
+      // buffer without draining one expiry first.
       const ctx = await loadFixture(futuresMultiExpiryPartialCrashFixture, testClient);
       keeper = buildKeeper(ctx);
       await keeper.start();
 
       const alice = ctx.accounts.alice.account.address;
-      const lotsBefore = await readFuturesPositionIds(ctx, alice);
+      const datesBefore = await readFuturesPositionIds(ctx, alice);
       assert.equal(
-        lotsBefore.length,
-        ctx.perExpiryQty * ctx.deliveryDates.length,
-        "precondition: alice holds perExpiryQty lots per delivery date",
+        datesBefore.length,
+        ctx.deliveryDates.length,
+        "precondition: one aggregate per delivery date",
       );
-
-      // Snapshot id → expiry while every lot is still alive on-chain.
-      const expiryById = await readFuturesLotExpiries(ctx, lotsBefore);
       const [firstDelivery, secondDelivery] = ctx.deliveryDates;
+      assert.ok(firstDelivery !== undefined && secondDelivery !== undefined);
+      assert.equal(
+        await readFuturesNetQuantity(ctx, alice, firstDelivery),
+        BigInt(ctx.perExpiryQty),
+      );
+      assert.equal(
+        await readFuturesNetQuantity(ctx, alice, secondDelivery),
+        BigInt(ctx.perExpiryQty),
+      );
 
       await ctx.makeLiquidatable();
       await runOneSweep(keeper, alice);
 
-      // Landed in the buffer band — healthy but not over-liquidated.
       await expectReducedToImBuffer(ctx, alice);
 
-      const lotsAfter = await readFuturesPositionIds(ctx, alice);
-      const survivors = new Set<string>(lotsAfter.map((id) => id.toLowerCase()));
-      const closed = lotsBefore.filter((id) => !survivors.has(id.toLowerCase()));
+      const afterFirst = await readFuturesNetQuantity(ctx, alice, firstDelivery);
+      const afterSecond = await readFuturesNetQuantity(ctx, alice, secondDelivery);
+      const remFirst = afterFirst < 0n ? -afterFirst : afterFirst;
+      const remSecond = afterSecond < 0n ? -afterSecond : afterSecond;
+      const closedA = BigInt(ctx.perExpiryQty) - remFirst;
+      const closedB = BigInt(ctx.perExpiryQty) - remSecond;
 
       assert.ok(
-        lotsAfter.length > 0 && lotsAfter.length < lotsBefore.length,
-        `expected a strict subset closed, before=${lotsBefore.length} after=${lotsAfter.length}`,
+        closedA >= 1n && closedB >= 1n,
+        `expected the close to span BOTH expirations, got first=${closedA} second=${closedB}`,
       );
-
-      // Attribute every closed lot back to its book.
-      let closedFirst = 0;
-      let closedSecond = 0;
-      for (const id of closed) {
-        const expiry = expiryById.get(id);
-        assert.ok(expiry !== undefined, `missing pre-close expiry for lot ${id}`);
-        if (expiry === firstDelivery) closedFirst += 1;
-        else if (expiry === secondDelivery) closedSecond += 1;
-        else assert.fail(`lot ${id} has an unexpected expiry ${expiry}`);
-      }
-
-      // The balancing invariant: both books contributed, and the split is even
-      // (the round-robin worst-first selection differs by at most one lot).
+      const skew = closedA > closedB ? closedA - closedB : closedB - closedA;
       assert.ok(
-        closedFirst >= 1 && closedSecond >= 1,
-        `expected the close to span BOTH expirations, got first=${closedFirst} second=${closedSecond}`,
-      );
-      const skew = closedFirst > closedSecond ? closedFirst - closedSecond : closedSecond - closedFirst;
-      assert.ok(
-        skew <= 1,
-        `expected a balanced split across expirations (skew <= 1), got first=${closedFirst} second=${closedSecond}`,
+        skew <= 1n,
+        `expected a balanced split across expirations (skew <= 1), got first=${closedA} second=${closedB}`,
       );
 
-      // Anti-churn guard: the whole balanced subset rides a single block.
       const liqBlocks = await readFuturesLotLiquidatedBlocks(ctx, alice);
-      assert.equal(
-        liqBlocks.length,
-        closed.length,
-        "expected one LotLiquidated event per closed lot",
-      );
+      assert.ok(liqBlocks.length >= 1, "expected PositionLiquidated");
       assertSingleBlock(liqBlocks, "futures multi-expiry liquidatePositions batch");
     },
   );
@@ -565,10 +534,10 @@ describe("Liquidate down to the IM buffer", () => {
       const perpsBefore = await readPerpsPosition(ctx, alice);
       assert.equal(perpsBefore.netQuantity, ctx.alicePerpsQty, "precondition: alice long 40 perps");
       const futuresBefore = await readFuturesPositionIds(ctx, alice);
+      assert.equal(futuresBefore.length, 1, "precondition: one futures aggregate");
       assert.equal(
-        futuresBefore.length,
-        ctx.aliceFuturesQty,
-        "precondition: alice holds the futures lot(s)",
+        await readFuturesNetQuantity(ctx, alice, ctx.config.futuresFirstDeliveryDate),
+        BigInt(ctx.aliceFuturesQty),
       );
 
       await ctx.makeLiquidatable();
@@ -591,6 +560,11 @@ describe("Liquidate down to the IM buffer", () => {
         futuresAfter.length,
         futuresBefore.length,
         `expected the futures leg untouched, before=${futuresBefore.length} after=${futuresAfter.length}`,
+      );
+      assert.equal(
+        await readFuturesNetQuantity(ctx, alice, ctx.config.futuresFirstDeliveryDate),
+        BigInt(ctx.aliceFuturesQty),
+        "futures net qty unchanged",
       );
     },
   );
@@ -620,10 +594,11 @@ describe("Liquidate down to the IM buffer", () => {
       const perpsBefore = await readPerpsPosition(ctx, alice);
       assert.equal(perpsBefore.netQuantity, ctx.alicePerpsQty, "precondition: alice long 11 perps");
       const futuresBefore = await readFuturesPositionIds(ctx, alice);
+      assert.equal(futuresBefore.length, 1, "precondition: one futures aggregate");
       assert.equal(
-        futuresBefore.length,
-        ctx.aliceFuturesQty,
-        "precondition: alice holds 12 futures lots",
+        await readFuturesNetQuantity(ctx, alice, ctx.config.futuresFirstDeliveryDate),
+        BigInt(ctx.aliceFuturesQty),
+        "precondition: alice holds 12 futures contracts",
       );
 
       await ctx.makeLiquidatable();
@@ -645,7 +620,7 @@ describe("Liquidate down to the IM buffer", () => {
       const perpsBlock = await readPerpsPositionLiquidationBlock(ctx, alice);
       const futuresBlock = await readFuturesPositionLiquidationBlock(ctx, alice);
       assert.ok(perpsBlock !== null, "expected a perps PositionLiquidated event (perps leg swept)");
-      assert.ok(futuresBlock !== null, "expected a futures LotLiquidated event (futures leg swept)");
+      assert.ok(futuresBlock !== null, "expected a futures PositionLiquidated event (futures leg swept)");
 
       // Both legs reduced; the account is not fully wiped (partial regime).
       const perpsAfter = await readPerpsPosition(ctx, alice);
@@ -737,7 +712,7 @@ describe("Cross-venue coordination", () => {
       const perpsBlock = await readPerpsPositionLiquidationBlock(ctx, alice);
       const futuresBlock = await readFuturesPositionLiquidationBlock(ctx, alice);
       assert.ok(perpsBlock !== null, "expected a perps PositionLiquidated event");
-      assert.ok(futuresBlock !== null, "expected a futures LotLiquidated event");
+      assert.ok(futuresBlock !== null, "expected a futures PositionLiquidated event");
       assert.ok(
         perpsBlock < futuresBlock,
         `expected perps liquidated before futures, got perps=${perpsBlock} futures=${futuresBlock}`,
@@ -768,7 +743,7 @@ describe("Cross-venue coordination", () => {
       const perpsBlock = await readPerpsPositionLiquidationBlock(ctx, alice);
       const futuresBlock = await readFuturesPositionLiquidationBlock(ctx, alice);
       assert.ok(perpsBlock !== null, "expected a perps PositionLiquidated event");
-      assert.ok(futuresBlock !== null, "expected a futures LotLiquidated event");
+      assert.ok(futuresBlock !== null, "expected a futures PositionLiquidated event");
       assert.ok(
         futuresBlock < perpsBlock,
         `expected futures liquidated before perps, got perps=${perpsBlock} futures=${futuresBlock}`,
@@ -825,7 +800,7 @@ describe("Cross-venue coordination", () => {
       assert.ok(perpsOrderBlock !== null, "expected a perps OrderLiquidated event");
       assert.ok(futuresOrderBlock !== null, "expected a futures OrderLiquidated event");
       assert.ok(perpsPositionBlock !== null, "expected a perps PositionLiquidated event");
-      assert.ok(futuresPositionBlock !== null, "expected a futures LotLiquidated event");
+      assert.ok(futuresPositionBlock !== null, "expected a futures PositionLiquidated event");
 
       const latestOrderBlock = max(perpsOrderBlock, futuresOrderBlock);
       const earliestPositionBlock = min(perpsPositionBlock, futuresPositionBlock);
@@ -962,7 +937,7 @@ describe("DeliveryCoordinator (live RPC)", () => {
       //
       // We then fast-forward the chain past `deliveryAt` and trigger one
       // sweep. `settlePosition` cash-settles the full position notional at the
-      // current market price and emits `LotClosed(SETTLED)`.
+      // current market price and emits `PositionSettled`.
       const ctx = await loadFixture(futuresLongCrashFixture, testClient);
       keeper = buildKeeper(ctx, {
         liquidatorPrivateKey: HARDHAT_PRIVATE_KEYS[4], // validator (parity; not required)
@@ -973,17 +948,18 @@ describe("DeliveryCoordinator (live RPC)", () => {
 
       const alice = ctx.accounts.alice.account.address;
       const positionsBefore = await readFuturesPositionIds(ctx, alice);
-      // The fixture creates one position per matched contract — Alice's
-      // 12-contract long becomes 12 separate position entries sharing one
-      // `deliveryAt`. Settling them all is the realistic case (one signer
-      // serializing many positions due at the same timestamp).
-      assert.equal(positionsBefore.length, ctx.aliceFuturesQty);
+      // 3.0: one unilateral aggregate per expiry (12 contracts → 1 active date).
+      assert.equal(positionsBefore.length, 1);
+      assert.equal(
+        await readFuturesNetQuantity(ctx, alice, ctx.config.futuresFirstDeliveryDate),
+        BigInt(ctx.aliceFuturesQty),
+      );
 
       // Seed the delivery index from history — the positions were created
       // before the keeper booted, so the live watcher hasn't seen them.
       await keeper.delivery.backfill(0n, 10_000n);
       for (const id of positionsBefore) {
-        assert.ok(keeper.delivery.has(id), `backfill should index position ${id}`);
+        assert.ok(keeper.delivery.has(alice, BigInt(id)), `backfill should index position ${id}`);
       }
 
       // Fast-forward past `deliveryAt`. `settlePosition` requires
@@ -1002,40 +978,33 @@ describe("DeliveryCoordinator (live RPC)", () => {
       await keeper.delivery.sweep();
 
       // End state: every position is gone from chain storage, each emitted
-      // a `LotClosed` event from the keeper's signer, and the
+      // a `PositionSettled` event from the keeper's signer, and the
       // index dropped all of them.
       await expectFuturesClosed(ctx, alice);
 
       // The index drop happens after the settling tx confirms. The
       // coordinator also runs a background safety-net sweep every
       // `sweepIntervalMs`; when it wins the race against this manual
-      // `sweep()` the on-chain `LotClosed` can be observable a tick before
+      // `sweep()` the on-chain `PositionSettled` can be observable a tick before
       // the in-memory index is pruned. Poll for the drop rather than
       // asserting it synchronously to avoid that race.
       const delivery = keeper.delivery;
       assert.ok(delivery);
       await waitFor(
-        () => positionsBefore.every((id) => !delivery.has(id)),
+        () => positionsBefore.every((id) => !delivery.has(alice, BigInt(id))),
         10_000,
       );
 
       const settledBlocks: bigint[] = [];
       for (const id of positionsBefore) {
-        const settledBlock = await readLotClosedBlock(ctx, id);
+        const settledBlock = await readLotClosedBlock(ctx, alice, id);
         assert.ok(
           settledBlock !== null,
-          `expected a LotClosed event for position ${id}`,
+          `expected a PositionSettled event for ${alice} @ ${id}`,
         );
         settledBlocks.push(settledBlock);
       }
-      // Batching invariant: all 12 settlements ride a single
-      // `Futures.multicall(bytes[])` transaction, so every
-      // `LotClosed` event lands in the same block. Without
-      // batching they would have been N separate txs across N blocks
-      // (plus a `replacement transaction underpriced` race in production
-      // when two of them collided on the same nonce). This assertion
-      // locks in the multicall path — if someone reverts the coordinator
-      // to per-id sends, the blocks fan out and this fails.
+      // Single aggregate → one settle; still assert one block (multicall path).
       const uniqueBlocks = new Set(settledBlocks.map((b) => b.toString()));
       assert.equal(
         uniqueBlocks.size,
@@ -1061,7 +1030,7 @@ describe("DeliveryCoordinator (live RPC)", () => {
       const ctx = await loadFixture(futuresLongCrashFixture, testClient);
 
       // Move time past deliveryAt *before* the keeper boots, so the live
-      // subscription would miss the (long-past) LotCreated event.
+      // subscription would miss the (long-past) OrderMatched event.
       const deliveryAt = ctx.config.futuresFirstDeliveryDate;
       await testClient.setNextBlockTimestamp({ timestamp: deliveryAt + 120n });
       await testClient.mine({ blocks: 1 });
@@ -1087,7 +1056,7 @@ describe("DeliveryCoordinator (live RPC)", () => {
       await expectFuturesClosed(ctx, alice);
       for (const id of positionsBefore) {
         assert.ok(
-          (await readLotClosedBlock(ctx, id)) !== null,
+          (await readLotClosedBlock(ctx, alice, id)) !== null,
           `missed delivery for ${id} should be settled by backfill sweep`,
         );
       }
@@ -1101,7 +1070,7 @@ describe("DeliveryCoordinator (live RPC)", () => {
       // Production reality: on Alchemy free tier `eth_getLogs` is capped
       // at 10 blocks, so log-based backfill is unusable for any non-trivial
       // window. The view-based discovery path (`bootstrapFromUsers`) reads
-      // `getPositionIds` + `getPositionById` directly from contract storage,
+      // ``getActiveDeliveryDates` + `getUserPosition` directly from contract storage,
       // sidestepping the log limit entirely. This test exercises that exact
       // recovery shape: we never call `backfill()` — only `bootstrapFromUsers`
       // — and verify every still-alive position is found and settled.
@@ -1119,7 +1088,7 @@ describe("DeliveryCoordinator (live RPC)", () => {
 
       await keeper.delivery.bootstrapFromUsers([alice]);
       for (const id of positionsBefore) {
-        assert.ok(keeper.delivery.has(id), `bootstrap should index position ${id}`);
+        assert.ok(keeper.delivery.has(alice, BigInt(id)), `bootstrap should index position ${id}`);
       }
 
       const deliveryAt = ctx.config.futuresFirstDeliveryDate;
@@ -1132,10 +1101,10 @@ describe("DeliveryCoordinator (live RPC)", () => {
       await expectFuturesClosed(ctx, alice);
       for (const id of positionsBefore) {
         assert.ok(
-          (await readLotClosedBlock(ctx, id)) !== null,
+          (await readLotClosedBlock(ctx, alice, id)) !== null,
           `position ${id} should be settled via view-based bootstrap`,
         );
-        assert.equal(keeper.delivery.has(id), false);
+        assert.equal(keeper.delivery.has(alice, BigInt(id)), false);
       }
     },
   );
@@ -1185,7 +1154,7 @@ describe("DeliveryCoordinator (live RPC)", () => {
       await expectFuturesClosed(ctx, alice);
       for (const id of positionsBefore) {
         assert.ok(
-          (await readLotClosedBlock(ctx, id)) !== null,
+          (await readLotClosedBlock(ctx, alice, id)) !== null,
           `manually-seeded position ${id} should be settled`,
         );
       }
@@ -1224,7 +1193,7 @@ describe("DeliveryCoordinator (live RPC)", () => {
       await expectFuturesClosed(ctx, alice);
       for (const id of positionsBefore) {
         assert.ok(
-          (await readLotClosedBlock(ctx, id)) !== null,
+          (await readLotClosedBlock(ctx, alice, id)) !== null,
           `position ${id} should be settled by a permissionless (non-validator) signer`,
         );
       }

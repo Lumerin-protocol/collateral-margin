@@ -18,7 +18,7 @@ import type { AccountSnapshot, MMParams } from "./types.ts";
  *   - perp.orderMargin (constant)
  *   - perp.unrealizedLoss = max(0, -((P - entry) * netQty / qtyScale))
  *   - futures.orderMargin (constant)
- *   - futures.unrealizedLoss = sum_i max(0, -(buyer? : ±)(P - entry_i))
+ *   - futures.unrealizedLoss = sum_i max(0, -(P * netQty_i - netEntryValue_i))
  *   - perp.fundingOwed (constant — short-term, refreshed on snapshot)
  *
  * Total mmRequired(P) is therefore piecewise-linear with kinks at the
@@ -40,19 +40,18 @@ function abs(x: bigint): bigint {
  * Aggregate net delta in WAD (matches `_aggregateGreeks` for pure-delta).
  *
  *   perpDelta = perpNetQty * WAD / 10^perpQtyDecimals
- *   futuresDelta = sum_i (isBuyer ? +1 : -1) * WAD
+ *   futuresDelta = sum_i netQuantity_i * WAD
  *
  * Note: the on-chain `getNetPositionDelta` already returns this sum for the
  * futures leg in WAD; we re-derive it here off-chain because the snapshot
- * carries per-position rows (needed for per-leg PnL kinks) and re-using
+ * carries per-expiry aggregates (needed for per-leg PnL kinks) and re-using
  * them avoids a second contract call. Both paths converge on the same value.
  */
 export function netDeltaWad(snap: AccountSnapshot, params: MMParams): bigint {
   const perpQtyScale = 10n ** BigInt(params.perpQuantityDecimals);
   let delta = (snap.perp.netQty * WAD) / perpQtyScale;
   for (const pos of snap.futures.positions) {
-    const sign = pos.isBuyer ? 1n : -1n;
-    delta += sign * WAD;
+    delta += pos.netQuantity * WAD;
   }
   return delta;
 }
@@ -99,18 +98,16 @@ export function perpUnrealizedLoss(snap: AccountSnapshot, params: MMParams, P: b
 }
 
 /**
- * Sum of per-position futures unrealized losses at price P. Each contract
+ * Sum of per-expiry futures unrealized losses at price P. Each whole contract
  * settles `pricePerDay` of notional (no duration multiplier):
  *
- *   diffPerDay = isBuyer ? (P - entryPerDay) : (entryPerDay - P)
- *   pnl = diffPerDay
+ *   pnl = P * netQuantity - netEntryValue
  *   loss = max(0, -pnl)
  */
 export function futuresUnrealizedLoss(snap: AccountSnapshot, P: bigint): bigint {
   let sum = 0n;
   for (const pos of snap.futures.positions) {
-    const diffPerDay = pos.isBuyer ? P - pos.entryPricePerDay : pos.entryPricePerDay - P;
-    const pnl = diffPerDay;
+    const pnl = P * pos.netQuantity - pos.netEntryValue;
     if (pnl < 0n) sum += -pnl;
   }
   return sum;

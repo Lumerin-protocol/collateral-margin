@@ -102,7 +102,7 @@ function buildHarness({ balance, perpEntry }: { balance: bigint; perpEntry: bigi
               return 0n;
             case "getFuturesOrderMargin":
               return 0n;
-            case "getPositionIds":
+            case "getActiveDeliveryDates":
               return [];
             case "computePortfolioIM":
               return imAtPriceTokens(currentPrice);

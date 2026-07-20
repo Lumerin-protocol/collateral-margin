@@ -498,8 +498,8 @@ export function multiFuturesFixtureBuilder(rpcUrl: string) {
     const aliceDeposit = parseUnits("40", base.config.tokenDecimals);
     const bobDeposit = parseUnits("3000", base.config.tokenDecimals);
     const firstDeliveryAt = base.config.futuresFirstDeliveryDate;
-    const secondDeliveryAt =
-      firstDeliveryAt + BigInt(7 * 24 * 3600); // matches `FUTURES_EXPIRATION_INTERVAL_DAYS`.
+    // Must match on-chain Futures.EXPIRATION_INTERVAL_DAYS (= 30).
+    const secondDeliveryAt = firstDeliveryAt + BigInt(30 * 24 * 3600);
 
     await base.deposit(base.accounts.alice.account.address, aliceDeposit);
     await base.deposit(base.accounts.bob.account.address, bobDeposit);
@@ -608,7 +608,7 @@ export function futuresMultiExpiryPartialCrashFixtureBuilder(rpcUrl: string) {
     const bobDeposit = parseUnits("3000", base.config.tokenDecimals);
     const perExpiryQty = 6;
     const firstDeliveryAt = base.config.futuresFirstDeliveryDate;
-    const secondDeliveryAt = firstDeliveryAt + BigInt(7 * 24 * 3600); // FUTURES_EXPIRATION_INTERVAL_DAYS
+    const secondDeliveryAt = firstDeliveryAt + BigInt(30 * 24 * 3600); // Futures.EXPIRATION_INTERVAL_DAYS
 
     // Zero the taker fee (see `futuresPartialCrashFixtureBuilder`) so the 12-lot
     // entry IM ($48) fits the $136 deposit; the liquidation fee still applies.
@@ -967,9 +967,8 @@ export function crossVenueOrdersAndPositionsFixtureBuilder(rpcUrl: string) {
  * 12-unit futures long ($50.40 loss, duration-free: 12 · ($4.21 − $0.01 mark)).
  * The planner must liquidate futures first.
  *
- * The futures qty is capped at 12 because `createOrder` loops once per
- * contract in the matching engine; larger values blow past Hardhat's
- * per-tx gas cap (16M).
+ * Futures qty is a single signed createOrder in 3.0; 12 contracts remains a
+ * convenient fixture size for margin math (not a gas/looping constraint).
  */
 export function crossVenueFuturesDominantFixtureBuilder(rpcUrl: string) {
   return async (): Promise<CrossVenueFixture> => {
@@ -1010,7 +1009,7 @@ interface FuturesTrade {
   seller: Wallet;
   price: bigint;
   deliveryAt: bigint;
-  /** int8 — number of contracts. */
+  /** Whole contracts (signed at placement: +buy / −sell). */
   quantity: number;
 }
 
@@ -1044,13 +1043,12 @@ async function placeFuturesOrder(
   deliveryAt: bigint,
   qty: number,
 ): Promise<void> {
-  // Futures takes a packed (price, deliveryDate, destURL, qty) tuple.
-  // `qty` is `int8` — positive = buyer-side, negative = seller-side.
+  // Futures 3.0: createOrder(price, deliveryAt, signedQuantity) — whole contracts.
   const hash = await wallet.client.writeContract({
     address: base.addresses.futures,
     abi: base.abis.futures,
     functionName: "createOrder",
-    args: [price, deliveryAt, "//keeper-test", qty],
+    args: [price, deliveryAt, BigInt(qty)],
     chain: hardhat,
     account: wallet.account,
   });

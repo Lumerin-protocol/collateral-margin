@@ -37,8 +37,8 @@ import type { ParticipantTracker } from "../discovery/tracker.ts";
  * Hot path:
  *
  *   tick → for each tracked user:
- *           1. readContract `getOrderIds(user)` — empty? skip
- *           2. multicall `getOrderById(id)` for each id → filter expired
+ *           1. readContract `getUserOrders(user)` — empty? skip
+ *           2. multicall `getOrder(id)` for each id → filter expired
  *           3. one `Futures.multicall([removeOutdatedOrder(id1), ...])` write
  *              (capped at `outdatedOrders.maxBatchSize`; larger user-side
  *              fan-outs are split into N batches, each its own tx).
@@ -203,13 +203,13 @@ export class OutdatedOrderSweeper {
         orderIds = (await this.chain.publicClient.readContract({
           address: this.config.futures.address,
           abi: FuturesAbi,
-          functionName: "getOrderIds",
+          functionName: "getUserOrders",
           args: [user],
         })) as readonly Hex[];
       } catch (err) {
         this.logger.warn(
           { err, user },
-          "getOrderIds failed — skipping user this sweep",
+          "getUserOrders failed — skipping user this sweep",
         );
         continue;
       }
@@ -221,7 +221,7 @@ export class OutdatedOrderSweeper {
           contracts: orderIds.map((id) => ({
             address: this.config.futures.address,
             abi: FuturesAbi,
-            functionName: "getOrderById" as const,
+            functionName: "getOrder" as const,
             args: [id] as const,
           })),
           allowFailure: false,
@@ -229,7 +229,7 @@ export class OutdatedOrderSweeper {
       } catch (err) {
         this.logger.warn(
           { err, user, orderCount: orderIds.length },
-          "multicall(getOrderById) failed — skipping user this sweep",
+          "multicall(getOrder) failed — skipping user this sweep",
         );
         continue;
       }

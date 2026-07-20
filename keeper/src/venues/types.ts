@@ -93,11 +93,11 @@ export interface Venue {
    *
    *   1. Read a fresh account snapshot + engine params.
    *   2. Size the worst-first close off-chain so the account lands inside the
-   *      `[MM, IM]` band (futures: a lot-id subset; perps: a partial
+   *      `[MM, IM]` band (futures: per-expiry `closeQty` legs; perps: a partial
    *      `closeQty`). Deep-underwater accounts with no in-band partial size to
    *      a full close.
-   *   3. Submit ONE tx — futures `liquidatePositions(user, ids[])`, perps
-   *      `liquidatePosition(user, closeQty)`.
+   *   3. Submit ONE tx — futures `liquidatePositions(user, deliveryAts[],
+   *      closeQtys[])`, perps `liquidatePosition(user, closeQty)`.
    *
    * Reverts on-chain with `OrdersStillOpen` (orders must be cleared first) or
    * `OverLiquidation` (a price race made the sizing overshoot IM) are

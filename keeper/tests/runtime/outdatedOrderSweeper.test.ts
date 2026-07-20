@@ -89,7 +89,7 @@ function makeChain(opts: FakeChainOpts): { chain: Chain; recorded: Recorded } {
       args: unknown[];
     }) => {
       recorded.readContractCalls++;
-      if (functionName !== "getOrderIds") {
+      if (functionName !== "getUserOrders") {
         throw new Error(`unexpected readContract: ${functionName}`);
       }
       const user = args[0] as Address;
@@ -102,7 +102,7 @@ function makeChain(opts: FakeChainOpts): { chain: Chain; recorded: Recorded } {
     }) => {
       recorded.multicallReadCalls++;
       return contracts.map((c) => {
-        if (c.functionName !== "getOrderById") {
+        if (c.functionName !== "getOrder") {
           throw new Error(`unexpected multicall fn: ${c.functionName}`);
         }
         const id = c.args[0] as Hex;
@@ -371,7 +371,7 @@ describe("OutdatedOrderSweeper", () => {
   });
 
   it("drops stale-state candidates flagged by simulate (OrderNotExists / OrderNotExpired)", async () => {
-    // Race scenario: between our `getOrderById` read and our simulate, the
+    // Race scenario: between our `getOrder` read and our simulate, the
     // user (or a concurrent keeper) closed orderId1, and orderId2 had its
     // deliveryAt bumped. The sweeper must skip them silently and still
     // broadcast a write for the survivor (orderId3).
@@ -439,7 +439,7 @@ describe("OutdatedOrderSweeper", () => {
     assert.ok(calls.some((c) => c.msg.startsWith("[dryRun]")));
   });
 
-  it("does not crash when one user's getOrderIds fails — continues with the next user", async () => {
+  it("does not crash when one user's getUserOrders fails — continues with the next user", async () => {
     // Per-user RPC blips shouldn't drop the whole sweep tick.
     const { logger, calls } = makeRecordingLogger();
     const idB = ("0x" + "bb".repeat(32)) as Hex;
@@ -449,7 +449,7 @@ describe("OutdatedOrderSweeper", () => {
     ]);
     const blockTimestamp = 10_000n;
 
-    // Custom chain that fails getOrderIds(USER_A) only.
+    // Custom chain that fails getUserOrders(USER_A) only.
     const recorded: Recorded = {
       readContractCalls: 0,
       multicallReadCalls: 0,
@@ -523,7 +523,7 @@ describe("OutdatedOrderSweeper", () => {
     );
     assert.ok(
       calls.some(
-        (c) => c.level === "warn" && c.msg.includes("getOrderIds failed"),
+        (c) => c.level === "warn" && c.msg.includes("getUserOrders failed"),
       ),
       "expected a warn log for the failed user",
     );

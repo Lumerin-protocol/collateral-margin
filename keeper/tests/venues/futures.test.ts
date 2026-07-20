@@ -7,7 +7,6 @@ import type { Config } from "../../src/config.ts";
 
 const FUTURES = "0x000000000000000000000000000000000000F00d" as Address;
 const BUYER = "0x0000000000000000000000000000000000000b0b" as Address;
-const SELLER = "0x0000000000000000000000000000000000005e11" as Address;
 
 interface ReadCall {
   functionName: string;
@@ -46,13 +45,14 @@ const silentLogger = {
   error: () => undefined,
 } as unknown as ConstructorParameters<typeof FuturesVenue>[2];
 
-const DELIVERY_AT = 1_756_416_000n; // 2025-08-28T18:40:00Z (slice(0,10) → "2025-08-28")
+const DELIVERY_AT = 1_756_416_000n;
 
-/** Reusable stub: market price + (positionIds | orderIds) reads. */
-function makeReadHandler(marketPrice: bigint, listResult: readonly Hex[]) {
+function makeReadHandler(marketPrice: bigint, listResult: readonly unknown[]) {
   return (call: ReadCall): unknown => {
     if (call.functionName === "getMarketPrice") return marketPrice;
-    if (call.functionName === "getOrderIds" || call.functionName === "getPositionIds") return listResult;
+    if (call.functionName === "getUserOrders" || call.functionName === "getActiveDeliveryDates") {
+      return listResult;
+    }
     throw new Error(`unexpected readContract call: ${call.functionName}`);
   };
 }
@@ -66,7 +66,7 @@ describe("futures venue: marketLabel", () => {
 });
 
 describe("futures venue: readOpenOrders", () => {
-  it("returns empty when getOrderIds is empty (no extra multicall)", async () => {
+  it("returns empty when getUserOrders is empty (no extra multicall)", async () => {
     let multicallCount = 0;
     const chain = makeChainStub({
       readContract: makeReadHandler(100n, []),
@@ -89,12 +89,11 @@ describe("futures venue: readOpenOrders", () => {
     const chain = makeChainStub({
       readContract: makeReadHandler(100n, orderIds),
       multicall: (calls) => {
-        // One getOrderById per order id, in order.
         assert.equal(calls.length, 2);
-        for (const c of calls) assert.equal(c.functionName, "getOrderById");
+        for (const c of calls) assert.equal(c.functionName, "getOrder");
         return [
-          { isBuy: true, participant: BUYER, deliveryAt: DELIVERY_AT, pricePerDay: 50n },
-          { isBuy: false, participant: BUYER, deliveryAt: DELIVERY_AT + 86_400n, pricePerDay: 60n },
+          { participant: BUYER, deliveryAt: DELIVERY_AT, price: 50n, quantity: 1n },
+          { participant: BUYER, deliveryAt: DELIVERY_AT + 86_400n, price: 60n, quantity: -1n },
         ];
       },
     });
@@ -108,7 +107,7 @@ describe("futures venue: readOpenOrders", () => {
 });
 
 describe("futures venue: readPositions", () => {
-  it("returns empty when getPositionIds is empty", async () => {
+  it("returns empty when getActiveDeliveryDates is empty", async () => {
     const chain = makeChainStub({
       readContract: makeReadHandler(100n, []),
       multicall: () => [],
@@ -118,76 +117,36 @@ describe("futures venue: readPositions", () => {
     assert.equal(positions.length, 0);
   });
 
-  it("computes long-side underwater PnL for a buyer when market drops below entry", async () => {
-    const positionIds: Hex[] = ["0x" + "11".repeat(32) as Hex];
-    const buyPx = 100n;
-    const sellPx = 100n;
-    const marketPrice = 70n; // long → loses (100-70) = 30 per contract (no duration factor)
+  it("computes long-side underwater PnL when market drops below entry", async () => {
+    const entry = 100n;
+    const marketPrice = 70n;
     const chain = makeChainStub({
-      readContract: makeReadHandler(marketPrice, positionIds),
+      readContract: makeReadHandler(marketPrice, [DELIVERY_AT]),
       multicall: (calls) => {
         assert.equal(calls.length, 1);
-        assert.equal(calls[0]?.functionName, "getPositionById");
-        return [
-          {
-            seller: SELLER,
-            buyer: BUYER,
-            buyPricePerDay: buyPx,
-            sellPricePerDay: sellPx,
-            deliveryAt: DELIVERY_AT,
-          },
-        ];
+        assert.equal(calls[0]?.functionName, "getUserPosition");
+        return [{ netQuantity: 1n, netEntryValue: entry }];
       },
     });
     const venue = new FuturesVenue(chain, makeConfigStub(), silentLogger);
     const [pos] = await venue.readPositions(BUYER);
     assert.ok(pos);
-    assert.equal(pos.unrealizedLoss, buyPx - marketPrice);
-    assert.equal(pos.notional, buyPx);
+    assert.equal(pos.unrealizedLoss, entry - marketPrice);
+    assert.equal(pos.notional, entry);
     assert.equal(pos.marketId, deliveryAtMarketId(DELIVERY_AT));
   });
 
-  it("computes short-side underwater PnL for a seller when market rises above entry", async () => {
-    const positionIds: Hex[] = ["0x" + "22".repeat(32) as Hex];
-    const sellPx = 100n;
-    const buyPx = 100n;
-    const marketPrice = 130n; // short → loses (130-100) = 30 per contract (no duration factor)
+  it("computes short-side underwater PnL when market rises above entry", async () => {
+    const entry = 100n;
+    const marketPrice = 130n;
     const chain = makeChainStub({
-      readContract: makeReadHandler(marketPrice, positionIds),
-      multicall: () => [
-        {
-          seller: SELLER,
-          buyer: BUYER,
-          buyPricePerDay: buyPx,
-          sellPricePerDay: sellPx,
-          deliveryAt: DELIVERY_AT,
-        },
-      ],
-    });
-    const venue = new FuturesVenue(chain, makeConfigStub(), silentLogger);
-    const [pos] = await venue.readPositions(SELLER);
-    assert.ok(pos);
-    assert.equal(pos.unrealizedLoss, marketPrice - sellPx);
-    assert.equal(pos.notional, sellPx);
-  });
-
-  it("reports zero loss when the user is in profit", async () => {
-    const positionIds: Hex[] = ["0x" + "33".repeat(32) as Hex];
-    const chain = makeChainStub({
-      readContract: makeReadHandler(150n, positionIds),
-      multicall: () => [
-        {
-          seller: SELLER,
-          buyer: BUYER,
-          buyPricePerDay: 100n,
-          sellPricePerDay: 100n,
-          deliveryAt: DELIVERY_AT,
-        },
-      ],
+      readContract: makeReadHandler(marketPrice, [DELIVERY_AT]),
+      multicall: () => [{ netQuantity: -1n, netEntryValue: -entry }],
     });
     const venue = new FuturesVenue(chain, makeConfigStub(), silentLogger);
     const [pos] = await venue.readPositions(BUYER);
     assert.ok(pos);
-    assert.equal(pos.unrealizedLoss, 0n, "buyer with market > entry is in profit");
+    assert.equal(pos.unrealizedLoss, marketPrice - entry);
+    assert.equal(pos.notional, entry);
   });
 });

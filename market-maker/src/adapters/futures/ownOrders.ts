@@ -18,7 +18,7 @@ const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
  * we read all of the wallet's orders and keep only those matching this
  * instrument's `deliveryDate`:
  *
- *   1. `bootstrap()` reads `getOrderIds(wallet)` + `getOrderById(id)` and
+ *   1. `bootstrap()` reads `getUserOrders(wallet)` + `getOrder(id)` and
  *      caches the orders whose `deliveryAt === deliveryDate`.
  *   2. `subscribe()` listens to venue events. `order-created` is filtered by
  *      participant AND instrumentId (which encodes the expiry). `order-cancelled`
@@ -74,7 +74,7 @@ export class FuturesOwnOrders implements OwnOrderSource {
     const orderIds = await this.venue.publicClient.readContract({
       address: this.venue.address,
       abi: FuturesAbi,
-      functionName: "getOrderIds",
+      functionName: "getUserOrders",
       args: [owner],
     });
 
@@ -87,7 +87,7 @@ export class FuturesOwnOrders implements OwnOrderSource {
     const allCalls = orderIds.map((id) => ({
       address: this.venue.address,
       abi: FuturesAbi,
-      functionName: "getOrderById" as const,
+      functionName: "getOrder" as const,
       args: [id] as const,
     }));
 
@@ -105,18 +105,20 @@ export class FuturesOwnOrders implements OwnOrderSource {
     for (let i = 0; i < orderIds.length; i++) {
       const o = allOrders[i] as {
         participant: string;
-        pricePerDay: bigint;
+        price: bigint;
+        quantity: bigint;
         deliveryAt: bigint;
-        isBuy: boolean;
       };
       if (!o.participant || o.participant === ZERO_ADDRESS) continue;
       // Keep only orders belonging to this expiry.
       if (o.deliveryAt !== this.deliveryDate) continue;
+      if (o.quantity === 0n) continue;
+      const absQty = o.quantity < 0n ? -o.quantity : o.quantity;
       this.cache.set(orderIds[i], {
         orderId: orderIds[i],
-        price: o.pricePerDay,
-        side: o.isBuy ? "buy" : "sell",
-        size: 1n,
+        price: o.price,
+        side: o.quantity > 0n ? "buy" : "sell",
+        size: absQty,
         instrumentId: this.instrumentId,
       });
     }

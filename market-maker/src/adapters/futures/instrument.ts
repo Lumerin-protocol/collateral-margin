@@ -59,68 +59,19 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
   }
 
   async getPosition(): Promise<Position> {
-    // Per-expiry net position, computed client-side. The engine's
-    // `getNetPositionDelta` is portfolio-wide (sums all expiries), so we walk
-    // this expiry's positions instead. Each position is a single matched unit
-    // (qty=1): buyer is long (+1), seller is short (-1).
-    const owner = this.venue.wallet.account.address.toLowerCase();
-    const positionIds = await this.venue.publicClient.readContract({
+    const pos = await this.venue.publicClient.readContract({
       address: this.venue.address,
       abi: FuturesAbi,
-      functionName: "getPositionsByParticipantDeliveryDate",
+      functionName: "getUserPosition",
       args: [this.venue.wallet.account.address, this.deliveryDate],
     });
-
-    if (positionIds.length === 0) {
+    const netQuantity = pos.netQuantity;
+    if (netQuantity === 0n) {
       return { netQuantity: 0n, entryPrice: await this.venue.getRawMarketPrice() };
     }
-
-    const batchSize = this.venue.readBatchSize;
-    const positions: {
-      seller: string;
-      buyer: string;
-      sellPricePerDay: bigint;
-      buyPricePerDay: bigint;
-    }[] = [];
-    for (let i = 0; i < positionIds.length; i += batchSize) {
-      const chunk = positionIds.slice(i, i + batchSize);
-      const results = await this.venue.publicClient.multicall({
-        allowFailure: false,
-        contracts: chunk.map((id) => ({
-          address: this.venue.address,
-          abi: FuturesAbi,
-          functionName: "getPositionById" as const,
-          args: [id] as const,
-        })),
-      });
-      positions.push(
-        ...(results as {
-          seller: string;
-          buyer: string;
-          sellPricePerDay: bigint;
-          buyPricePerDay: bigint;
-        }[]),
-      );
-    }
-
-    let net = 0n;
-    let entrySum = 0n;
-    let entryCount = 0n;
-    for (const p of positions) {
-      if (p.buyer.toLowerCase() === owner) {
-        net += 1n;
-        entrySum += p.buyPricePerDay;
-        entryCount += 1n;
-      }
-      if (p.seller.toLowerCase() === owner) {
-        net -= 1n;
-        entrySum += p.sellPricePerDay;
-        entryCount += 1n;
-      }
-    }
-    const entryPrice =
-      entryCount > 0n ? entrySum / entryCount : await this.venue.getRawMarketPrice();
-    return { netQuantity: net, entryPrice };
+    const absNet = netQuantity < 0n ? -netQuantity : netQuantity;
+    const absEntry = pos.netEntryValue < 0n ? -pos.netEntryValue : pos.netEntryValue;
+    return { netQuantity, entryPrice: absEntry / absNet };
   }
 
   async getContext(): Promise<InstrumentContext> {
@@ -133,33 +84,29 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
   }
 
   encodeCreate(intent: OrderIntent): `0x${string}` {
-    const qty = Number(intent.size);
-    if (qty <= 0 || qty > 127) {
-      throw new Error(`futures: order size ${qty} must be in (0, 127]`);
+    const qty = intent.size;
+    if (qty <= 0n) {
+      throw new Error(`futures: order size ${qty} must be > 0`);
     }
-    const signed = (intent.side === "buy" ? qty : -qty) as number & {
-      readonly __int8__: true;
-    };
+    const signed = intent.side === "buy" ? qty : -qty;
     return encodeFunctionData({
       abi: FuturesAbi,
       functionName: "createOrder",
-      args: [intent.price, this.deliveryDate, "", signed],
+      args: [intent.price, this.deliveryDate, signed],
     });
   }
 
   encodeCancel(intent: CancelIntent): `0x${string}` {
     return encodeFunctionData({
       abi: FuturesAbi,
-      functionName: "closeOrder",
+      functionName: "cancelOrder",
       args: [intent.orderId],
     });
   }
 
   /**
-   * Cost units = qty. A futures `createOrder(…, int8 qty)` does one unit of
-   * work per contract, so its gas scales with qty (a qty=1 create ≈ one
-   * cancel). This lets the shared TxCoordinator budget futures batches by total
-   * qty rather than call count — the same weighting `chunkCalls` uses below.
+   * Cost units = qty. A futures create does work proportional to matched /
+   * resting contracts, so gas scales with qty (a qty=1 create ≈ one cancel).
    */
   createCallWeight(intent: OrderIntent): number {
     return Number(intent.size);

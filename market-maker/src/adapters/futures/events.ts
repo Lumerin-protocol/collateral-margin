@@ -64,50 +64,70 @@ export class FuturesVenueEvents implements VenueEvents {
 export function decodeEvent(log: FuturesLog): VenueEvent | null {
   switch (log.eventName) {
     case "OrderCreated": {
-      const { orderId, participant, pricePerDay, deliveryAt, isBuy } = log.args;
+      const { orderId, participant, price, quantity, deliveryAt } = log.args;
       if (
         !orderId ||
         !participant ||
-        pricePerDay === undefined ||
-        deliveryAt === undefined ||
-        isBuy === undefined
+        price === undefined ||
+        quantity === undefined ||
+        deliveryAt === undefined
       )
         return null;
+      const absQty = quantity < 0n ? -quantity : quantity;
+      if (absQty === 0n) return null;
       return {
         type: "order-created",
         orderId,
         participant,
-        price: pricePerDay,
-        side: isBuy ? "buy" : "sell",
-        size: 1n, // futures orders are single-contract per OrderCreated event
+        price,
+        side: quantity > 0n ? "buy" : "sell",
+        size: absQty,
         instrumentId: futuresInstrumentId(deliveryAt),
         deliveryDate: deliveryAt,
       };
     }
-    case "OrderClosed": {
-      const { orderId } = log.args;
-      if (!orderId) return null;
-      // OrderClosed carries neither participant nor deliveryAt; per-expiry
-      // own-order caches resolve ownership + routing by cache membership.
+    case "OrderUpdated": {
+      const { orderId, participant, newQuantity } = log.args;
+      if (!orderId || !participant || newQuantity === undefined) return null;
+      if (newQuantity === 0n) {
+        return { type: "order-cancelled", orderId, participant };
+      }
+      const absQty = newQuantity < 0n ? -newQuantity : newQuantity;
       return {
-        type: "order-cancelled",
+        type: "order-updated",
         orderId,
+        participant,
+        newSize: absQty,
       };
     }
-    case "LotCreated": {
-      const { seller, deliveryAt } = log.args;
-      if (!seller || deliveryAt === undefined) return null;
+    case "OrderCancelled": {
+      const { orderId } = log.args;
+      if (!orderId) return null;
+      return { type: "order-cancelled", orderId };
+    }
+    case "OrderMatched": {
+      const { maker, taker, deliveryAt } = log.args;
+      if (!maker || !taker || deliveryAt === undefined) return null;
+      // Broadcast position-changed for both sides; inventory resyncs via getUserPosition.
       return {
         type: "position-changed",
-        participant: seller,
+        participant: maker,
         instrumentId: futuresInstrumentId(deliveryAt),
       };
     }
-    case "LotClosed":
+    case "PositionLiquidated":
+    case "PositionSettled": {
+      const { user, deliveryAt } = log.args as {
+        user?: `0x${string}`;
+        deliveryAt?: bigint;
+      };
+      if (!user || deliveryAt === undefined) return null;
       return {
         type: "position-changed",
-        participant: "0x0" as `0x${string}`,
+        participant: user,
+        instrumentId: futuresInstrumentId(deliveryAt),
       };
+    }
     default:
       return null;
   }

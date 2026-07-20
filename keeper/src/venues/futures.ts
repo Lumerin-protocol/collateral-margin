@@ -1,11 +1,11 @@
-import { getAddress, pad, toHex, type Address, type Hex } from "viem";
+import { pad, toHex, type Address, type Hex } from "viem";
 import type pino from "pino";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
 import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
 import { sendLiquidate } from "../tx/liquidate.ts";
 import { readAccountSnapshot, readMMParams } from "../predict/snapshot.ts";
-import { solveFuturesLotsToTarget } from "../predict/solve.ts";
+import { solveFuturesClosesToTarget } from "../predict/solve.ts";
 import type { MMParams } from "../predict/types.ts";
 import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
 import type {
@@ -18,11 +18,11 @@ import type {
 } from "./types.ts";
 
 /**
- * `Venue` adapter for the Futures contract.
+ * `Venue` adapter for the Futures contract (3.0 aggregate positions).
  *
- * One matched unit settles `pricePerDay` of notional (there is no duration
- * multiplier). Position PnL is therefore just `priceDiffPerDay` per contract,
- * mirroring `getFuturesUnrealizedPnl` on-chain.
+ * One matched unit settles `pricePerDay` of notional (no duration multiplier).
+ * Position PnL is `mark * netQuantity - netEntryValue`, matching on-chain
+ * settle/liquidate math.
  */
 export class FuturesVenue implements Venue {
   readonly name = "futures" as const;
@@ -42,16 +42,11 @@ export class FuturesVenue implements Venue {
     this.chain = chain;
     this.config = config;
     this.logger = logger.child({ venue: "futures" });
-    // Optional — when present every confirmed-tx log gets `gasCostUsd`
-    // alongside `gasCostEth`. Wiring keeps the field absent (rather than
-    // zero) when the feed is unset so log search can distinguish "feed
-    // off" from a literal zero-cost tx.
     this.ethUsdFeed = ethUsdFeed;
   }
 
   marketLabel(marketId: MarketId): string {
     const deliveryAt = marketIdToDeliveryAt(marketId);
-    // Render as ISO date so on-call alerts read naturally.
     const iso = new Date(Number(deliveryAt) * 1000).toISOString().slice(0, 10);
     return `futures ${iso}`;
   }
@@ -60,20 +55,17 @@ export class FuturesVenue implements Venue {
     const orderIds = (await this.chain.publicClient.readContract({
       address: this.config.futures.address,
       abi: FuturesAbi,
-      functionName: "getOrderIds",
+      functionName: "getUserOrders",
       args: [user],
     })) as readonly Hex[];
 
     if (orderIds.length === 0) return [];
 
-    // Hydrate each order so we know its `deliveryAt` (== marketId). The
-    // contract sweeps FIFO regardless, but the planner wants per-market
-    // labelling for alerts and ranking.
     const orders = await this.chain.publicClient.multicall({
       contracts: orderIds.map((id) => ({
         address: this.config.futures.address,
         abi: FuturesAbi,
-        functionName: "getOrderById" as const,
+        functionName: "getOrder" as const,
         args: [id] as const,
       })),
       allowFailure: false,
@@ -86,13 +78,13 @@ export class FuturesVenue implements Venue {
   }
 
   async readPositions(user: Address): Promise<VenuePosition[]> {
-    const [positionIds, marketPrice] = await Promise.all([
+    const [deliveryAts, marketPrice] = await Promise.all([
       this.chain.publicClient.readContract({
         address: this.config.futures.address,
         abi: FuturesAbi,
-        functionName: "getPositionIds",
+        functionName: "getActiveDeliveryDates",
         args: [user],
-      }) as Promise<readonly Hex[]>,
+      }) as Promise<readonly bigint[]>,
       this.chain.publicClient.readContract({
         address: this.config.futures.address,
         abi: FuturesAbi,
@@ -100,50 +92,44 @@ export class FuturesVenue implements Venue {
       }) as Promise<bigint>,
     ]);
 
-    if (positionIds.length === 0) return [];
+    if (deliveryAts.length === 0) return [];
 
     const positions = await this.chain.publicClient.multicall({
-      contracts: positionIds.map((id) => ({
+      contracts: deliveryAts.map((deliveryAt) => ({
         address: this.config.futures.address,
         abi: FuturesAbi,
-        functionName: "getPositionById" as const,
-        args: [id] as const,
+        functionName: "getUserPosition" as const,
+        args: [user, deliveryAt] as const,
       })),
       allowFailure: false,
     });
 
-    const userAddr = getAddress(user);
-    return positionIds.map((id, i) => {
-      const pos = positions[i];
-      // Each position is a single contract that settles `pricePerDay` of notional
-      // (no duration multiplier), matching `getFuturesUnrealizedPnl` on-chain.
-      const isBuyer = getAddress(pos.buyer) === userAddr;
-      const entryPricePerDay = isBuyer
-        ? pos.buyPricePerDay
-        : pos.sellPricePerDay;
-      const priceDiffPerDay = isBuyer
-        ? marketPrice - entryPricePerDay // long: lose when market drops
-        : entryPricePerDay - marketPrice; // short: lose when market rises
-      const pnl = priceDiffPerDay;
-      const unrealizedLoss = pnl < 0n ? -pnl : 0n;
-      const notional = entryPricePerDay;
+    const out: VenuePosition[] = [];
+    for (let i = 0; i < deliveryAts.length; i++) {
+      const deliveryAt = deliveryAts[i]!;
+      const pos = positions[i]!;
+      if (pos.netQuantity === 0n) continue;
 
-      return {
-        id,
-        marketId: deliveryAtMarketId(pos.deliveryAt),
+      const absQty = pos.netQuantity < 0n ? -pos.netQuantity : pos.netQuantity;
+      const pnl = marketPrice * pos.netQuantity - pos.netEntryValue;
+      const unrealizedLoss = pnl < 0n ? -pnl : 0n;
+      const avgEntry = abs(pos.netEntryValue) / absQty;
+      const notional = avgEntry * absQty;
+
+      out.push({
+        id: deliveryAtMarketId(deliveryAt),
+        marketId: deliveryAtMarketId(deliveryAt),
         unrealizedLoss,
         notional,
-      };
-    });
+      });
+    }
+    return out;
   }
 
   async liquidateOrders(
     user: Address,
     _ids?: readonly Hex[],
   ): Promise<LiquidateOrdersOutcome> {
-    // Futures sweeps FIFO until the participant is healthy — no calldata id
-    // list needed. We deliberately ignore `ids` rather than asserting on it
-    // so the venue surface stays uniform across perps/futures.
     const result = await sendLiquidate({
       chain: this.chain,
       config: this.config,
@@ -162,8 +148,6 @@ export class FuturesVenue implements Venue {
   }
 
   async reduceToTarget(user: Address): Promise<ReduceToTargetOutcome> {
-    // Size the worst-first lot subset off-chain against a fresh snapshot so the
-    // account lands inside the [MM, IM] band (or a full close on a deep crash).
     const [snapshot, params, marketPrice] = await Promise.all([
       readAccountSnapshot(this.chain, this.config, user),
       this.getMMParams(),
@@ -174,33 +158,29 @@ export class FuturesVenue implements Venue {
       }) as Promise<bigint>,
     ]);
 
-    // The contract's liquidation-fee payout is disabled, so each closed lot realizes
-    // no fee — pass 0 to the solver so its balance projection matches on-chain reality.
-    const ids = solveFuturesLotsToTarget(snapshot, params, marketPrice, 0n);
-    if (ids.length === 0) {
-      // Off-chain sizing says the account is already at/above the IM buffer.
+    // Liquidation-fee payout is disabled on-chain — pass 0 so the projection matches.
+    const closes = solveFuturesClosesToTarget(snapshot, params, marketPrice, 0n);
+    if (closes.length === 0) {
       return { skipped: "nothingToClose" };
     }
 
-    // Gas-bounded chunking ("Option A"): send at most `maxLotsPerLiquidationTx`
-    // of the worst-first ids in this batch. `ids` is already ordered
-    // worst-first (highest unrealized loss), and a chunk shorter than the
-    // solver's full target closes FEWER lots than needed — so the leftover
-    // balance stays below IM and the on-chain `OverLiquidation` guard can't
-    // trip. The planner loop re-invokes `reduceToTarget` on a fresh snapshot to
-    // drain the remaining lots across successive txs (adapting to price drift).
+    // Gas-bounded chunking: send at most `maxLotsPerLiquidationTx` expiry legs.
     const cap = this.config.futures.maxLotsPerLiquidationTx;
-    const chunk = cap > 0 && ids.length > cap ? ids.slice(0, cap) : ids;
+    const chunk = cap > 0 && closes.length > cap ? closes.slice(0, cap) : closes;
+    const deliveryAts = chunk.map((c) => c.deliveryAt);
+    const closeQtys = chunk.map((c) => c.closeQty);
+    const contractsClosed = closeQtys.reduce((s, q) => s + q, 0n);
 
     this.logger.info(
       {
         user,
-        lotsInChunk: chunk.length,
-        lotsToClose: ids.length,
-        ofTotal: snapshot.futures.positions.length,
-        chunked: chunk.length < ids.length,
+        legsInChunk: chunk.length,
+        legsToClose: closes.length,
+        contractsClosed: contractsClosed.toString(),
+        ofExpiries: snapshot.futures.positions.length,
+        chunked: chunk.length < closes.length,
       },
-      "Futures reduceToTarget: closing worst-first lot chunk in one batch",
+      "Futures reduceToTarget: closing worst-first expiry chunk",
     );
 
     const result = await sendLiquidate({
@@ -210,8 +190,8 @@ export class FuturesVenue implements Venue {
       address: this.config.futures.address,
       abi: FuturesAbi,
       functionName: "liquidatePositions",
-      args: [user, chunk],
-      feeEventName: "LotLiquidated",
+      args: [user, deliveryAts, closeQtys],
+      feeEventName: "PositionLiquidated",
       mapSkip: (errorName) => {
         if (errorName === "OrdersStillOpen") return "ordersStillOpen";
         return "notLiquidatable";
@@ -221,16 +201,18 @@ export class FuturesVenue implements Venue {
 
     return "skipped" in result
       ? { skipped: result.skipped }
-      : { feeEarned: result.feeEarned, positionsClosed: chunk.length };
+      : { feeEarned: result.feeEarned, positionsClosed: Number(contractsClosed) };
   }
 
-  /** Read + cache the PME engine params (shocks / decimals). Immutable per epoch. */
   private async getMMParams(): Promise<MMParams> {
     if (this.mmParams !== undefined) return this.mmParams;
     this.mmParams = await readMMParams(this.chain, this.config);
     return this.mmParams;
   }
+}
 
+function abs(x: bigint): bigint {
+  return x < 0n ? -x : x;
 }
 
 /** `bytes32(uint256(deliveryAt))` — same encoding the indexer uses. */

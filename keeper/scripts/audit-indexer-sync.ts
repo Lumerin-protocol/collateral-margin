@@ -1,5 +1,5 @@
 /**
- * Audit indexer netQuantityAfter against on-chain getPositionIds count.
+ * Audit indexer netQuantityAfter against on-chain getActiveDeliveryDates count.
  * Finds the first block where indexer and chain diverge.
  *
  * Run:
@@ -77,11 +77,11 @@ async function getChainPositionCount(blockNumber: number): Promise<number> {
   const ids = await client.readContract({
     address: FUT,
     abi: FuturesAbi,
-    functionName: "getPositionIds",
+    functionName: "getActiveDeliveryDates",
     args: [USER as Address],
     blockNumber: BigInt(blockNumber),
   });
-  return (ids as readonly Hex[]).length;
+  return (ids as readonly bigint[]).length;
 }
 
 function sleep(ms: number) {
@@ -167,7 +167,7 @@ async function main() {
     console.log("First divergence at block %d:", firstMismatch.block);
     console.log("  tx: %s", firstMismatch.tx);
     console.log("  indexer netQuantityAfter (abs): %d", firstMismatch.indexer);
-    console.log("  chain getPositionIds().length:   %d", firstMismatch.chain);
+    console.log("  chain getActiveDeliveryDates().length:   %d", firstMismatch.chain);
   } else {
     console.log("No divergence detected — indexer and chain are in sync.");
   }

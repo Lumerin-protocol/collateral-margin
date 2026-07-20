@@ -68,14 +68,11 @@ export interface Config {
     /** Optional fast pre-filter (token decimals). */
     minNotional?: bigint;
     /**
-     * Max futures lots closed per `liquidatePositions` tx (gas-bounded
-     * chunking, "Option A"). `reduceToTarget` sends ONE worst-first chunk of
-     * at most this many lots; the planner loop re-invokes it (re-snapshotting
-     * each time) until the account is healthy. Each `_liquidateOnePosition` is
-     * roughly 150-250k gas, so 50 keeps a full chunk (~12M) well under Base's
-     * 30M block limit. Lower it for chains with tighter blocks or unusually
-     * expensive settlement paths. Must stay ≤ `MAX_POSITION_ITERATIONS × this`
-     * worth of headroom for the largest realistic single-user book.
+     * Max futures expiry legs closed per `liquidatePositions` tx (gas-bounded
+     * chunking). `reduceToTarget` sends ONE worst-first chunk of at most this
+     * many `(deliveryAt, closeQty)` pairs; the planner loop re-invokes it
+     * (re-snapshotting each time) until the account is healthy. Keep ≤ ~50 so
+     * a full chunk stays well under Base's block gas limit.
      */
     maxLotsPerLiquidationTx: number;
   };
@@ -205,7 +202,7 @@ export interface Config {
     /**
      * Cadence of the periodic safety-net sweep over tracked positions. Picks
      * up anything the per-position timers missed (process restarts, missed
-     * `LotCreated` events, clock skew). Live timers are the hot path.
+     * `OrderMatched` events, clock skew). Live timers are the hot path.
      */
     sweepIntervalMs: number;
     /**

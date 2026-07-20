@@ -185,7 +185,7 @@ async function main(): Promise<void> {
     // log-backfill pipeline, so it survives RPC providers that cap
     // `eth_getLogs` block ranges (Alchemy free tier = 10 blocks). Without
     // this hook a position created before keeper boot would only ever be
-    // settled if log backfill happened to find its `LotCreated`
+    // settled if log backfill happened to find its `OrderMatched`
     // event, which is unreliable on rate-limited RPCs.
     if (deliveryCoordinator !== undefined) {
       void deliveryCoordinator.indexUserPositions(user);
@@ -270,7 +270,7 @@ async function main(): Promise<void> {
     //      its own positions). Their positions may pre-date
     //      BACKFILL_FROM_BLOCK, in which case the tracker has no
     //      record of them — but we know the address at boot, so the
-    //      one extra `getPositionIds` read is a free safety net.
+    //      one extra `getActiveDeliveryDates` read is a free safety net.
     //   2. The manual seed list (`DELIVERY_BOOTSTRAP_USERS`). Used to
     //      recover a known-stuck user when the tracker hasn't found
     //      them — typical when log backfill is failing on the

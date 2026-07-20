@@ -62,7 +62,7 @@ describe("predict/mm: netDeltaWad", () => {
     // Buyer of 1 contract → +1 * 1e18 WAD delta.
     const snap = emptySnapshot({
       futures: {
-        positions: [{ id: "0xaa", isBuyer: true, entryPricePerDay: 50n, deliveryAt: 1_756_416_000n }],
+        positions: [{ deliveryAt: 1_756_416_000n, netQuantity: 1n, netEntryValue: 50n }],
         orderMargin: 0n,
       },
     });
@@ -72,7 +72,7 @@ describe("predict/mm: netDeltaWad", () => {
   it("subtracts futures seller delta", () => {
     const snap = emptySnapshot({
       futures: {
-        positions: [{ id: "0xaa", isBuyer: false, entryPricePerDay: 50n, deliveryAt: 1_756_416_000n }],
+        positions: [{ deliveryAt: 1_756_416_000n, netQuantity: -1n, netEntryValue: -50n }],
         orderMargin: 0n,
       },
     });
@@ -84,8 +84,8 @@ describe("predict/mm: netDeltaWad", () => {
       perp: { netQty: 1_000_000n, entryPrice: 100n, orderMargin: 0n, fundingOwed: 0n }, // +1e18
       futures: {
         positions: [
-          { id: "0xaa", isBuyer: true, entryPricePerDay: 50n, deliveryAt: 1_756_416_000n },
-          { id: "0xbb", isBuyer: false, entryPricePerDay: 60n, deliveryAt: 1_756_416_000n },
+          { deliveryAt: 1_756_416_000n, netQuantity: 1n, netEntryValue: 50n },
+          { deliveryAt: 1_756_416_000n, netQuantity: -1n, netEntryValue: -60n },
         ],
         orderMargin: 0n,
       },
@@ -168,7 +168,7 @@ describe("predict/mm: futuresUnrealizedLoss", () => {
   it("buyer loses when P drops below entry (no duration factor)", () => {
     const snap = emptySnapshot({
       futures: {
-        positions: [{ id: "0xaa", isBuyer: true, entryPricePerDay: 50n, deliveryAt: 1_756_416_000n }],
+        positions: [{ deliveryAt: 1_756_416_000n, netQuantity: 1n, netEntryValue: 50n }],
         orderMargin: 0n,
       },
     });
@@ -179,7 +179,7 @@ describe("predict/mm: futuresUnrealizedLoss", () => {
   it("seller loses when P rises above entry", () => {
     const snap = emptySnapshot({
       futures: {
-        positions: [{ id: "0xaa", isBuyer: false, entryPricePerDay: 50n, deliveryAt: 1_756_416_000n }],
+        positions: [{ deliveryAt: 1_756_416_000n, netQuantity: -1n, netEntryValue: -50n }],
         orderMargin: 0n,
       },
     });
@@ -190,8 +190,8 @@ describe("predict/mm: futuresUnrealizedLoss", () => {
     const snap = emptySnapshot({
       futures: {
         positions: [
-          { id: "0xaa", isBuyer: true, entryPricePerDay: 50n, deliveryAt: 1_756_416_000n }, // P=40 → loses 10
-          { id: "0xbb", isBuyer: false, entryPricePerDay: 30n, deliveryAt: 1_756_416_000n }, // P=40 → loses 10
+          { deliveryAt: 1_756_416_000n, netQuantity: 1n, netEntryValue: 50n }, // P=40 → loses 10
+          { deliveryAt: 1_756_416_000n, netQuantity: -1n, netEntryValue: -30n }, // P=40 → loses 10
         ],
         orderMargin: 0n,
       },
