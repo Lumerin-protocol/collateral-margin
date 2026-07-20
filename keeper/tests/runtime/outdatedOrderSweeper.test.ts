@@ -114,12 +114,10 @@ function makeChain(opts: FakeChainOpts): { chain: Chain; recorded: Recorded } {
         // reads `expirationAt` but include the other fields so tests
         // stay close to the real ABI.
         return {
-          isBuy: true,
           participant: order.participant,
-          destURL: "",
-          pricePerDay: 0n,
+          price: 0n,
+          quantity: 1n,
           expirationAt: order.expirationAt,
-          createdAt: 0n,
         };
       });
     },
@@ -474,12 +472,10 @@ describe("OutdatedOrderSweeper", () => {
           const order = orders.get(c.args[0] as Hex);
           if (order === undefined) throw new Error("missing");
           return {
-            isBuy: true,
             participant: order.participant,
-            destURL: "",
-            pricePerDay: 0n,
+            price: 0n,
+            quantity: 1n,
             expirationAt: order.expirationAt,
-            createdAt: 0n,
           };
         });
       },
