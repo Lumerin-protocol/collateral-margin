@@ -31,9 +31,8 @@ export interface QuoterConfig {
   maxSkewTicks: number;
   /**
    * Spacing between successive quote levels, in ticks. App-defaulted per
-   * matching mode: futures (exact) wants narrow spacing (each level fills
-   * independently), perps (limit) wants wider spacing (deeper levels only
-   * fill conditional on shallower levels filling first).
+   * venue: futures wants narrow spacing (dense ladder), perps wants wider
+   * spacing (deeper levels only fill after shallower ones).
    */
   levelSpacingTicks: number;
   /**

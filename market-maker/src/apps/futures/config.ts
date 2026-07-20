@@ -25,10 +25,9 @@ import { ConfigError } from "../../core/errors.ts";
 /**
  * Futures app config schema.
  *
- * Pricing locked to "reservation-price" (Avellaneda–Stoikov) — that's the
- * strategy that fits exact-match futures: the inventory shift on r is more
- * useful than a symmetric spread because price levels are non-fungible
- * (each is a separate fill opportunity).
+ * Pricing locked to "reservation-price" (Avellaneda–Stoikov) — inventory shift
+ * on r is more useful than a symmetric spread on multi-level futures books
+ * (each level is a distinct fill opportunity on the ladder).
  *
  * Sizing locked to "geometric-taper" so the front level (highest fill prob)
  * is the largest. taperRatio in (0, 1) is required.

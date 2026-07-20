@@ -109,17 +109,11 @@ graph LR
   `PortfolioMarginEngine.canPlaceOrder(additionalIM)` so we never
   submit orders the vault can't margin
 
-### Matching modes
+### Stale-order policy
 
-- **Perps** (`limit`): contract matches at any price strictly better
-  than the resting limit. Outdated own orders that are still better
-  than the new desired price are kept in place.
-- **Futures** (`exact`): contract matches at the exact resting price.
-  Any deviation in either direction means the order has to be
-  cancelled and re-placed.
-
-The shared `OrderExecutor` branches on the adapter's `matchingMode`
-when deciding whether an existing order is still good.
+Both venues use limit LOB matching. `OrderExecutor` keeps own orders
+that are still at-least-as-aggressive as the worst desired bid/ask
+and cancels worse ones.
 
 ### Graceful shutdown
 

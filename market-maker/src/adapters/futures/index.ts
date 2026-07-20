@@ -15,11 +15,7 @@ export interface CreateFuturesVenueOpts {
   logger: pino.Logger;
 }
 
-/**
- * Construct a futures venue adapter. Static wiring — no registry lookup.
- *
- * matchingMode = "exact" — fills only happen when prices coincide exactly.
- */
+/** Construct a futures venue adapter. Static wiring — no registry lookup. */
 export async function createFuturesVenue(
   opts: CreateFuturesVenueOpts,
 ): Promise<VenueAdapter> {

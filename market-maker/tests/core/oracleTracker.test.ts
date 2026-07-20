@@ -21,7 +21,6 @@ function makeInstrument(prices: bigint[]): InstrumentAdapter {
     id: "test",
     venue: {} as InstrumentAdapter["venue"],
     book: {
-      matchingMode: "limit" as const,
       tick: async () => 1n,
       snapshot: async () => ({ bids: [], asks: [] }),
     },

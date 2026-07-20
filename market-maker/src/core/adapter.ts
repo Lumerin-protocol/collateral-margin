@@ -184,18 +184,9 @@ export interface InstrumentContext {
   underlyingSpot?: bigint;
 }
 
-// ─── Order book / matching mode ─────────────────────────────────────────────
-
-/**
- * "limit" — orders match at any better-or-equal price (perps).
- * "exact" — orders only match at the exact submitted price (futures).
- *
- * Drives stale-order detection in OrderExecutor.
- */
-export type MatchingMode = "limit" | "exact";
+// ─── Order book ─────────────────────────────────────────────────────────────
 
 export interface BookSource {
-  readonly matchingMode: MatchingMode;
   /** Smallest price step on the venue. */
   tick(): Promise<bigint>;
   /** Snapshot of resting depth (best `depth` levels per side). */
