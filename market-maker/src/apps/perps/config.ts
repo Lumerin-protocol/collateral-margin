@@ -157,10 +157,10 @@ export const perpsRootSchema = Type.Object(
     }),
     writeBatchSize: Type.Number({
       minimum: 1,
-      default: 20,
+      default: 100,
       description:
-        "Maximum qty per write batch. " +
-        "The adapter groups cancels into chunks of this size before sending.",
+        "Max cost units per write tx (cancel=1, createOrders=N). " +
+        "Cancels and creates may split across txs when the budget fills.",
     }),
   },
   { ...Closed, description: "Titan Market Maker — Perps app config." },

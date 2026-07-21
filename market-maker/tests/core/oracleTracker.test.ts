@@ -33,6 +33,7 @@ function makeInstrument(prices: bigint[]): InstrumentAdapter {
     getPosition: async () => ({ netQuantity: 0n, entryPrice: 0n }),
     getContext: async () => ({}),
     encodeCreate: () => "0x",
+    encodeUpdateOrders: () => "0x",
     encodeCancel: () => "0x",
     executeOrders: async () => ({ receipts: [], errors: [] }),
     estimateOrderMargin: () => 0n,

@@ -172,9 +172,10 @@ export interface AccountMargins {
 
 /**
  * Reads `(balanceOf, computePortfolioIM, computePortfolioMM)` for `user` — the
- * on-chain source of truth the liquidation predicates (and the new
- * `liquidatePositions` / partial-perps `OverLiquidation` guard) resolve back
- * to. Used by `expectReducedToImBuffer` to assert the account landed inside the
+ * on-chain source of truth the liquidation predicates (and the end-of-tx
+ * `OverLiquidation` guard on `liquidatePositions` / perps `liquidatePosition`)
+ * resolve back to.
+ * Used by `expectReducedToImBuffer` to assert the account landed inside the
  * `[MM, IM]` band after a batched liquidation. Uses three parallel
  * `readContract` calls (the test's public client has no multicall3 configured,
  * matching every other reader in this file).
@@ -212,9 +213,8 @@ export async function readAccountMargins(
  *
  *   - `balance >= computePortfolioMM(user)`  → healthy (not re-liquidatable)
  *   - `balance <= computePortfolioIM(user)`  → NOT over-liquidated (the
- *     contract's `OverLiquidation` guard tolerates landing at/under IM while
- *     positions remain; closing so much that balance exceeds IM would have
- *     reverted on-chain)
+ *     contract reverts `OverLiquidation` when a partial would leave balance
+ *     above IM)
  *
  * Polls until the batched liquidation tx has confirmed (balance drops into or
  * below the IM band) and then makes the hard band assertions with BigInt-safe

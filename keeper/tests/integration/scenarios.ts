@@ -443,7 +443,7 @@ export function futuresLongCrashFixtureBuilder(rpcUrl: string) {
  * matches (Bob doesn't offer a sell at $2/day), so it sits on the book
  * until the planner walks the orders-leg. After the crash, the planner
  * must run:
- *   1. `liquidateOrders(user)` on futures (FIFO sweep) → cancels the
+ *   1. `liquidateOrders(user, ids)` on futures → cancels the
  *      resting order;
  *   2. `liquidatePosition(user, id)` → cash-settles the position.
  */

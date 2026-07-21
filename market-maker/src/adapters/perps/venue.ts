@@ -158,6 +158,30 @@ export class PerpsVenueAdapter implements VenueAdapter {
     return [await this.getInstrument()];
   }
 
+  async sendCall(
+    data: `0x${string}`,
+    opts: { maxFeePerGas?: bigint; nonce?: number } = {},
+  ): Promise<`0x${string}`> {
+    try {
+      return await this.wallet.walletClient.sendTransaction({
+        to: this.address,
+        data,
+        account: this.wallet.account,
+        chain: this.chain,
+        maxFeePerGas: opts.maxFeePerGas,
+        nonce: opts.nonce,
+      });
+    } catch (err) {
+      throw attachTenderlyUrl(err, {
+        chainId: this.chain.id,
+        from: this.wallet.account.address,
+        to: this.address,
+        data,
+      });
+    }
+  }
+
+  /** @deprecated Prefer {@link sendCall} with a single `updateOrders` encoding. */
   async multicall(
     calls: `0x${string}`[],
     opts: { maxFeePerGas?: bigint; nonce?: number } = {},
@@ -174,8 +198,6 @@ export class PerpsVenueAdapter implements VenueAdapter {
         nonce: opts.nonce,
       });
     } catch (err) {
-      // Attach a Tenderly simulation URL so the failed multicall can be
-      // replayed/debugged with one click from the log.
       throw attachTenderlyUrl(err, {
         chainId: this.chain.id,
         from: this.wallet.account.address,

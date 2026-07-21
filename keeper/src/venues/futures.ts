@@ -1,4 +1,4 @@
-import { pad, toHex, type Address, type Hex } from "viem";
+import { pad, toHex, type Abi, type Address, type Hex } from "viem";
 import type pino from "pino";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
@@ -16,6 +16,35 @@ import type {
   VenueOrder,
   VenuePosition,
 } from "./types.ts";
+
+/** Local fragment until published futures ABI includes `liquidateOrders(user, ids[])`. */
+const LIQUIDATE_ORDERS_ABI = [
+  {
+    type: "function",
+    name: "liquidateOrders",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "_user", type: "address" },
+      { name: "_orderIds", type: "bytes32[]" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+const FUTURES_LIQUIDATE_ORDERS_ABI = [
+  ...FuturesAbi.filter(
+    (item) =>
+      !(
+        typeof item === "object" &&
+        item !== null &&
+        "type" in item &&
+        item.type === "function" &&
+        "name" in item &&
+        item.name === "liquidateOrders"
+      ),
+  ),
+  ...LIQUIDATE_ORDERS_ABI,
+] as Abi;
 
 /**
  * `Venue` adapter for the Futures contract (3.0 aggregate positions).
@@ -128,16 +157,29 @@ export class FuturesVenue implements Venue {
 
   async liquidateOrders(
     user: Address,
-    _ids?: readonly Hex[],
+    ids?: readonly Hex[],
   ): Promise<LiquidateOrdersOutcome> {
+    let targetIds = ids;
+    if (targetIds === undefined) {
+      targetIds = (await this.chain.publicClient.readContract({
+        address: this.config.futures.address,
+        abi: FuturesAbi,
+        functionName: "getUserOrders",
+        args: [user],
+      })) as readonly Hex[];
+    }
+    if (targetIds.length === 0) {
+      return { skipped: "notLiquidatable" };
+    }
+
     const result = await sendLiquidate({
       chain: this.chain,
       config: this.config,
       logger: this.logger,
       address: this.config.futures.address,
-      abi: FuturesAbi,
+      abi: FUTURES_LIQUIDATE_ORDERS_ABI,
       functionName: "liquidateOrders",
-      args: [user],
+      args: [user, targetIds],
       feeEventName: "OrderLiquidated",
       ethUsdFeed: this.ethUsdFeed,
     });

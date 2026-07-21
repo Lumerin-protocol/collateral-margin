@@ -182,14 +182,13 @@ function findClosestCrossings(
 // Close-to-IM-buffer sizing (the batched-liquidation solvers)
 //
 // The on-chain `liquidatePositions` (futures) / `liquidatePosition(user,
-// closeQty)` (perps) do NOT recompute margin per unit — they close the
-// keeper-supplied amount and enforce a single end-of-tx `OverLiquidation`
-// guard: with positions remaining and a real IM buffer (`im > mm`), the
-// leftover balance must sit at/under IM. These solvers pick, off-chain, the
-// deepest close that keeps the account inside the `[MM, IM]` band (healthy but
-// not over-liquidated). If no in-band partial exists (deep crash / bad debt)
-// they fall back to a full close, which the contract lets through (the guard
-// is skipped once no positions remain).
+// closeQty)` (perps) treat the keeper-supplied amount as an upper bound and
+// revert `OverLiquidation` when a partial leaves balance above IM with a real
+// IM buffer (`im > mm`). These solvers pick, off-chain, the deepest close that
+// keeps the account inside the `[MM, IM]` band (healthy but not
+// over-liquidated). If no in-band partial exists (deep crash / bad debt) they
+// fall back to a full close, which the contract lets through (the guard is
+// skipped once no positions remain).
 // ───────────────────────────────────────────────────────────────────────────
 
 /**

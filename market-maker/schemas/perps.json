@@ -912,8 +912,8 @@
           "description": "Environment variable interpolation (resolved at startup)"
         }
       ],
-      "description": "Maximum qty per write batch. The adapter groups cancels into chunks of this size before sending.",
-      "default": 20
+      "description": "Max cost units per write tx (cancel=1, createOrders=N). Cancels and creates may split across txs when the budget fills.",
+      "default": 100
     }
   }
 }

@@ -1,19 +1,9 @@
-import {
-  encodeFunctionData,
-  keccak256,
-  pad,
-  parseEventLogs,
-  toHex,
-  type Address,
-  type Hex,
-  type TransactionReceipt,
-} from "viem";
+import { keccak256, pad, toHex, type Abi, type Address, type Hex } from "viem";
 import type pino from "pino";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
 import { HashPowerPerpsDEXAbi } from "derivatives-marketplace-abi/HashPowerPerpsDEX.ts";
 import { sendLiquidate } from "../tx/liquidate.ts";
-import { formatGasCost } from "../tx/gasCost.ts";
 import { readAccountSnapshot, readMMParams } from "../predict/snapshot.ts";
 import { solvePerpCloseToTarget } from "../predict/solve.ts";
 import type { MMParams } from "../predict/types.ts";
@@ -26,6 +16,25 @@ import type {
   VenueOrder,
   VenuePosition,
 } from "./types.ts";
+
+/** Local fragment until published perps ABI includes `liquidateOrders(user, ids[])`. */
+const LIQUIDATE_ORDERS_ABI = [
+  {
+    type: "function",
+    name: "liquidateOrders",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "_user", type: "address" },
+      { name: "_orderIds", type: "bytes32[]" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+const PERPS_LIQUIDATE_ORDERS_ABI = [
+  ...HashPowerPerpsDEXAbi,
+  ...LIQUIDATE_ORDERS_ABI,
+] as Abi;
 
 /**
  * `Venue` adapter for HashPowerPerpsDEX. Stateless beyond the wiring it
@@ -125,25 +134,8 @@ export class PerpsVenue implements Venue {
   }
 
   /**
-   * Cancels every supplied resting order via a single
-   * `multicallStopOnFailure([liquidateOrder(user, id), ...])` transaction.
-   *
-   * The perps contract retired the dedicated batch entry point
-   * `liquidateOrders(user, ids[])`; the canonical replacement is N
-   * `liquidateOrder` sub-calls composed through
-   * {MulticallStopOnFailureUpgradeable}. The multicall:
-   *
-   *   - Stops at the first sub-call that reverts (e.g. `NotLiquidatable`
-   *     once cancelling earlier orders restored MM mid-batch). Earlier
-   *     sub-calls keep their state changes and emit their `OrderLiquidated`
-   *     events — we still pocket those fees.
-   *   - Does *not* revert the whole tx for clean sub-call reverts, so the
-   *     "user is healthy, do nothing" case requires inspecting the
-   *     simulation's `successes` array rather than relying on a top-level
-   *     throw.
-   *   - Reverts the whole batch with `MulticallSubCallOutOfGas` on an
-   *     empty-revert sub-call (typically OOG) — we let that bubble up so
-   *     the executor re-queues.
+   * Cancels keeper-chosen resting orders via `liquidateOrders(user, ids[])`.
+   * On-chain stop-on-failure keeps prior cancels and stops when healthy.
    */
   async liquidateOrders(
     user: Address,
@@ -161,67 +153,24 @@ export class PerpsVenue implements Venue {
     }
 
     if (targetIds.length === 0) {
-      // Nothing to cancel — surface as `notLiquidatable` so the planner
-      // can bail on this leg without rolling back the wider plan.
       return { skipped: "notLiquidatable" };
     }
 
-    const calls = targetIds.map((orderId) =>
-      encodeFunctionData({
-        abi: HashPowerPerpsDEXAbi,
-        functionName: "liquidateOrder",
-        args: [user, orderId],
-      }),
-    );
-
-    // Simulate first — `multicallStopOnFailure` never propagates a
-    // sub-call revert as a top-level revert, so the only way to detect
-    // "user is healthy, every sub-call would clean-revert" is to read
-    // `successes[0]` from the simulated return.
-    const sim = await this.chain.publicClient.simulateContract({
+    const result = await sendLiquidate({
+      chain: this.chain,
+      config: this.config,
+      logger: this.logger,
       address: this.config.perps.address,
-      abi: HashPowerPerpsDEXAbi,
-      functionName: "multicallStopOnFailure",
-      args: [calls],
-      account: this.chain.account,
+      abi: PERPS_LIQUIDATE_ORDERS_ABI,
+      functionName: "liquidateOrders",
+      args: [user, targetIds],
+      feeEventName: "OrderLiquidated",
+      ethUsdFeed: this.ethUsdFeed,
     });
-    const successes = (
-      sim.result as readonly [readonly boolean[], readonly Hex[]]
-    )[0];
-    if (successes[0] === false) {
-      this.logger.debug(
-        { user, ordersTargeted: targetIds.length },
-        "perps batch liquidate skipped — first sub-call would revert (user healthy)",
-      );
-      return { skipped: "notLiquidatable" };
-    }
 
-    if (this.config.keeper.dryRun) {
-      this.logger.info(
-        { user, ordersTargeted: targetIds.length },
-        "[dryRun] would send perps batch liquidate",
-      );
-      return { feeEarned: 0n };
-    }
-
-    const hash = await this.chain.walletClient.writeContract(sim.request);
-    const receipt = await this.chain.publicClient.waitForTransactionReceipt({
-      hash,
-      confirmations: this.config.coordinator.confirmationBlocks,
-    });
-    const feeEarned = sumOrderLiquidatedFees(receipt);
-    const ordersClosed = countSuccesses(successes);
-    this.logger.info(
-      {
-        user,
-        hash,
-        ordersClosed,
-        feeEarned,
-        ...formatGasCost(receipt, this.ethUsdFeed),
-      },
-      "perps batch liquidate confirmed",
-    );
-    return { feeEarned };
+    return "skipped" in result
+      ? { skipped: "notLiquidatable" }
+      : { feeEarned: result.feeEarned };
   }
 
   async reduceToTarget(user: Address): Promise<ReduceToTargetOutcome> {
@@ -261,7 +210,7 @@ export class PerpsVenue implements Venue {
       feeEventName: "PositionLiquidated",
       mapSkip: (errorName) => {
         if (errorName === "OrdersStillOpen") return "ordersStillOpen";
-        // `NotLiquidatable` / `OverLiquidation` (a price race) and any other
+        // `NotLiquidatable` (price race / already healthy) and any other
         // recoverable revert collapse to `notLiquidatable` — the planner's
         // recheck-then-retry loop re-snapshots and re-sizes.
         return "notLiquidatable";
@@ -300,31 +249,4 @@ function abs(x: bigint): bigint {
  */
 function perpsPositionId(user: Address): Hex {
   return pad(user, { size: 32 });
-}
-
-/**
- * Walks a `multicallStopOnFailure` receipt and sums the `fee` field of every
- * `OrderLiquidated` event. The multicall delegatecalls each sub-call into
- * the contract's own storage, so every successful `liquidateOrder` emits
- * one event on the receipt — they accumulate naturally.
- */
-function sumOrderLiquidatedFees(receipt: TransactionReceipt): bigint {
-  const logs = parseEventLogs({
-    abi: HashPowerPerpsDEXAbi,
-    logs: receipt.logs,
-    eventName: "OrderLiquidated",
-  });
-  let total = 0n;
-  for (const log of logs) {
-    const fee = log.args.fee;
-    if (typeof fee === "bigint") total += fee;
-  }
-  return total;
-}
-
-/** Counts the truthy entries in the multicall's `successes` array. */
-function countSuccesses(successes: readonly boolean[]): number {
-  let n = 0;
-  for (const s of successes) if (s) n++;
-  return n;
 }

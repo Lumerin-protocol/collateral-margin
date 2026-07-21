@@ -95,6 +95,52 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
     });
   }
 
+  encodeUpdateOrders(
+    cancels: CancelIntent[],
+    creates: OrderIntent[],
+  ): `0x${string}` {
+    if (cancels.length === 0 && creates.length === 0) {
+      throw new Error("futures: encodeUpdateOrders requires cancels and/or creates");
+    }
+    // Local ABI fragment until published futures-contracts includes updateOrders.
+    const updateOrdersAbi = [
+      {
+        type: "function",
+        name: "updateOrders",
+        stateMutability: "nonpayable",
+        inputs: [
+          { name: "_cancelIds", type: "bytes32[]" },
+          {
+            name: "_intents",
+            type: "tuple[]",
+            components: [
+              { name: "price", type: "uint256" },
+              { name: "expirationAt", type: "uint256" },
+              { name: "quantity", type: "int256" },
+            ],
+          },
+        ],
+        outputs: [],
+      },
+    ] as const;
+    const batch = creates.map((intent) => {
+      const qty = intent.size;
+      if (qty <= 0n) {
+        throw new Error(`futures: order size ${qty} must be > 0`);
+      }
+      return {
+        price: intent.price,
+        expirationAt: intent.expirationAt ?? this.expirationAt,
+        quantity: intent.side === "buy" ? qty : -qty,
+      };
+    });
+    return encodeFunctionData({
+      abi: updateOrdersAbi,
+      functionName: "updateOrders",
+      args: [cancels.map((c) => c.orderId), batch],
+    });
+  }
+
   encodeCancel(intent: CancelIntent): `0x${string}` {
     return encodeFunctionData({
       abi: FuturesAbi,
@@ -112,21 +158,18 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
   }
 
   /**
-   * Execute cancels then creates for this expiry. Kept for single-market
-   * callers and tests; the portfolio runner routes through the shared
-   * `TxCoordinator` instead, which batches this expiry's calls with the other
-   * expiries' into one `Futures.multicall`.
+   * Execute cancels then creates for this expiry via `updateOrders`. Kept for
+   * single-market callers and tests; the portfolio runner routes through the
+   * shared `TxCoordinator` instead.
    */
   async executeOrders(intent: ExecuteOrdersIntent): Promise<ExecuteOrdersResult> {
     return this.executeOrdersImpl(intent, this.venue.getLogger());
   }
 
-  /** Build the ordered call list for this expiry: cancels then creates. */
+  /** Build the call list for this expiry: one `updateOrders` when there is work. */
   buildCalls(intent: { cancels: CancelIntent[]; creates: OrderIntent[] }): `0x${string}`[] {
-    const calls: `0x${string}`[] = [];
-    for (const c of intent.cancels) calls.push(this.encodeCancel(c));
-    for (const c of intent.creates) calls.push(this.encodeCreate(c));
-    return calls;
+    if (intent.cancels.length === 0 && intent.creates.length === 0) return [];
+    return [this.encodeUpdateOrders(intent.cancels, intent.creates)];
   }
 
   // ── Private implementation ──────────────────────────────────────────
@@ -135,76 +178,45 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
     intent: ExecuteOrdersIntent,
     logger: pino.Logger,
   ): Promise<ExecuteOrdersResult> {
-    const batches = this.chunkCalls(intent);
+    if (intent.cancels.length === 0 && intent.creates.length === 0) {
+      return { receipts: [], errors: [] };
+    }
+    const data = this.encodeUpdateOrders(intent.cancels, intent.creates);
 
     if (intent.dryRun) {
       logger.info(
         { cancels: intent.cancels.length, creates: intent.creates.length },
-        "DRY RUN: would send multicall batches",
+        "DRY RUN: would send updateOrders",
       );
       return { receipts: [], errors: [] };
     }
 
-    const receipts: { gasUsed: bigint; effectiveGasPrice: bigint }[] = [];
-    const errors: Error[] = [];
-    for (let batchNum = 0; batchNum < batches.length; batchNum++) {
-      const chunk = batches[batchNum];
-      try {
-        const hash = await this.venue.multicall(chunk, {
-          maxFeePerGas: intent.maxFeePerGas,
-        });
-        const receipt = await this.venue.publicClient.waitForTransactionReceipt({
-          hash,
-        });
-        receipts.push({
-          gasUsed: receipt.gasUsed,
-          effectiveGasPrice: receipt.effectiveGasPrice,
-        });
-        logger.info(
-          {
-            calls: chunk.length,
-            batch: `${batchNum}/${batches.length}`,
-            gas: receipt.gasUsed.toString(),
-          },
-          "futures multicall chunk executed",
-        );
-      } catch (err) {
-        const wrapped = err instanceof Error ? err : new Error(String(err));
-        errors.push(wrapped);
-        logger.error(
-          { err: wrapped, calls: chunk.length, batch: `${batchNum}/${batches.length}` },
-          "futures multicall chunk failed — continuing with next chunk",
-        );
-      }
+    try {
+      const hash = await this.venue.sendCall(data, {
+        maxFeePerGas: intent.maxFeePerGas,
+      });
+      const receipt = await this.venue.publicClient.waitForTransactionReceipt({
+        hash,
+      });
+      logger.info(
+        {
+          cancels: intent.cancels.length,
+          creates: intent.creates.length,
+          gas: receipt.gasUsed.toString(),
+        },
+        "futures updateOrders executed",
+      );
+      return {
+        receipts: [
+          { gasUsed: receipt.gasUsed, effectiveGasPrice: receipt.effectiveGasPrice },
+        ],
+        errors: [],
+      };
+    } catch (err) {
+      const wrapped = err instanceof Error ? err : new Error(String(err));
+      logger.error({ err: wrapped }, "futures updateOrders failed");
+      return { receipts: [], errors: [wrapped] };
     }
-    return { receipts, errors };
-  }
-
-  /**
-   * Split cancels+creates into tx-sized chunks. Batch size is measured in qty
-   * count since one cancel costs roughly one qty=1 create.
-   */
-  private chunkCalls(intent: {
-    cancels: CancelIntent[];
-    creates: OrderIntent[];
-  }): `0x${string}`[][] {
-    const batchSize = this.venue.writeBatchSize;
-    const batches: `0x${string}`[][] = [];
-    let current: `0x${string}`[] = [];
-    let qtyCount = 0;
-    const push = (tx: `0x${string}`, qty: number) => {
-      current.push(tx);
-      qtyCount += qty;
-      if (current.length >= batchSize || qtyCount >= batchSize) {
-        batches.push(current);
-        current = [];
-        qtyCount = 0;
-      }
-    };
-    for (const c of intent.cancels) push(this.encodeCancel(c), 1);
-    for (const c of intent.creates) push(this.encodeCreate(c), Number(c.size));
-    if (current.length > 0) batches.push(current);
-    return batches;
   }
 
   /**

@@ -228,9 +228,8 @@ describe("Perps liquidation", () => {
     async () => {
       // Precondition: alice holds a perps long AND a stale far-out-of-
       // market resting buy order. The perps venue cancels the resting
-      // order via `multicallStopOnFailure([liquidateOrder(user, id)])`
-      // (the contract retired the batch `liquidateOrders` entry point);
-      // the planner then walks the position-leg in the same plan.
+      // order via `liquidateOrders(user, ids)`; the planner then walks
+      // the position-leg in the same plan.
       const ctx = await loadFixture(perpsOrdersAndPositionFixture, testClient);
       keeper = buildKeeper(ctx);
       await keeper.start();
@@ -329,7 +328,7 @@ describe("Futures liquidation", () => {
     async () => {
       // Precondition: alice holds a long futures position AND a stale
       // far-out-of-market resting buy order. After the crash the planner
-      // must run orders-leg (FIFO sweep via `liquidateOrders(user)`) and
+      // must run orders-leg (`liquidateOrders(user, ids)`) and
       // position-leg in the same plan; we verify on-chain that both
       // legs end up empty.
       const ctx = await loadFixture(futuresOrdersAndPositionFixture, testClient);

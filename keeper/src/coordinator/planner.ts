@@ -241,7 +241,7 @@ export class Planner {
   }
 
   /**
-   * Fans out `liquidateOrders(user)` across every venue. Each venue handles
+   * Fans out `liquidateOrders(user, ids)` across every venue. Each venue handles
    * the "no orders" case internally and returns `{ skipped: "notLiquidatable" }`
    * — we collapse that to a zero-fee no-op.
    */

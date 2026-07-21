@@ -84,4 +84,4 @@ health:
 
 readBatchSize: 100
 # Per-operation batch sizes for writes.
-writeBatchSize: 20
+writeBatchSize: 100
