@@ -72,8 +72,11 @@ jobs:
       - name: Codegen
         run: pnpm codegen
 
-      - name: Build
-        run: pnpm build
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
 
       - name: Run matchstick tests
         run: pnpm test

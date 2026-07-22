@@ -42,6 +42,9 @@ importers:
         specifier: ^2.45.3
         version: 2.48.4(typescript@5.9.3)
     devDependencies:
+      '@biomejs/biome':
+        specifier: 2.4.13
+        version: 2.4.13
       '@types/js-yaml':
         specifier: ^4.0.9
         version: 4.0.9
@@ -258,6 +261,59 @@ packages:
     resolution: {integrity: sha512-JiDShH45zKHWyGe4ZNVRrCjBz8Nh9TMmZG1kh4QTK8hCBTWBi8Da+i7s1fJw7/lYpM4ccepSNfqzZ/QvABBi5g==}
     engines: {node: '>=6.9.0'}
 
+  '@biomejs/biome@2.4.13':
+    resolution: {integrity: sha512-gLXOwkOBBg0tr7bDsqlkIh4uFeKuMjxvqsrb1Tukww1iDmHcfr4Uu8MoQxp0Rcte+69+osRNWXwHsu/zxT6XqA==}
+    engines: {node: '>=14.21.3'}
+    hasBin: true
+
+  '@biomejs/cli-darwin-arm64@2.4.13':
+    resolution: {integrity: sha512-2KImO1jhNFBa2oWConyr0x6flxbQpGKv6902uGXpYM62Xyem8U80j441SyUJ8KyngsmKbQjeIv1q2CQfDkNnYg==}
+    engines: {node: '>=14.21.3'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@biomejs/cli-darwin-x64@2.4.13':
+    resolution: {integrity: sha512-BKrJklbaFN4p1Ts4kPBczo+PkbsHQg57kmJ+vON9u2t6uN5okYHaSr7h/MutPCWQgg2lglaWoSmm+zhYW+oOkg==}
+    engines: {node: '>=14.21.3'}
+    cpu: [x64]
+    os: [darwin]
+
+  '@biomejs/cli-linux-arm64-musl@2.4.13':
+    resolution: {integrity: sha512-U5MsuBQW25dXaYtqWWSPM3P96H6Y+fHuja3TQpMNnylocHW0tEbtFTDlUj6oM+YJLntvEkQy4grBvQNUD4+RCg==}
+    engines: {node: '>=14.21.3'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@biomejs/cli-linux-arm64@2.4.13':
+    resolution: {integrity: sha512-NzkUDSqfvMBrPplKgVr3aXLHZ2NEELvvF4vZxXulEylKWIGqlvNEcwUcj9OLrn75TD3lJ/GIqCVlBwd1MZCuYQ==}
+    engines: {node: '>=14.21.3'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@biomejs/cli-linux-x64-musl@2.4.13':
+    resolution: {integrity: sha512-Z601MienRgTBDza/+u2CH3RSrWoXo9rtr8NK6A4KJzqGgfxx+H3VlyLgTJ4sRo40T3pIsqpTmiOQEvYzQvBRvQ==}
+    engines: {node: '>=14.21.3'}
+    cpu: [x64]
+    os: [linux]
+
+  '@biomejs/cli-linux-x64@2.4.13':
+    resolution: {integrity: sha512-Az3ZZedYRBo9EQzNnD9SxFcR1G5QsGo6VEc2hIyVPZ1rdKwee/7E9oeBBZFpE8Z44ekxsDQBqbiWGW5ShOhUSQ==}
+    engines: {node: '>=14.21.3'}
+    cpu: [x64]
+    os: [linux]
+
+  '@biomejs/cli-win32-arm64@2.4.13':
+    resolution: {integrity: sha512-Px9PS2B5/Q183bUwy/5VHqp3J2lzdOCeVGzMpphYfl8oSa7VDCqenBdqWpy6DCy/en4Rbf/Y1RieZF6dJPcc9A==}
+    engines: {node: '>=14.21.3'}
+    cpu: [arm64]
+    os: [win32]
+
+  '@biomejs/cli-win32-x64@2.4.13':
+    resolution: {integrity: sha512-tTcMkXyBrmHi9BfrD2VNHs/5rYIUKETqsBlYOvSAABwBkJhSDVb5e7wPukftsQbO3WzQkXe6kaztC6WtUOXSoQ==}
+    engines: {node: '>=14.21.3'}
+    cpu: [x64]
+    os: [win32]
+
   '@bytecodealliance/preview2-shim@0.17.0':
     resolution: {integrity: sha512-JorcEwe4ud0x5BS/Ar2aQWOQoFzjq/7jcnxYXCvSMh0oRm0dQXzOA+hqLDBnOMks1LLBA7dmiLLsEBl09Yd6iQ==}
 
@@ -452,6 +508,10 @@ packages:
 
   '@manypkg/get-packages@1.1.3':
     resolution: {integrity: sha512-fo+QhuU3qE/2TQMQmbVMqaQ6EWbMhi4ABWP+O4AM1NqPBuy0OrApV5LO6BrrgnhtAHS2NH6RrVk9OL181tTi8A==}
+
+  '@multicall/multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012':
+    resolution: {tarball: https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012}
+    version: 0.0.0
 
   '@noble/ciphers@1.3.0':
     resolution: {integrity: sha512-2I0gnIVPtfnMw9ee9h1dJG7tp81+8Ob3OJb3Mv37rx5L40/b0i7djjCVvGOVqc9AEIQyvyu1i6ypKdFw8R8gQw==}
@@ -1913,10 +1973,6 @@ packages:
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
 
-  multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012:
-    resolution: {tarball: https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012}
-    version: 0.0.0
-
   nice-try@1.0.5:
     resolution: {integrity: sha512-1nh45deeb5olNY7eX82BkPO7SSxR5SSYJiPTrTdFUVYwAl8CKMA5N9PjTYkHiRjisVcxcQ1HXdLhx2qxxJzLNQ==}
 
@@ -2972,6 +3028,41 @@ snapshots:
 
   '@babel/runtime@7.29.2': {}
 
+  '@biomejs/biome@2.4.13':
+    optionalDependencies:
+      '@biomejs/cli-darwin-arm64': 2.4.13
+      '@biomejs/cli-darwin-x64': 2.4.13
+      '@biomejs/cli-linux-arm64': 2.4.13
+      '@biomejs/cli-linux-arm64-musl': 2.4.13
+      '@biomejs/cli-linux-x64': 2.4.13
+      '@biomejs/cli-linux-x64-musl': 2.4.13
+      '@biomejs/cli-win32-arm64': 2.4.13
+      '@biomejs/cli-win32-x64': 2.4.13
+
+  '@biomejs/cli-darwin-arm64@2.4.13':
+    optional: true
+
+  '@biomejs/cli-darwin-x64@2.4.13':
+    optional: true
+
+  '@biomejs/cli-linux-arm64-musl@2.4.13':
+    optional: true
+
+  '@biomejs/cli-linux-arm64@2.4.13':
+    optional: true
+
+  '@biomejs/cli-linux-x64-musl@2.4.13':
+    optional: true
+
+  '@biomejs/cli-linux-x64@2.4.13':
+    optional: true
+
+  '@biomejs/cli-win32-arm64@2.4.13':
+    optional: true
+
+  '@biomejs/cli-win32-x64@2.4.13':
+    optional: true
+
   '@bytecodealliance/preview2-shim@0.17.0': {}
 
   '@chainlink/contracts@1.5.0(@types/node@22.19.17)(ethers@5.8.0)':
@@ -3480,6 +3571,8 @@ snapshots:
       fs-extra: 8.1.0
       globby: 11.1.0
       read-yaml-file: 1.1.0
+
+  '@multicall/multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012': {}
 
   '@noble/ciphers@1.3.0': {}
 
@@ -4570,13 +4663,13 @@ snapshots:
   derivatives-contracts@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/7df057016ed148058ba2916c441e951a7b56a08c#path:/contracts(@nomicfoundation/hardhat-ethers@3.1.3(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3)))(@types/node@22.19.17)(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3)):
     dependencies:
       '@chainlink/contracts': 1.5.0(@types/node@22.19.17)(ethers@5.8.0)
-      '@multicall/multicall3': multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012
+      '@multicall/multicall3': https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012
       '@openzeppelin/contracts': 5.1.0
       '@openzeppelin/contracts-upgradeable': 5.1.0(@openzeppelin/contracts@5.1.0)
       '@openzeppelin/hardhat-upgrades': 3.9.1(@nomicfoundation/hardhat-ethers@3.1.3(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3)))(ethers@5.8.0)(hardhat@2.28.6(typescript@5.9.3))
       collateral-margin: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/a7f89b8fd167655d1157568230bc6779ce37d512
       hashprice-oracle: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/b65adbfeb7e6c4417747bfd3d94b6e89e162ed50
-      multicall3: https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012
+      multicall3: '@multicall/multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012'
       solidity-linked-list: 6.5.0
     transitivePeerDependencies:
       - '@nomicfoundation/hardhat-ethers'
@@ -4861,7 +4954,7 @@ snapshots:
       '@safe-global/types-kit': 2.0.1(typescript@5.9.3)
       collateral-margin: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/ce0b494f3050b96deb4a400f099c53086f2273b9
       hashprice-oracle: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/addc689f9fc69201944caf1bb0066c394742c2ec
-      multicall3: https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012
+      multicall3: '@multicall/multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012'
       solidity-linked-list: 6.5.0
       viem: 2.48.4(typescript@5.9.3)
     transitivePeerDependencies:
@@ -5279,8 +5372,6 @@ snapshots:
   mri@1.2.0: {}
 
   ms@2.1.3: {}
-
-  multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012: {}
 
   nice-try@1.0.5: {}
 

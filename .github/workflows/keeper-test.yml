@@ -74,6 +74,10 @@ jobs:
           echo "futures-marketplace-abi layout ok:"
           ls -la "$pkg" | head -20
 
+      - name: Lint
+        working-directory: ./keeper
+        run: pnpm lint
+
       - name: TypeCheck
         working-directory: ./keeper
         run: pnpm typecheck

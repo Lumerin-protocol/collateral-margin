@@ -1,8 +1,25 @@
 {
   "extends": "../../contracts/tsconfig.json",
   "compilerOptions": {
-    "types": ["node"]
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "viem": [
+        "./node_modules/viem"
+      ],
+      "viem/*": [
+        "./node_modules/viem/*"
+      ]
+    }
   },
-  "include": ["../hardhat.config.ts", "./**/*.ts", "../../contracts/tests/**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": [
+    "../hardhat.config.ts",
+    "./**/*.ts",
+    "../../contracts/tests/pointsIntegrationFixtures.ts",
+    "../../contracts/artifacts/**/*.d.ts"
+  ],
+  "exclude": [
+    "node_modules"
+  ]
 }

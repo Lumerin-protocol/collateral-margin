@@ -100,8 +100,6 @@ function buildHarness({ balance, perpEntry }: { balance: bigint; perpEntry: bigi
               return 0n;
             case "getPendingFunding":
               return 0n;
-            case "getOrderMargin":
-              return 0n;
             case "getActiveExpirationDates":
               return [];
             case "computePortfolioIM":

@@ -8,7 +8,8 @@
       "!!**/node_modules",
       "!!**/coverage",
       "!!**/cache",
-      "!!**/artifacts"
+      "!!**/artifacts",
+      "!!**/dist"
     ]
   },
   "overrides": [
@@ -25,6 +26,7 @@
             "noForEach": "off"
           },
           "correctness": {
+            "noConstantCondition": "off",
             "noUnusedImports": "warn"
           },
           "style": {

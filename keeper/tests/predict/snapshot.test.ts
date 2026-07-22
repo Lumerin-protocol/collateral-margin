@@ -62,11 +62,11 @@ function makeChain(scripted: {
               };
             }
             case "getOrderMargin":
-              return scripted.perpOrderMargin ?? 0n;
+              return c.address === PERPS
+                ? scripted.perpOrderMargin ?? 0n
+                : scripted.futuresOrderMargin ?? 0n;
             case "getPendingFunding":
               return scripted.perpFunding ?? 0n;
-            case "getOrderMargin":
-              return scripted.futuresOrderMargin ?? 0n;
             case "getActiveExpirationDates":
               return scripted.activeExpirationAts ?? [];
             case "imSpotShock":

@@ -41,21 +41,21 @@ describe.skip("swap: burn debits supply, Swapped records the GOV payout split", 
     await hook.write.onFill(
       [carol.account.address, alice.account.address, NOTIONAL, 0n, FEE, 0n, 0n],
       {
-        account: venue.account,
+        account: venue.account.address, chain: null,
       },
     );
     await hook.write.onFill(
       [carol.account.address, bob.account.address, NOTIONAL * 3n, 0n, FEE, 0n, 0n],
       {
-        account: venue.account,
+        account: venue.account.address, chain: null,
       },
     );
 
     // Wind down: finalize, fund the pool, open redemption, then alice swaps.
-    await points.write.finalize({ account: owner.account });
-    await gov.write.transfer([redeemer.address, POOL], { account: owner.account });
-    await redeemer.write.enableRedemption([POOL], { account: owner.account });
-    await redeemer.write.swap({ account: alice.account });
+    await points.write.finalize({ account: owner.account.address, chain: null });
+    await gov.write.transfer([redeemer.address, POOL], { account: owner.account.address, chain: null });
+    await redeemer.write.enableRedemption([POOL], { account: owner.account.address, chain: null });
+    await redeemer.write.swap({ account: alice.account.address, chain: null });
 
     const aliceAddr = alice.account.address.toLowerCase() as `0x${string}`;
     const expectedGov = (POOL * ALICE_PTS) / (ALICE_PTS + BOB_PTS); // 1000 GOV
