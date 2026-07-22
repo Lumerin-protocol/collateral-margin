@@ -72,6 +72,9 @@ jobs:
       - name: Codegen
         run: pnpm codegen
 
+      - name: Lint
+        run: pnpm lint
+
       - name: Build
         run: pnpm build
 

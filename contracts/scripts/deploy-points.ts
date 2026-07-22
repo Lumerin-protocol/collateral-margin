@@ -128,13 +128,13 @@ async function main() {
       safe: SAFE_OWNER_ADDRESS,
     });
     await logPrompt("Proceed?");
-    let sim = await points.simulate.grantRole([ADMIN_ROLE, SAFE_OWNER_ADDRESS]);
-    let receipt = await writeAndWait(deployer, sim);
-    logStep("granted admin to Safe", txUrl(pc, receipt.transactionHash));
+    const pointsAdminSim = await points.simulate.grantRole([ADMIN_ROLE, SAFE_OWNER_ADDRESS]);
+    const pointsAdminReceipt = await writeAndWait(deployer, pointsAdminSim);
+    logStep("granted admin to Safe", txUrl(pc, pointsAdminReceipt.transactionHash));
 
-    sim = await hook.simulate.grantRole([ADMIN_ROLE, SAFE_OWNER_ADDRESS]);
-    receipt = await writeAndWait(deployer, sim);
-    logStep("granted hook admin to Safe", txUrl(pc, receipt.transactionHash));
+    const hookAdminSim = await hook.simulate.grantRole([ADMIN_ROLE, SAFE_OWNER_ADDRESS]);
+    const hookAdminReceipt = await writeAndWait(deployer, hookAdminSim);
+    logStep("granted hook admin to Safe", txUrl(pc, hookAdminReceipt.transactionHash));
   }
 
   // ── Summary ─────────────────────────────────────────────────────────────────

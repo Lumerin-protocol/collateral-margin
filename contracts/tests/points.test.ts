@@ -61,7 +61,7 @@ describe("Points", () => {
       const fx = await networkHelpers.loadFixture(deployPointsFixture);
       await mintTo(fx, fx.alice.account.address, ONE_POINT);
       await viem.assertions.revertWithCustomError(
-        fx.points.write.transfer([fx.bob.account.address, ONE_POINT], { account: fx.alice.account }),
+        fx.points.read.transfer([fx.bob.account.address, ONE_POINT], { account: fx.alice.account }),
         fx.points,
         "TransfersDisabled",
       );
@@ -71,7 +71,7 @@ describe("Points", () => {
       const fx = await networkHelpers.loadFixture(deployPointsFixture);
       await mintTo(fx, fx.alice.account.address, ONE_POINT);
       await viem.assertions.revertWithCustomError(
-        fx.points.write.transferFrom([fx.alice.account.address, fx.bob.account.address, ONE_POINT], {
+        fx.points.read.transferFrom([fx.alice.account.address, fx.bob.account.address, ONE_POINT], {
           account: fx.owner.account,
         }),
         fx.points,
@@ -82,7 +82,7 @@ describe("Points", () => {
     it("blocks approve and reports zero allowance", async () => {
       const { points, alice, bob } = await networkHelpers.loadFixture(deployPointsFixture);
       await viem.assertions.revertWithCustomError(
-        points.write.approve([bob.account.address, ONE_POINT], { account: alice.account }),
+        points.read.approve([bob.account.address, ONE_POINT], { account: alice.account }),
         points,
         "TransfersDisabled",
       );

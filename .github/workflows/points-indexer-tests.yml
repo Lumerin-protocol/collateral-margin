@@ -85,6 +85,10 @@ jobs:
         working-directory: ./points-indexer
         run: pnpm codegen
 
+      - name: Lint
+        working-directory: ./points-indexer
+        run: pnpm lint
+
       - name: Build
         working-directory: ./points-indexer
         run: pnpm build

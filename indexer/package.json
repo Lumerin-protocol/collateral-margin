@@ -17,13 +17,16 @@
     "deploy-local": "graph deploy --node http://localhost:8020/ --ipfs http://localhost:5001 --version-label 0 collateral-vault",
     "setup-local": "pnpm prepare-local && pnpm codegen && pnpm build && pnpm create-local && pnpm deploy-local",
     "test": "graph test -v 0.6.0",
+    "lint": "biome lint .",
     "indexer": "docker compose --env-file ../.env up",
-    "graph:api": "open http://localhost:8030/graphql/playground"
+    "graph:api": "open http://localhost:8030/graphql/playground",
+    "lint:fix": "biome check --write ."
   },
   "dependencies": {
     "@graphprotocol/graph-ts": "0.38.2"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.13",
     "@graphprotocol/graph-cli": "^0.98.1",
     "@types/node": "^25.3.0",
     "assemblyscript": "^0.19.23",

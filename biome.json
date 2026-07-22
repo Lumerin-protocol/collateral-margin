@@ -25,6 +25,7 @@
             "noForEach": "off"
           },
           "correctness": {
+            "noConstantCondition": "off",
             "noUnusedImports": "warn"
           },
           "style": {

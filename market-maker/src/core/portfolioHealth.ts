@@ -121,11 +121,17 @@ export class PortfolioHealthCheck {
   }
 
   private handleStop(res: ServerResponse): void {
-    if (this.paused) return this.respondOk(res);
+    if (this.paused) {
+      this.respondOk(res);
+      return;
+    }
     this.paused = true;
     this.status = "stopped";
     this.lastError = null;
-    if (!this.onStop) return this.respondOk(res);
+    if (!this.onStop) {
+      this.respondOk(res);
+      return;
+    }
     this.onStop()
       .then(() => this.respondOk(res))
       .catch((err) => {
@@ -136,11 +142,17 @@ export class PortfolioHealthCheck {
   }
 
   private handleStart(res: ServerResponse): void {
-    if (!this.paused) return this.respondOk(res);
+    if (!this.paused) {
+      this.respondOk(res);
+      return;
+    }
     this.paused = false;
     this.status = "running";
     this.lastError = null;
-    if (!this.onStart) return this.respondOk(res);
+    if (!this.onStart) {
+      this.respondOk(res);
+      return;
+    }
     this.onStart()
       .then(() => this.respondOk(res))
       .catch((err) => {

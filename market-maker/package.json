@@ -13,6 +13,7 @@
     "gen:schemas": "pnpm node scripts/gen-schemas.ts",
     "pretypecheck": "pnpm gen:schemas",
     "typecheck": "tsgo --noEmit",
+    "lint": "biome lint .",
     "node": "node --import=amaro/strip --conditions=typescript",
     "perps": "pnpm node --watch src/apps/perps/main.ts",
     "futures": "pnpm node --watch src/apps/futures/main.ts",
@@ -28,7 +29,8 @@
     "stg:portfolio": "pnpm portfolio --config configs/portfolio.stg.yml",
     "prd:perps": "pnpm perps --config configs/perps.prd.yml",
     "prd:futures": "pnpm futures --config configs/futures.prd.yml",
-    "prd:portfolio": "pnpm portfolio --config configs/portfolio.prd.yml"
+    "prd:portfolio": "pnpm portfolio --config configs/portfolio.prd.yml",
+    "lint:fix": "biome check --write ."
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.49",
@@ -44,6 +46,7 @@
     "viem": "^2.45.3"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.13",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
     "@typescript/native-preview": "7.0.0-dev.20260525.1",

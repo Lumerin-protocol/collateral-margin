@@ -115,9 +115,12 @@ export async function deployPointsStackFixture(conn: NetworkConnection) {
   const MINTER_ROLE = await points.read.MINTER_ROLE();
   const BURNER_ROLE = await points.read.BURNER_ROLE();
   const HOOK_CALLER_ROLE = await hook.read.HOOK_CALLER_ROLE();
-  await points.write.grantRole([MINTER_ROLE, hook.address], { account: owner.account });
-  await points.write.grantRole([BURNER_ROLE, redeemer.address], { account: owner.account });
-  await hook.write.grantRole([HOOK_CALLER_ROLE, venue.account.address], { account: owner.account });
+  await points.write.grantRole([MINTER_ROLE, hook.address], { account: owner.account, chain: null });
+  await points.write.grantRole([BURNER_ROLE, redeemer.address], { account: owner.account, chain: null });
+  await hook.write.grantRole([HOOK_CALLER_ROLE, venue.account.address], {
+    account: owner.account,
+    chain: null,
+  });
 
   return {
     contracts: { points, hook, gov, escrow, redeemer },
