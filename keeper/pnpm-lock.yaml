@@ -210,7 +210,7 @@ packages:
     resolution: {integrity: sha512-2P0p0pFGzHS5EMnhdxQi7aJN+iMheud0UhG4dlE1DLAlvL8JHjJJTX/CSm4JXwV0Ka5nGk3zC5mcb5bUQUxxMA==}
 
   derivatives-marketplace-abi@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/7df057016ed148058ba2916c441e951a7b56a08c#path:/contracts/abi:
-    resolution: {gitHosted: true, integrity: sha512-5mRqh023RoayXNLVO58BjqMkqs6zAGZaGCEb5PBEg9RLZb5PDOi/dE86PO/MhjVK2Lpxb5tS07fdT9dcShxjJQ==, tarball: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/7df057016ed148058ba2916c441e951a7b56a08c}
+    resolution: {gitHosted: true, path: /contracts/abi, integrity: sha512-5mRqh023RoayXNLVO58BjqMkqs6zAGZaGCEb5PBEg9RLZb5PDOi/dE86PO/MhjVK2Lpxb5tS07fdT9dcShxjJQ==, tarball: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/7df057016ed148058ba2916c441e951a7b56a08c}
     version: 0.0.0
 
   end-of-stream@1.4.5:
