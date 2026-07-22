@@ -46,7 +46,7 @@ venues:
     sizing:
       strategy: geometric-taper
       baseQuantity: "1000000" # venue-native (perps hashrate base units)
-      numLevelsPerSide: 5
+      numLevelsPerSide: 10
       taperRatio: 0.6
 
   - kind: futures
@@ -66,11 +66,10 @@ venues:
     sizing:
       strategy: geometric-taper
       # 1 futures contract ≈ 1.0 perps qty (1e6). Perps total/side =
-      # baseQuantity×numLevels/1e6 = 5. Split across `count` expiries; base=4
-      # is the integer floor that keeps all 5 taper levels non-zero
-      # ([8,5,3,1,1]). Order count is 2×levels×expiries (=30), not ×qty.
+      # baseQuantity×numLevels/1e6 = 10. Split across `count` expiries; base=4
+      # keeps taper levels non-zero. Order count is 2×levels×expiries (=60).
       baseQuantity: 4 # venue-native (contracts)
-      numLevelsPerSide: 5
+      numLevelsPerSide: 10
       taperRatio: 0.6
       # Nearest expiry keeps full size; each further date × this factor.
       expirySizeDecay: 0.6
@@ -92,15 +91,16 @@ gas:
 
 timing:
   pollIntervalSec: 3
-  requoteThresholdTicks: 2
   requoteCooldownSec: 1
   resyncIntervalSec: 60
   levelSpacingTicks: 1
+  staleBandAllowanceUsd: 0.03
+  staleSizeAllowanceUsd: 50
 
 collateral:
   autoDeposit: true
   autoDepositMinAmount: 1
-  maxCollateralAmount: 2000
+  maxCollateralAmount: 4000
 
 oracle:
   windowSize: 60

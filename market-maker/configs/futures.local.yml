@@ -37,7 +37,7 @@ pricing:
 sizing:
   strategy: geometric-taper
   baseQuantity: "10000000" # venue-native (contracts base units)
-  numLevelsPerSide: 5
+  numLevelsPerSide: 10
   taperRatio: 0.6
 
 risk:
@@ -56,10 +56,11 @@ gas:
 
 timing:
   pollIntervalSec: 3
-  requoteThresholdTicks: 2
   requoteCooldownSec: 1
   resyncIntervalSec: 60
   levelSpacingTicks: 1
+  staleBandAllowanceUsd: 0.03
+  staleSizeAllowanceUsd: 50
 
 collateral:
   autoDeposit: false

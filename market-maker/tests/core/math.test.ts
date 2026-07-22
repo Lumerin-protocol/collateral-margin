@@ -7,6 +7,8 @@ import {
   applyBps,
   bigAbs,
   calculateNotional,
+  notionalToSize,
+  QUANTITY_SCALE,
   roundDownToTick,
   roundToTick,
   roundUpToTick,
@@ -37,6 +39,26 @@ describe("calculateNotional", () => {
   });
   it("treats negative quantity as absolute", () => {
     assert.equal(calculateNotional(100_000_000n, -1_000_000n), 100_000_000n);
+  });
+});
+
+describe("notionalToSize", () => {
+  it("perps: inverts calculateNotional with nearest-unit rounding", () => {
+    assert.equal(notionalToSize(100_000_000n, 100_000_000n, QUANTITY_SCALE), 1_000_000n);
+    // $1 at $95 → ≈ 10526.315 → rounds to 10526
+    assert.equal(notionalToSize(95_000_000n, 1_000_000n, QUANTITY_SCALE), 10_526n);
+  });
+  it("futures: scale 1 rounds USD size allowance to whole contracts", () => {
+    // $1 at $95 → 0.0105 → 0 contracts
+    assert.equal(notionalToSize(95_000_000n, 1_000_000n, 1n), 0n);
+    // $50 at $95 → 0.526 → 1 contract
+    assert.equal(notionalToSize(95_000_000n, 50_000_000n, 1n), 1n);
+    // $95 at $95 → 1 contract exactly
+    assert.equal(notionalToSize(95_000_000n, 95_000_000n, 1n), 1n);
+  });
+  it("returns 0 for non-positive inputs", () => {
+    assert.equal(notionalToSize(0n, 1_000_000n, QUANTITY_SCALE), 0n);
+    assert.equal(notionalToSize(95_000_000n, 0n, QUANTITY_SCALE), 0n);
   });
 });
 

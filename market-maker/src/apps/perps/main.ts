@@ -14,6 +14,7 @@ import { OrderExecutor } from "../../core/orderExecutor.ts";
 import { HealthCheck } from "../../core/healthcheck.ts";
 import { runMakerLoop } from "../../core/runner.ts";
 import { serializeError } from "../../core/errSerializer.ts";
+import { QUANTITY_SCALE } from "../../core/math.ts";
 import { createPerpsVenue } from "../../adapters/perps/index.ts";
 import { sanitiseConfig } from "../../core/config/base.ts";
 import { loadPerpsConfig } from "./config.ts";
@@ -142,7 +143,9 @@ async function main(): Promise<void> {
     instrument,
     {
       requoteCooldownMs: config.timing.requoteCooldownMs,
-      requoteThresholdTicks: config.timing.requoteThresholdTicks,
+      staleBandAllowance: config.timing.staleBandAllowance,
+      staleSizeAllowance: config.timing.staleSizeAllowance,
+      quantityScale: QUANTITY_SCALE,
       urgentRequoteThresholdTicks: config.risk.urgentRequoteThresholdTicks,
       dryRun: config.dryRun,
     },

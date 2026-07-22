@@ -27,13 +27,22 @@ function makeOrderId(n: number): `0x${string}` {
   return `0x${n.toString(16).padStart(64, "0")}` as `0x${string}`;
 }
 
+/** Default $0.03 allowance (≈ 3 × $0.01 tick used by the stub quoter). */
+const DEFAULT_ALLOWANCE = 30_000n;
+/** Default $50 size allowance (converted to native qty at level price). */
+const DEFAULT_SIZE_ALLOWANCE = 50_000_000n;
+/** Perps quantity scale (tests default). Futures tests pass `1n`. */
+const PERPS_QUANTITY_SCALE = 1_000_000n;
+
 function makeConfig(
   overrides: Partial<OrderExecutorConfig> = {},
 ): OrderExecutorConfig {
   return {
     requoteCooldownMs: 0,
-    requoteThresholdTicks: 2,
     urgentRequoteThresholdTicks: 10,
+    staleBandAllowance: DEFAULT_ALLOWANCE,
+    staleSizeAllowance: DEFAULT_SIZE_ALLOWANCE,
+    quantityScale: PERPS_QUANTITY_SCALE,
     dryRun: false,
     ...overrides,
   };
@@ -94,10 +103,13 @@ function makeDeps(overrides: Partial<TestDeps> = {}): TestDeps {
   return deps;
 }
 
-function makeExecutor(deps: TestDeps): OrderExecutor {
+function makeExecutor(
+  deps: TestDeps,
+  cfg: Partial<OrderExecutorConfig> = {},
+): OrderExecutor {
   return new OrderExecutor(
     deps.instrument,
-    makeConfig(),
+    makeConfig(cfg),
     deps.quoter,
     deps.book,
     deps.gas,
@@ -167,17 +179,17 @@ describe("OrderExecutor requote guards (regression)", () => {
   });
 
   /**
-   * Off-grid leftovers coexist with correct grid orders — cancel only the
-   * off-grid ones (exact set-diff).
+   * Worse leftovers coexist with correct grid orders — cancel only the worse
+   * ones (outside keep zone). Better-than-grid leftovers are kept.
    */
-  it("cancels off-grid leftovers while keeping the desired grid", async () => {
+  it("cancels worse leftovers while keeping the desired grid", async () => {
     const deps = makeDeps();
     const executor = makeExecutor(deps);
 
     seedOrder(deps.book, 1, "buy", 95_000_000n, 1_000_000n);
     seedOrder(deps.book, 2, "sell", 96_000_000n, 1_000_000n);
 
-    // Off-grid leftovers (cancels failed on a prior tick).
+    // Worse leftovers well outside the $0.03 allowance.
     seedOrder(deps.book, 3, "buy", 90_000_000n, 1_000_000n);
     seedOrder(deps.book, 4, "sell", 101_000_000n, 1_000_000n);
 
@@ -188,7 +200,7 @@ describe("OrderExecutor requote guards (regression)", () => {
 
     await executor.reconcile(desired);
 
-    assert.equal(deps.cancelledOrderIds.length, 2, "off-grid leftovers cancelled");
+    assert.equal(deps.cancelledOrderIds.length, 2, "worse leftovers cancelled");
     assert.equal(
       deps.placedIntents.length,
       0,
@@ -196,18 +208,18 @@ describe("OrderExecutor requote guards (regression)", () => {
     );
   });
 
-  it("cancels better-than-grid leftovers not on the desired set", async () => {
+  it("keeps better-than-grid leftovers (does not cancel them as stale)", async () => {
     const deps = makeDeps();
     const executor = makeExecutor(deps);
 
     seedOrder(deps.book, 1, "buy", 95_000_000n, 1_000_000n);
     seedOrder(deps.book, 2, "sell", 96_000_000n, 1_000_000n);
-    seedOrder(deps.book, 3, "buy", 99_000_000n, 1_000_000n); // better bid, off-grid
-    seedOrder(deps.book, 4, "sell", 94_000_000n, 1_000_000n); // better ask, off-grid
+    seedOrder(deps.book, 3, "buy", 99_000_000n, 1_000_000n); // better bid
+    seedOrder(deps.book, 4, "sell", 94_000_000n, 1_000_000n); // better ask
 
     await executor.reconcile([desiredBuy(95_000_000n), desiredSell(96_000_000n)]);
 
-    assert.equal(deps.cancelledOrderIds.length, 2, "off-grid leftovers cancelled");
+    assert.equal(deps.cancelledOrderIds.length, 0, "better leftovers kept");
     assert.equal(deps.placedIntents.length, 0);
   });
 
@@ -251,7 +263,8 @@ describe("OrderExecutor quantity deficit", () => {
 
   it("requotes when resting size falls below desired qty at a level", () => {
     const deps = makeDeps();
-    const executor = makeExecutor(deps);
+    // Abstract tiny sizes — force size allowance off so the top-up path is exercised.
+    const executor = makeExecutor(deps, { staleSizeAllowance: 0n });
 
     seedOrder(deps.book, 1, "buy", 95_000_000n, 2n);
     seedOrder(deps.book, 2, "sell", 96_000_000n, 3n);
@@ -263,6 +276,21 @@ describe("OrderExecutor quantity deficit", () => {
     assert.equal(planned.reduces.length, 0);
     assert.equal(planned.creates.length, 1, "tops up the missing buy size");
     assert.equal(planned.creates[0].size, 1n);
+  });
+
+  it("skips top-up when deficit notional is at or below the USD threshold", () => {
+    const deps = makeDeps();
+    const executor = makeExecutor(deps); // $50 default size allowance
+    // deficit 10 at price 95 → notional ≈ $0.00095 ≤ $50
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 999_990n);
+    seedOrder(deps.book, 2, "sell", 96_000_000n, 1_000_000n);
+
+    executor.recordRequote(0, 0);
+    const planned = executor.plan([
+      desiredBuy(95_000_000n, 1_000_000n),
+      desiredSell(96_000_000n, 1_000_000n),
+    ]);
+    assert.equal(planned, null, "sub-threshold dust deficit must not requote");
   });
 });
 
@@ -314,7 +342,7 @@ describe("OrderExecutor.plan", () => {
     assert.equal(executor.plan([desiredBuy(95_000_000n)]), null);
   });
 
-  it("returns null when there is no deficit, no stale order, and no drift", () => {
+  it("returns null when there is no deficit and no stale order", () => {
     const deps = makeDeps();
     const executor = makeExecutor(deps);
     seedOrder(deps.book, 1, "buy", 95_000_000n);
@@ -339,13 +367,13 @@ describe("OrderExecutor.plan", () => {
 // ── stale detection ────────────────────────────────────────────────────────
 
 describe("OrderExecutor stale detection", () => {
-  it("cancels off-grid prices and keeps exact desired levels", () => {
+  it("cancels outside the keep zone and keeps on-grid levels", () => {
     const deps = makeDeps();
     const executor = makeExecutor(deps);
     seedOrder(deps.book, 1, "buy", 95_000_000n); // on-grid → keep
-    seedOrder(deps.book, 2, "buy", 93_000_000n); // off-grid → cancel
+    seedOrder(deps.book, 2, "buy", 93_000_000n); // worse than worstBid 94 − 0.03 → cancel
     seedOrder(deps.book, 3, "sell", 96_000_000n); // on-grid → keep
-    seedOrder(deps.book, 4, "sell", 98_000_000n); // off-grid → cancel
+    seedOrder(deps.book, 4, "sell", 98_000_000n); // worse than worstAsk 97 + 0.03 → cancel
 
     const planned = executor.plan([
       desiredBuy(95_000_000n),
@@ -355,9 +383,31 @@ describe("OrderExecutor stale detection", () => {
     ]);
     assert.ok(planned);
     const cancelled = new Set(planned.cancels.map((o) => o.orderId));
-    assert.ok(cancelled.has(makeOrderId(2)) && cancelled.has(makeOrderId(4)), "off-grid cancelled");
+    assert.ok(cancelled.has(makeOrderId(2)) && cancelled.has(makeOrderId(4)), "outside band cancelled");
     assert.ok(!cancelled.has(makeOrderId(1)) && !cancelled.has(makeOrderId(3)), "on-grid kept");
     assert.equal(planned.creates.length, 2, "missing grid levels placed");
+  });
+
+  it("keeps slightly-worse leftovers within the USD allowance", () => {
+    const deps = makeDeps();
+    // allowance $0.03; tick stub is $0.01 → 2 ticks inside keep zone past worst edge
+    const executor = makeExecutor(deps, { staleBandAllowance: DEFAULT_ALLOWANCE });
+    seedOrder(deps.book, 1, "buy", 95_000_000n);
+    seedOrder(deps.book, 2, "buy", 94_980_000n); // 95 − 0.02 → keep
+    seedOrder(deps.book, 3, "sell", 96_000_000n);
+    seedOrder(deps.book, 4, "sell", 96_020_000n); // 96 + 0.02 → keep
+    seedOrder(deps.book, 5, "buy", 94_960_000n); // 95 − 0.04 → cancel
+    seedOrder(deps.book, 6, "sell", 96_040_000n); // 96 + 0.04 → cancel
+
+    const planned = executor.plan([desiredBuy(95_000_000n), desiredSell(96_000_000n)]);
+    assert.ok(planned);
+    const cancelled = new Set(planned.cancels.map((o) => o.orderId));
+    assert.ok(cancelled.has(makeOrderId(5)) && cancelled.has(makeOrderId(6)), "beyond allowance cancelled");
+    assert.ok(
+      !cancelled.has(makeOrderId(2)) && !cancelled.has(makeOrderId(4)),
+      "within-allowance leftovers kept",
+    );
+    assert.equal(planned.creates.length, 0);
   });
 
   it("cancels every resting order on a side when that side is absent from the grid", () => {
@@ -366,20 +416,21 @@ describe("OrderExecutor stale detection", () => {
     seedOrder(deps.book, 1, "buy", 96_000_000n);
     seedOrder(deps.book, 2, "buy", 93_000_000n);
     seedOrder(deps.book, 3, "sell", 96_000_000n); // on desired ask → keep
-    seedOrder(deps.book, 4, "sell", 98_000_000n); // off-grid → cancel
+    seedOrder(deps.book, 4, "sell", 98_000_000n); // outside keep zone → cancel
 
     // Desired has only an ask side → no desired bid → all resting buys cancel.
     const planned = executor.plan([desiredSell(96_000_000n)]);
     assert.ok(planned);
     const cancelled = new Set(planned.cancels.map((o) => o.orderId));
     assert.ok(cancelled.has(makeOrderId(1)) && cancelled.has(makeOrderId(2)), "all bids cancelled");
-    assert.ok(cancelled.has(makeOrderId(4)), "off-grid ask cancelled");
+    assert.ok(cancelled.has(makeOrderId(4)), "outside-band ask cancelled");
     assert.ok(!cancelled.has(makeOrderId(3)), "on-grid ask kept");
   });
 
   it("cancels a whole trailing order when excess covers it", () => {
     const deps = makeDeps();
-    const executor = makeExecutor(deps);
+    // Tiny abstract sizes → force threshold off so the trim path is exercised.
+    const executor = makeExecutor(deps, { staleSizeAllowance: 0n });
     seedOrder(deps.book, 1, "buy", 95_000_000n, 2n);
     seedOrder(deps.book, 2, "buy", 95_000_000n, 2n); // aggregate 4 > desired 2
 
@@ -393,7 +444,7 @@ describe("OrderExecutor stale detection", () => {
 
   it("reduces trailing order in place when excess is partial", () => {
     const deps = makeDeps();
-    const executor = makeExecutor(deps);
+    const executor = makeExecutor(deps, { staleSizeAllowance: 0n });
     seedOrder(deps.book, 1, "buy", 95_000_000n, 4n);
 
     const planned = executor.plan([desiredBuy(95_000_000n, 3n)]);
@@ -403,6 +454,63 @@ describe("OrderExecutor stale detection", () => {
     assert.equal(planned.reduces[0].orderId, makeOrderId(1));
     assert.equal(planned.reduces[0].newSize, 3n);
     assert.equal(planned.creates.length, 0);
+  });
+
+  it("skips downsize when excess notional is at or below the USD threshold", () => {
+    const deps = makeDeps();
+    const executor = makeExecutor(deps); // $50 default size allowance
+    // excess 10 at price 95 → notional ≈ $0.00095 → keep
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 1_000_010n);
+
+    executor.recordRequote(0, 0);
+    const planned = executor.plan([desiredBuy(95_000_000n, 1_000_000n)]);
+    assert.equal(planned, null, "sub-threshold dust excess must not requote");
+  });
+
+  it("downsizes when excess notional exceeds the USD threshold", () => {
+    const deps = makeDeps();
+    const executor = makeExecutor(deps);
+    // $50 at $95 → allowanceQty ≈ 526316; excess 600_000 > allowance → reduce
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 1_600_000n);
+
+    const planned = executor.plan([desiredBuy(95_000_000n, 1_000_000n)]);
+    assert.ok(planned);
+    assert.equal(planned.reduces.length, 1);
+    assert.equal(planned.reduces[0].newSize, 1_000_000n);
+    assert.equal(planned.cancels.length, 0);
+  });
+
+  it("tops up when deficit notional exceeds the same USD threshold", () => {
+    const deps = makeDeps();
+    const executor = makeExecutor(deps);
+    // deficit 600_000 at price 95 → above ~526316 allowance → top up
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 400_000n);
+
+    const planned = executor.plan([desiredBuy(95_000_000n, 1_000_000n)]);
+    assert.ok(planned);
+    assert.equal(planned.creates.length, 1);
+    assert.equal(planned.creates[0].size, 600_000n);
+    assert.equal(planned.cancels.length, 0);
+    assert.equal(planned.reduces.length, 0);
+  });
+
+  it("futures: $50 size allowance rounds to 1 contract at ~$95", () => {
+    const deps = makeDeps();
+    // default $50 → allowanceQty = round(50/95) = 1 contract
+    const executor = makeExecutor(deps, { quantityScale: 1n });
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 2n); // excess 1 ≤ 1 → keep
+
+    executor.recordRequote(0, 0);
+    assert.equal(
+      executor.plan([desiredBuy(95_000_000n, 1n)]),
+      null,
+      "1-contract excess within rounded size allowance",
+    );
+
+    seedOrder(deps.book, 2, "buy", 95_000_000n, 1n); // have 3, excess 2 > 1
+    const planned = executor.plan([desiredBuy(95_000_000n, 1n)]);
+    assert.ok(planned);
+    assert.ok(planned.cancels.length + planned.reduces.length > 0);
   });
 });
 

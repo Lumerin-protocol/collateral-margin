@@ -146,11 +146,6 @@ export const timingSchema = Type.Object(
       default: 3,
       description: "Seconds between main-loop iterations (snapshot, quote, execute).",
     }),
-    requoteThresholdTicks: Type.Number({
-      minimum: 0,
-      default: 2,
-      description: "Tick deviation from current target before a resting order is replaced.",
-    }),
     requoteCooldownSec: TypeSeconds({
       minimum: 0,
       default: 1,
@@ -165,6 +160,16 @@ export const timingSchema = Type.Object(
       minimum: 1,
       default: 1,
       description: "Ticks between successive quote levels. 1 = quote every tick, 5 = every fifth.",
+    }),
+    staleBandAllowanceUsd: TypeUsdAmount({
+      default: 0.03,
+      description:
+        "USD price distance outside the worst desired bid/ask that still counts as in-band (kept). Independent of venue tick size. 0 = strict worst-desired edge. Default 0.03 ≈ 3 ticks when tick = $0.01.",
+    }),
+    staleSizeAllowanceUsd: TypeUsdAmount({
+      default: 50,
+      description:
+        "USD notional size allowance (reduce and top-up). Converted to venue-native qty at the level price (nearest unit; perps 1e6 scale, futures whole contracts) and compared to |have−want|. 0 = exact size match. Default 50 (~1 futures contract at ~$95).",
     }),
   },
   { ...Closed, description: "Loop cadences and requote thresholds." },
@@ -297,10 +302,13 @@ export interface ParsedRiskConfig {
 
 export interface ParsedTimingConfig {
   pollIntervalMs: number;
-  requoteThresholdTicks: number;
   requoteCooldownMs: number;
   resyncIntervalMs: number;
   levelSpacingTicks: number;
+  /** Price-unit allowance outside worst desired level (6dp USD). */
+  staleBandAllowance: bigint;
+  /** On-grid size allowance in USD notional (6dp); both reduce and top-up. */
+  staleSizeAllowance: bigint;
 }
 
 export interface ParsedCollateralConfig {
@@ -334,10 +342,11 @@ interface RawRisk {
 }
 interface RawTiming {
   pollIntervalSec: string | number;
-  requoteThresholdTicks: number;
   requoteCooldownSec: string | number;
   resyncIntervalSec: string | number;
   levelSpacingTicks: number;
+  staleBandAllowanceUsd?: string | number;
+  staleSizeAllowanceUsd?: string | number;
 }
 interface RawCollateral {
   autoDeposit: boolean;
@@ -376,10 +385,19 @@ export function parseRiskConfig(raw: RawRisk): ParsedRiskConfig {
 export function parseTimingConfig(raw: RawTiming): ParsedTimingConfig {
   return {
     pollIntervalMs: secondsToMs(raw.pollIntervalSec, "timing.pollIntervalSec"),
-    requoteThresholdTicks: raw.requoteThresholdTicks,
     requoteCooldownMs: secondsToMs(raw.requoteCooldownSec, "timing.requoteCooldownSec"),
     resyncIntervalMs: secondsToMs(raw.resyncIntervalSec, "timing.resyncIntervalSec"),
     levelSpacingTicks: raw.levelSpacingTicks,
+    staleBandAllowance: parseUsd(
+      raw.staleBandAllowanceUsd ?? 0.03,
+      USD_DECIMALS,
+      "timing.staleBandAllowanceUsd",
+    ),
+    staleSizeAllowance: parseUsd(
+      raw.staleSizeAllowanceUsd ?? 50,
+      USD_DECIMALS,
+      "timing.staleSizeAllowanceUsd",
+    ),
   };
 }
 

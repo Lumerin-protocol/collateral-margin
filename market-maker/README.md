@@ -73,8 +73,8 @@ graph LR
    exceeded; throttle if gas budget exceeded
 3. **Compute quotes** — N levels per side, spread = max(minSpreadBps,
    gasFloor) + volatility + inventory skew + gas penalty
-4. **Reconcile** — selective requoting: only cancel/place orders that
-   changed; skips requote if price drift is below threshold or cooldown
+4. **Reconcile** — selective requoting: only cancel/place/reduce when
+   the book is outside the band or size allowance; skips while cooldown
    hasn't elapsed; skips non-urgent requotes during gas spikes
 
 ### Quoting strategy
@@ -101,7 +101,7 @@ graph LR
 - **Daily loss halt**: includes gas costs in PnL calculation; halts if
   daily loss exceeds `maxDailyLossUsd`
 - **Gas budget throttle**: rolling hourly/daily gas budgets; when
-  exceeded, requote cooldown and threshold tighten
+  exceeded, requote cooldown triples
 - **Gas spike deferral**: during gas spikes, requotes are deferred
   unless price drift exceeds `urgentRequoteThresholdTicks`
 - **Gas cap**: `maxFeePerGas` is capped at `gasCapMultiplier · medianGasPrice`
@@ -111,9 +111,10 @@ graph LR
 
 ### Stale-order policy
 
-Both venues use limit LOB matching. `OrderExecutor` keeps own orders
-that are still at-least-as-aggressive as the worst desired bid/ask
-and cancels worse ones.
+Both venues use limit LOB matching with a USD keep-zone allowance
+(`timing.staleBandAllowanceUsd`). See
+[docs/stale-order-policy.md](docs/stale-order-policy.md) for band edges,
+when leftovers are kept, and when on-grid size is downsized.
 
 ### Graceful shutdown
 
