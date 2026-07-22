@@ -30,6 +30,21 @@ function toDecimalString(input: unknown, field: string): string {
 }
 
 /**
+ * Format a USD/USDC base-unit bigint as a decimal string (no float).
+ * `50_000_000n` → `"50"`, `500_000n` → `"0.5"`, `1n` → `"0.000001"`.
+ */
+export function formatUsd(amount: bigint, decimals: number = 6): string {
+  const neg = amount < 0n;
+  const abs = neg ? -amount : amount;
+  const scale = 10n ** BigInt(decimals);
+  const whole = abs / scale;
+  const frac = abs % scale;
+  const fracStr = frac.toString().padStart(decimals, "0").replace(/0+$/, "");
+  const body = fracStr.length > 0 ? `${whole}.${fracStr}` : `${whole}`;
+  return neg ? `-${body}` : body;
+}
+
+/**
  * Parse a USD-denominated decimal value into a bigint with the given
  * `decimals` (6 for USDC). "50" → 50_000_000n, "0.5" → 500_000n, "50.123456"
  * → 50_123_456n. More than `decimals` fractional digits is rejected so the
