@@ -12,8 +12,9 @@ How `OrderExecutor` decides what to cancel, reduce, or place when reconciling th
   - Asks: `price <= worstDesiredAsk + bandAllowance`
 - **Size allowance** (`timing.staleSizeAllowanceUsd`): on-grid `|have − want|` tolerance in USD notional (both reduce and top-up). Default `50` (~1 futures contract at ~$95).
 - **On-grid**: resting `(side, price)` equals a desired intent price.
-- **Better leftover**: inside keep zone, more aggressive than the current grid, not on a desired price.
-- **Stale / worse**: outside the keep zone.
+- **Worse leftover**: inside keep zone, less aggressive than the best desired level on that side (still within band allowance of the worst level).
+- **Better leftover**: more aggressive than the best desired bid/ask — **cancelled** (self-match prevention).
+- **Stale / worse-outside-band**: outside the keep zone.
 
 ## Diff actions
 
@@ -21,12 +22,15 @@ How `OrderExecutor` decides what to cancel, reduce, or place when reconciling th
 |---|---|
 | Buy with `price < worstDesiredBid - bandAllowance` | **Cancel** |
 | Sell with `price > worstDesiredAsk + bandAllowance` | **Cancel** |
+| Buy with `price > bestDesiredBid` (better leftover) | **Cancel** (STP) |
+| Sell with `price < bestDesiredAsk` (better leftover) | **Cancel** (STP) |
+| Buy with `price >= bestDesiredAsk` / sell with `price <= bestDesiredBid` | **Cancel** (would lock/cross) |
 | Side with no desired levels | **Cancel all** on that side |
-| Buy/sell inside keep zone but off-grid | **Keep** |
+| Worse leftover inside keep zone | **Keep** |
 | On-grid, size delta above `staleSizeAllowanceUsd` | **Downsize** or **top-up** (below) |
 | On-grid, size delta within `staleSizeAllowanceUsd` | **Keep** (no reduce, no place) |
 
-Better leftovers are not credited toward a different desired price. Grid slides may place new levels while older in-band orders still rest (temporary extra size/IM).
+Worse-within-band leftovers may rest while new on-grid levels are placed. Better leftovers are never kept — they would self-match against new opposite-side creates.
 
 ## On-grid size allowance
 

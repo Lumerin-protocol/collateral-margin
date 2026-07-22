@@ -163,6 +163,9 @@ export class Quoter {
       }
     }
 
+    // Guaranteed one-tick wide book after rounding (0-spread can lock bid==ask).
+    this.widenLockedBook(intents);
+
     this.logger.debug(
       {
         strategy: this.cfg.pricing.strategy,
@@ -174,6 +177,29 @@ export class Quoter {
     );
 
     return intents;
+  }
+
+  /** If best bid/ask lock or cross after tick rounding, bump the best ask by one tick. */
+  private widenLockedBook(intents: OrderIntent[]): void {
+    if (this.tick === 0n || intents.length === 0) return;
+    let bestBid: bigint | undefined;
+    let bestAsk: bigint | undefined;
+    let bestAskIdx = -1;
+    for (let i = 0; i < intents.length; i++) {
+      const intent = intents[i];
+      if (intent.side === "buy") {
+        if (bestBid === undefined || intent.price > bestBid) bestBid = intent.price;
+      } else if (bestAsk === undefined || intent.price < bestAsk) {
+        bestAsk = intent.price;
+        bestAskIdx = i;
+      }
+    }
+    if (bestBid === undefined || bestAsk === undefined || bestAskIdx < 0) return;
+    if (bestBid < bestAsk) return;
+    intents[bestAskIdx] = {
+      ...intents[bestAskIdx],
+      price: bestBid + this.tick,
+    };
   }
 
   private computeSizes(): bigint[] {
