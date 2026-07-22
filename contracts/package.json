@@ -33,7 +33,7 @@
     "@openzeppelin/contracts": "npm:@openzeppelin/contracts@5.1.0",
     "@openzeppelin/contracts-upgradeable": "npm:@openzeppelin/contracts-upgradeable@5.1.0",
     "dotenv": "^16.4.1",
-    "viem": "^2.42.1"
+    "viem": "^2.52.2"
   },
   "packageManager": "pnpm@10.28.1"
 }

@@ -75,8 +75,8 @@ jobs:
       - name: Lint
         run: pnpm lint
 
-      - name: Build
-        run: pnpm build
+      - name: Typecheck
+        run: pnpm typecheck
 
       - name: Run matchstick tests
         run: pnpm test

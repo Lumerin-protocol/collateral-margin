@@ -20,7 +20,8 @@
     "lint": "biome lint .",
     "indexer": "docker compose --env-file ../.env up",
     "graph:api": "open http://localhost:8030/graphql/playground",
-    "lint:fix": "biome check --write ."
+    "lint:fix": "biome check --write .",
+    "typecheck": "graph build"
   },
   "dependencies": {
     "@graphprotocol/graph-ts": "0.38.2"

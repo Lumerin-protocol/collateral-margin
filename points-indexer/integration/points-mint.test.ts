@@ -36,7 +36,7 @@ describe("onFill accrual: maker + taker mints mirrored to the leaderboard", () =
 
     // alice = maker, bob = taker. Both fees above threshold → both sides mint.
     await hook.write.onFill([alice.account.address, bob.account.address, NOTIONAL, FEE, FEE, 0n, 0n], {
-      account: venue.account,
+      account: venue.account.address, chain: null,
     });
 
     const aliceAddr = alice.account.address.toLowerCase() as `0x${string}`;
@@ -100,11 +100,11 @@ describe("onFill accrual: a self-match contributes nothing to the leaderboard", 
 
     // A self-match by alice (maker == taker) mints nothing...
     await hook.write.onFill([alice.account.address, alice.account.address, NOTIONAL, FEE, FEE, 0n, 0n], {
-      account: venue.account,
+      account: venue.account.address, chain: null,
     });
     // ...while a real fill (carol maker w/ 0 fee → no maker mint; bob takes) mints once.
     await hook.write.onFill([carol.account.address, bob.account.address, NOTIONAL, 0n, FEE, 0n, 0n], {
-      account: venue.account,
+      account: venue.account.address, chain: null,
     });
 
     const aliceAddr = alice.account.address.toLowerCase() as `0x${string}`;
@@ -145,7 +145,7 @@ describe("onLiquidation accrual: flat keeper points mirrored", () => {
     await conn.matchstick.captureViewMocks();
     await conn.matchstick.anchor();
 
-    await hook.write.onLiquidation([keeper.account.address, FEE], { account: venue.account });
+    await hook.write.onLiquidation([keeper.account.address, FEE], { account: venue.account.address, chain: null });
 
     const keeperAddr = keeper.account.address.toLowerCase() as `0x${string}`;
     const snap = await conn.matchstick.indexSnapshot([
