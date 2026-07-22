@@ -69,6 +69,22 @@ describe("loadPerpsConfig", () => {
     assert.strictEqual(cfg.sizing.taperRatio, 0.6);
   });
 
+  it("defaults stale band/size allowances and accepts explicit USD values", () => {
+    const pathDefaults = writeTmp(tmpDir, "test.yml", VALID_YAML);
+    const defaults = loadPerpsConfig({ path: pathDefaults });
+    assert.equal(defaults.timing.staleBandAllowance, 30_000n); // $0.03
+    assert.equal(defaults.timing.staleSizeAllowance, 50_000_000n); // $50
+
+    const withExplicit = VALID_YAML.replace(
+      "timing:\n  pollIntervalSec: 3\n",
+      "timing:\n  pollIntervalSec: 3\n  staleBandAllowanceUsd: 0.05\n  staleSizeAllowanceUsd: 25\n",
+    );
+    const pathExplicit = writeTmp(tmpDir, "explicit.yml", withExplicit);
+    const explicit = loadPerpsConfig({ path: pathExplicit });
+    assert.equal(explicit.timing.staleBandAllowance, 50_000n); // $0.05
+    assert.equal(explicit.timing.staleSizeAllowance, 25_000_000n); // $25
+  });
+
   it("rejects reservation-price strategy on perps", () => {
     const yaml = VALID_YAML
       .replace("strategy: effective-spread", "strategy: reservation-price")
