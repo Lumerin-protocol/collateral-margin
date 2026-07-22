@@ -10,6 +10,7 @@ import { computeMidQuote, type EffectiveSpreadConfig } from "./pricing/effective
 import { computeReservationMidQuote, type ReservationPriceConfig } from "./pricing/reservationPrice.ts";
 import { linearSizes } from "./sizing/linear.ts";
 import { geometricTaperSizes } from "./sizing/geometricTaper.ts";
+import { scaleBaseQuantity } from "./sizing/expiryDecay.ts";
 
 export type { ReservationPriceConfig };
 export type PricingStrategyName = "effective-spread" | "reservation-price";
@@ -57,6 +58,8 @@ export interface QuoterConfig {
 export class Quoter {
   private tick = 0n;
   private context: InstrumentContext = {};
+  /** Multiplier on `sizing.baseQuantity` (1 = full). Used for futures expiry decay. */
+  private sizeScale = 1;
   private readonly instrument: InstrumentAdapter;
   private readonly cfg: QuoterConfig;
   private readonly oracle: OracleTracker;
@@ -81,6 +84,11 @@ export class Quoter {
     this.inventory = inventory;
     this.risk = risk;
     this.logger = logger.child({ component: "quoter", instrument: instrument.id });
+  }
+
+  /** Set the baseQuantity multiplier (e.g. expirySizeDecay^index for futures). */
+  setSizeScale(scale: number): void {
+    this.sizeScale = Number.isFinite(scale) && scale > 0 ? scale : 0;
   }
 
   async initialize(): Promise<void> {
@@ -170,11 +178,12 @@ export class Quoter {
 
   private computeSizes(): bigint[] {
     const s = this.cfg.sizing;
+    const base = scaleBaseQuantity(s.baseQuantity, this.sizeScale);
     if (s.strategy === "linear") {
-      return linearSizes(s.baseQuantity, s.numLevelsPerSide);
+      return linearSizes(base, s.numLevelsPerSide);
     }
     return geometricTaperSizes(
-      s.baseQuantity * BigInt(s.numLevelsPerSide),
+      base * BigInt(s.numLevelsPerSide),
       s.taperRatio,
       s.numLevelsPerSide,
     );

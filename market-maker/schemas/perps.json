@@ -251,21 +251,22 @@
     },
     "sizing": {
       "additionalProperties": false,
-      "description": "Linear-ladder sizing parameters.",
+      "description": "Geometric-taper sizing parameters.",
       "type": "object",
       "required": [
         "strategy",
         "baseQuantity",
-        "numLevelsPerSide"
+        "numLevelsPerSide",
+        "taperRatio"
       ],
       "properties": {
         "strategy": {
-          "description": "Sizing strategy. Perps lock to 'linear' (level k receives (k+1) × baseQuantity).",
-          "const": "linear",
+          "description": "Sizing strategy. Perps lock to 'geometric-taper' (front level largest, decays by taperRatio).",
+          "const": "geometric-taper",
           "type": "string"
         },
         "baseQuantity": {
-          "description": "Per-level base size in venue-native units (perps: hashrate base units). Use a string for values > 2^53.",
+          "description": "Per-level size unit in venue-native units (perps: hashrate base). Total per-side budget is baseQuantity × numLevelsPerSide, distributed via taperRatio. Use a string for values > 2^53.",
           "anyOf": [
             {
               "anyOf": [
@@ -307,6 +308,21 @@
             }
           ],
           "description": "Number of price levels quoted per side."
+        },
+        "taperRatio": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "exclusiveMaximum": 1,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Geometric decay ratio in (0, 1). Each subsequent level is taperRatio × the previous."
         }
       }
     },

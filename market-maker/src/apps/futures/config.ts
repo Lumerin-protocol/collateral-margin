@@ -115,6 +115,16 @@ export const futuresSizingSchema = Type.Object(
       description:
         "Geometric decay ratio in (0, 1). Each subsequent level is taperRatio × the previous.",
     }),
+    expirySizeDecay: Type.Optional(
+      Type.Number({
+        exclusiveMinimum: 0,
+        maximum: 1,
+        default: 0.6,
+        description:
+          "Per-expiry size multiplier for further delivery dates (nearest-first). " +
+          "Expiry i gets baseQuantity × expirySizeDecay^i. 1 disables. Portfolio-only effect when multiple expiries are quoted.",
+      }),
+    ),
   },
   { ...Closed, description: "Geometric-taper sizing parameters." },
 );
@@ -213,6 +223,7 @@ export function loadFuturesConfig(
           String(raw.sizing.baseQuantity),
           "sizing.baseQuantity",
         ),
+        expirySizeDecay: raw.sizing.expirySizeDecay ?? 0.6,
       },
     }),
     validate: (cfg) => {

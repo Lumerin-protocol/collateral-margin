@@ -330,6 +330,22 @@
             }
           ],
           "description": "Geometric decay ratio in (0, 1). Each subsequent level is taperRatio × the previous."
+        },
+        "expirySizeDecay": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "maximum": 1,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Per-expiry size multiplier for further delivery dates (nearest-first). Expiry i gets baseQuantity × expirySizeDecay^i. 1 disables. Portfolio-only effect when multiple expiries are quoted.",
+          "default": 0.6
         }
       }
     },

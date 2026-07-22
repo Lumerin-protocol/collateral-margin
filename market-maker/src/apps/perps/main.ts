@@ -123,9 +123,10 @@ async function main(): Promise<void> {
         gasPenaltyBps: config.risk.gasPenaltyBps,
       },
       sizing: {
-        strategy: "linear",
+        strategy: "geometric-taper",
         baseQuantity: config.sizing.baseQuantity,
         numLevelsPerSide: config.sizing.numLevelsPerSide,
+        taperRatio: config.sizing.taperRatio,
       },
       maxSkewTicks: config.pricing.maxSkewTicks,
       levelSpacingTicks: config.timing.levelSpacingTicks,

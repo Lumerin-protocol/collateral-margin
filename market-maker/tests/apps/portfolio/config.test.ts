@@ -30,9 +30,10 @@ venues:
       inventorySkewGamma: 0.5
       maxSkewTicks: 20
     sizing:
-      strategy: linear
+      strategy: geometric-taper
       baseQuantity: "500000000"
       numLevelsPerSide: 4
+      taperRatio: 0.6
   - kind: futures
     address: "0x2222222222222222222222222222222222222222"
     maxPositionSize: 5
@@ -51,6 +52,7 @@ venues:
       baseQuantity: "500000000"
       numLevelsPerSide: 4
       taperRatio: 0.6
+      expirySizeDecay: 0.6
 risk:
   maxPositionSize: 50
   maxUtilizationPct: 80
@@ -84,6 +86,15 @@ describe("loadPortfolioConfig", () => {
     const fut = cfg.venues[1] as ParsedFuturesVenue;
     assert.deepEqual(fut.marketSelection, { mode: "nearest", count: 3 });
     assert.equal(fut.sizing.baseQuantity, 500_000_000n);
+    assert.equal(fut.sizing.expirySizeDecay, 0.6);
+  });
+
+  it("defaults futures expirySizeDecay to 0.6 when omitted", () => {
+    const yaml = VALID_YAML.replace("      expirySizeDecay: 0.6\n", "");
+    const path = writeTmp(tmpDir, "test.yml", yaml);
+    const cfg = loadPortfolioConfig({ path });
+    const fut = cfg.venues[1] as ParsedFuturesVenue;
+    assert.equal(fut.sizing.expirySizeDecay, 0.6);
   });
 
   it("defaults futures marketSelection to nearest-1 when omitted", () => {
@@ -138,15 +149,7 @@ describe("loadPortfolioConfig", () => {
       inventorySkewGamma: 0.5
       maxSkewTicks: 20`,
       )
-      .replace(
-        `      strategy: geometric-taper
-      baseQuantity: "500000000"
-      numLevelsPerSide: 4
-      taperRatio: 0.6`,
-        `      strategy: linear
-      baseQuantity: "500000000"
-      numLevelsPerSide: 4`,
-      );
+      .replace("      expirySizeDecay: 0.6\n", "");
     const path = writeTmp(tmpDir, "test.yml", yaml);
     assert.throws(() => loadPortfolioConfig({ path }), /duplicate venue kind/);
   });

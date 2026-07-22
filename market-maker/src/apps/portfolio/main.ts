@@ -30,6 +30,7 @@ import {
   type ParsedVenue,
   type PortfolioMakerConfig,
 } from "./config.ts";
+import { expirySizeScale } from "../../core/sizing/expiryDecay.ts";
 
 /** Shared context passed to every market factory. */
 interface BuildContext {
@@ -76,15 +77,7 @@ function quoterPricing(venue: ParsedVenue, gasPenaltyBps: number): QuoterConfig[
 }
 
 function quoterSizing(venue: ParsedVenue): QuoterConfig["sizing"] {
-  if (venue.kind === "perps") {
-    const s = (venue as ParsedPerpsVenue).sizing;
-    return {
-      strategy: "linear",
-      baseQuantity: s.baseQuantity,
-      numLevelsPerSide: s.numLevelsPerSide,
-    };
-  }
-  const s = (venue as ParsedFuturesVenue).sizing;
+  const s = venue.sizing;
   return {
     strategy: "geometric-taper",
     baseQuantity: s.baseQuantity,
@@ -93,11 +86,33 @@ function quoterSizing(venue: ParsedVenue): QuoterConfig["sizing"] {
   };
 }
 
+/**
+ * Apply nearest-first expiry size decay to all futures markets in `markets`.
+ * Index 0 keeps full size; index i gets `expirySizeDecay^i`.
+ */
+function syncFuturesExpirySizeScales(
+  markets: MarketRuntime[],
+  futuresCfg: ParsedFuturesVenue,
+): void {
+  const decay = futuresCfg.sizing.expirySizeDecay ?? 0.6;
+  const futures = markets
+    .filter((m) => m.id.startsWith("futures:"))
+    .sort((a, b) => {
+      const ea = (a.instrument as { expirationAt?: bigint }).expirationAt ?? 0n;
+      const eb = (b.instrument as { expirationAt?: bigint }).expirationAt ?? 0n;
+      return ea < eb ? -1 : ea > eb ? 1 : 0;
+    });
+  for (let i = 0; i < futures.length; i++) {
+    futures[i].quoter.setSizeScale(expirySizeScale(i, decay));
+  }
+}
+
 /** Build a fully-wired (but not-yet-started) market for an instrument. */
 function buildMarket(
   instrument: InstrumentAdapter,
   venue: ParsedVenue,
   ctx: BuildContext,
+  opts: { expiryIndex?: number } = {},
 ): MarketRuntime {
   const { config, gas, risk, logger } = ctx;
   const oracle = buildOracle(instrument, ctx);
@@ -126,6 +141,11 @@ function buildMarket(
     risk,
     logger,
   );
+  if (venue.kind === "futures" && opts.expiryIndex !== undefined) {
+    quoter.setSizeScale(
+      expirySizeScale(opts.expiryIndex, venue.sizing.expirySizeDecay ?? 0.6),
+    );
+  }
   const executor = new OrderExecutor(
     instrument,
     {
@@ -249,11 +269,16 @@ async function main(): Promise<void> {
   for (let i = 0; i < config.venues.length; i++) {
     const vCfg = config.venues[i];
     const adapter = venueAdapters[i];
-    const instruments = await adapter.listInstruments();
-    for (const instrument of instruments) {
-      markets.push(buildMarket(instrument, vCfg, ctx));
+    const instruments = await adapter.listInstruments(); // futures: nearest-first
+    for (let j = 0; j < instruments.length; j++) {
+      markets.push(
+        buildMarket(instruments[j], vCfg, ctx, {
+          expiryIndex: vCfg.kind === "futures" ? j : undefined,
+        }),
+      );
     }
   }
+  if (futuresCfg) syncFuturesExpirySizeScales(markets, futuresCfg);
   logger.info({ count: markets.length }, "built initial markets");
 
   // ── Centralized submission ───────────────────────────────────────────────
@@ -290,10 +315,26 @@ async function main(): Promise<void> {
   // ── Roll: reconcile futures expiries against the live venue selection ────
   const onRoll: RollFn | undefined =
     futuresVenue && futuresCfg
-      ? async () => {
-          const { added, dropped } = await futuresVenue.resolveMarkets();
+      ? async (current) => {
+          const { active, added, dropped } = await futuresVenue.resolveMarkets();
+          const indexById = new Map(active.map((inst, idx) => [inst.id, idx]));
+          // Survivors keep their MarketRuntime; refresh size scales for the new
+          // nearest-first ranking before new markets are spliced in.
+          const surviving = current.filter((m) => !dropped.some((d) => d.id === m.id));
+          for (const m of surviving) {
+            const idx = indexById.get(m.id);
+            if (idx !== undefined) {
+              m.quoter.setSizeScale(
+                expirySizeScale(idx, futuresCfg.sizing.expirySizeDecay ?? 0.6),
+              );
+            }
+          }
           return {
-            add: added.map((inst) => buildMarket(inst, futuresCfg, ctx)),
+            add: added.map((inst) =>
+              buildMarket(inst, futuresCfg, ctx, {
+                expiryIndex: indexById.get(inst.id) ?? 0,
+              }),
+            ),
             removeIds: dropped.map((inst) => inst.id),
           };
         }

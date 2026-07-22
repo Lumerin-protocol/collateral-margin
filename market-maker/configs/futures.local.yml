@@ -37,7 +37,7 @@ pricing:
 sizing:
   strategy: geometric-taper
   baseQuantity: "10000000" # venue-native (contracts base units)
-  numLevelsPerSide: 3
+  numLevelsPerSide: 5
   taperRatio: 0.6
 
 risk:

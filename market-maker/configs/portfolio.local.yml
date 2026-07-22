@@ -39,9 +39,10 @@ venues:
       inventorySkewGamma: 1.0
       maxSkewTicks: 5
     sizing:
-      strategy: linear
+      strategy: geometric-taper
       baseQuantity: "10000000" # venue-native (perps hashrate base units)
       numLevelsPerSide: 3
+      taperRatio: 0.6
 
   - kind: futures
     address: ${FUTURES_ADDRESS}
@@ -59,9 +60,14 @@ venues:
       maxSkewTicks: 0
     sizing:
       strategy: geometric-taper
-      baseQuantity: "10000000" # venue-native (contracts base units)
-      numLevelsPerSide: 3
+      # 1 futures contract ≈ 1.0 perps qty (1e6). Perps total/side =
+      # 10e6×3/1e6 = 30. Split across 3 expiries: 4×5×3 = 60 (taper
+      # [8,5,3,1,1] keeps all 5 levels non-zero).
+      baseQuantity: 4 # venue-native (contracts)
+      numLevelsPerSide: 5
       taperRatio: 0.6
+      # Nearest expiry keeps full size; each further date × this factor.
+      expirySizeDecay: 0.6
 
 # Shared portfolio-wide budget across every market.
 risk:

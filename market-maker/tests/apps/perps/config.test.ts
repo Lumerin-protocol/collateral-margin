@@ -29,9 +29,10 @@ pricing:
   inventorySkewGamma: 0.5
   maxSkewTicks: 20
 sizing:
-  strategy: linear
+  strategy: geometric-taper
   baseQuantity: "1000000"
   numLevelsPerSide: 5
+  taperRatio: 0.6
 risk:
   maxPositionSize: 50
   maxUtilizationPct: 80
@@ -64,7 +65,8 @@ describe("loadPerpsConfig", () => {
     assert.strictEqual(cfg.venue.kind, "perps");
     assert.strictEqual(cfg.network.name, "arbitrum");
     assert.strictEqual(cfg.pricing.strategy, "effective-spread");
-    assert.strictEqual(cfg.sizing.strategy, "linear");
+    assert.strictEqual(cfg.sizing.strategy, "geometric-taper");
+    assert.strictEqual(cfg.sizing.taperRatio, 0.6);
   });
 
   it("rejects reservation-price strategy on perps", () => {
@@ -75,10 +77,10 @@ describe("loadPerpsConfig", () => {
     assert.throws(() => loadPerpsConfig({ path }), /Config validation failed/);
   });
 
-  it("rejects geometric-taper sizing on perps", () => {
+  it("rejects linear sizing on perps", () => {
     const yaml = VALID_YAML
-      .replace("strategy: linear", "strategy: geometric-taper")
-      .replace("  numLevelsPerSide: 5\n", "  numLevelsPerSide: 4\n  taperRatio: 0.6\n");
+      .replace("strategy: geometric-taper", "strategy: linear")
+      .replace("  taperRatio: 0.6\n", "");
     const path = writeTmp(tmpDir, "test.yml", yaml);
     assert.throws(() => loadPerpsConfig({ path }), /Config validation failed/);
   });
