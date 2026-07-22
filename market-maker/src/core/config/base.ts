@@ -167,9 +167,9 @@ export const timingSchema = Type.Object(
         "USD price distance outside the worst desired bid/ask that still counts as in-band (kept). Independent of venue tick size. 0 = strict worst-desired edge. Default 0.03 ≈ 3 ticks when tick = $0.01.",
     }),
     staleSizeAllowanceUsd: TypeUsdAmount({
-      default: 1,
+      default: 50,
       description:
-        "USD notional size allowance (reduce and top-up). Converted to venue-native qty at the level price (nearest unit; perps 1e6 scale, futures whole contracts) and compared to |have−want|. 0 = exact size match. Default 1.",
+        "USD notional size allowance (reduce and top-up). Converted to venue-native qty at the level price (nearest unit; perps 1e6 scale, futures whole contracts) and compared to |have−want|. 0 = exact size match. Default 50 (~1 futures contract at ~$95).",
     }),
   },
   { ...Closed, description: "Loop cadences and requote thresholds." },
@@ -394,7 +394,7 @@ export function parseTimingConfig(raw: RawTiming): ParsedTimingConfig {
       "timing.staleBandAllowanceUsd",
     ),
     staleSizeAllowance: parseUsd(
-      raw.staleSizeAllowanceUsd ?? 1,
+      raw.staleSizeAllowanceUsd ?? 50,
       USD_DECIMALS,
       "timing.staleSizeAllowanceUsd",
     ),

@@ -10,7 +10,7 @@ How `OrderExecutor` decides what to cancel, reduce, or place when reconciling th
 - **Keep zone**:
   - Bids: `price >= worstDesiredBid - bandAllowance`
   - Asks: `price <= worstDesiredAsk + bandAllowance`
-- **Size allowance** (`timing.staleSizeAllowanceUsd`): on-grid `|have − want|` tolerance in USD notional (both reduce and top-up). Default `1`.
+- **Size allowance** (`timing.staleSizeAllowanceUsd`): on-grid `|have − want|` tolerance in USD notional (both reduce and top-up). Default `50` (~1 futures contract at ~$95).
 - **On-grid**: resting `(side, price)` equals a desired intent price.
 - **Better leftover**: inside keep zone, more aggressive than the current grid, not on a desired price.
 - **Stale / worse**: outside the keep zone.
@@ -30,7 +30,7 @@ Better leftovers are not credited toward a different desired price. Grid slides 
 
 ## On-grid size allowance
 
-`timing.staleSizeAllowanceUsd` (default `1`) gates both directions. The USD amount is converted to **venue-native size** at the level price and rounded to the nearest qty unit:
+`timing.staleSizeAllowanceUsd` (default `50`) gates both directions. The USD amount is converted to **venue-native size** at the level price and rounded to the nearest qty unit:
 
 `allowanceQty = roundNearest(sizeAllowanceUsd × quantityScale / price)`
 
@@ -45,7 +45,7 @@ Then `|have − want|` is compared to `allowanceQty`:
   2. Trailing `size > excess` → reduce-only amend to `size - excess`.
 - `have < want` and above allowance → **place** only the deficit at that price.
 
-At typical hashprices, a `$1` allowance rounds to **0 contracts** on futures (so any 1-contract drift is reconciled) while still absorbing sub-dollar dust on perps. Band price allowance does not affect this size check.
+At ~`$95` hashprice, a `$50` allowance rounds to **1 contract** on futures and ~0.5 qty units on perps. Band price allowance does not affect this size check.
 
 ## Requote gates (`shouldRequote`)
 

@@ -29,8 +29,8 @@ function makeOrderId(n: number): `0x${string}` {
 
 /** Default $0.03 allowance (≈ 3 × $0.01 tick used by the stub quoter). */
 const DEFAULT_ALLOWANCE = 30_000n;
-/** Default $1 size allowance (converted to native qty at level price). */
-const DEFAULT_SIZE_ALLOWANCE = 1_000_000n;
+/** Default $50 size allowance (converted to native qty at level price). */
+const DEFAULT_SIZE_ALLOWANCE = 50_000_000n;
 /** Perps quantity scale (tests default). Futures tests pass `1n`. */
 const PERPS_QUANTITY_SCALE = 1_000_000n;
 
@@ -280,8 +280,8 @@ describe("OrderExecutor quantity deficit", () => {
 
   it("skips top-up when deficit notional is at or below the USD threshold", () => {
     const deps = makeDeps();
-    const executor = makeExecutor(deps); // $1 default size allowance
-    // deficit 10 at price 95 → notional ≈ $0.00095 ≤ $1
+    const executor = makeExecutor(deps); // $50 default size allowance
+    // deficit 10 at price 95 → notional ≈ $0.00095 ≤ $50
     seedOrder(deps.book, 1, "buy", 95_000_000n, 999_990n);
     seedOrder(deps.book, 2, "sell", 96_000_000n, 1_000_000n);
 
@@ -458,7 +458,7 @@ describe("OrderExecutor stale detection", () => {
 
   it("skips downsize when excess notional is at or below the USD threshold", () => {
     const deps = makeDeps();
-    const executor = makeExecutor(deps); // $1 default size allowance
+    const executor = makeExecutor(deps); // $50 default size allowance
     // excess 10 at price 95 → notional ≈ $0.00095 → keep
     seedOrder(deps.book, 1, "buy", 95_000_000n, 1_000_010n);
 
@@ -470,8 +470,8 @@ describe("OrderExecutor stale detection", () => {
   it("downsizes when excess notional exceeds the USD threshold", () => {
     const deps = makeDeps();
     const executor = makeExecutor(deps);
-    // excess 20_000 at price 95 → notional = 95×20000/1e6 = $1.90 > $1
-    seedOrder(deps.book, 1, "buy", 95_000_000n, 1_020_000n);
+    // $50 at $95 → allowanceQty ≈ 526316; excess 600_000 > allowance → reduce
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 1_600_000n);
 
     const planned = executor.plan([desiredBuy(95_000_000n, 1_000_000n)]);
     assert.ok(planned);
@@ -483,37 +483,22 @@ describe("OrderExecutor stale detection", () => {
   it("tops up when deficit notional exceeds the same USD threshold", () => {
     const deps = makeDeps();
     const executor = makeExecutor(deps);
-    // deficit 20_000 at price 95 → allowanceQty ≈ 10526; 20000 > allowance → top up
-    seedOrder(deps.book, 1, "buy", 95_000_000n, 980_000n);
+    // deficit 600_000 at price 95 → above ~526316 allowance → top up
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 400_000n);
 
     const planned = executor.plan([desiredBuy(95_000_000n, 1_000_000n)]);
     assert.ok(planned);
     assert.equal(planned.creates.length, 1);
-    assert.equal(planned.creates[0].size, 20_000n);
+    assert.equal(planned.creates[0].size, 600_000n);
     assert.equal(planned.cancels.length, 0);
     assert.equal(planned.reduces.length, 0);
   });
 
-  it("futures: rounds USD size allowance to nearest contract (qty scale 1)", () => {
+  it("futures: $50 size allowance rounds to 1 contract at ~$95", () => {
     const deps = makeDeps();
-    // $1 at price $95 → allowanceQty = round(1/95) = 0 contracts → any 1-lot drift acts
+    // default $50 → allowanceQty = round(50/95) = 1 contract
     const executor = makeExecutor(deps, { quantityScale: 1n });
-    seedOrder(deps.book, 1, "buy", 95_000_000n, 2n);
-
-    const planned = executor.plan([desiredBuy(95_000_000n, 1n)]);
-    assert.ok(planned, "1-contract excess must downsize on futures");
-    assert.equal(planned.reduces.length, 1);
-    assert.equal(planned.reduces[0].newSize, 1n);
-  });
-
-  it("futures: multi-contract size allowance rounds to whole lots", () => {
-    const deps = makeDeps();
-    // $50 at price $95 → allowanceQty = round(50/95) = 1 contract
-    const executor = makeExecutor(deps, {
-      quantityScale: 1n,
-      staleSizeAllowance: 50_000_000n,
-    });
-    seedOrder(deps.book, 1, "buy", 95_000_000n, 2n); // excess 1 ≤ allowance 1 → keep
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 2n); // excess 1 ≤ 1 → keep
 
     executor.recordRequote(0, 0);
     assert.equal(
@@ -522,7 +507,7 @@ describe("OrderExecutor stale detection", () => {
       "1-contract excess within rounded size allowance",
     );
 
-    seedOrder(deps.book, 2, "buy", 95_000_000n, 1n); // have 3, excess 2 > allowance 1
+    seedOrder(deps.book, 2, "buy", 95_000_000n, 1n); // have 3, excess 2 > 1
     const planned = executor.plan([desiredBuy(95_000_000n, 1n)]);
     assert.ok(planned);
     assert.ok(planned.cancels.length + planned.reduces.length > 0);

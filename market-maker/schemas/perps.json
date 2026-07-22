@@ -892,8 +892,8 @@
           ]
         },
         "staleSizeAllowanceUsd": {
-          "default": 1,
-          "description": "USD notional size allowance (reduce and top-up). Converted to venue-native qty at the level price (nearest unit; perps 1e6 scale, futures whole contracts) and compared to |have−want|. 0 = exact size match. Default 1.",
+          "default": 50,
+          "description": "USD notional size allowance (reduce and top-up). Converted to venue-native qty at the level price (nearest unit; perps 1e6 scale, futures whole contracts) and compared to |have−want|. 0 = exact size match. Default 50 (~1 futures contract at ~$95).",
           "anyOf": [
             {
               "anyOf": [

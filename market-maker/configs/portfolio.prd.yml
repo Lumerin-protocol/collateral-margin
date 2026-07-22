@@ -96,7 +96,7 @@ timing:
   resyncIntervalSec: 60
   levelSpacingTicks: 1
   staleBandAllowanceUsd: 0.03
-  staleSizeAllowanceUsd: 1
+  staleSizeAllowanceUsd: 50
 
 collateral:
   autoDeposit: true
