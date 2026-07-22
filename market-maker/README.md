@@ -216,12 +216,13 @@ pnpm prd:futures
 
 ## Health endpoint
 
-`GET http://localhost:{healthPort}/health` returns a JSON snapshot of
-live operational state — status, halt/throttle reasons, oracle and
-gas readings, position and collateral, order counts, and uptime.
-Suitable for liveness/readiness probes and for scraping into a
-dashboard. The exact field set is exercised by
-`tests/core/healthcheck.test.ts`.
+`GET http://localhost:{healthPort}/health` returns a human-readable
+JSON snapshot (e.g. `"1500 USDC"`, `"44m 35s"`) with wallet vs vault
+balances called out clearly.
+
+`GET http://localhost:{healthPort}/health/raw` returns the previous
+machine-readable shape (base-unit decimal strings, full config) for
+probes and scrapers.
 
 ## Testing
 

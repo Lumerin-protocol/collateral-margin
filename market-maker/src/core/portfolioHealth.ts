@@ -7,6 +7,14 @@ import type { GasTracker } from "./gasTracker.ts";
 import type { RiskManager } from "./riskManager.ts";
 import type { MarketRuntime } from "./marketRuntime.ts";
 import type { ErrorInfo } from "./errors.ts";
+import {
+  formatAgeMs,
+  formatDurationSec,
+  formatEthAmount,
+  formatPrice,
+  formatTimestampMs,
+  formatUsdcAmount,
+} from "./healthFormat.ts";
 
 export interface PortfolioHealthOptions {
   port: number;
@@ -19,10 +27,11 @@ export interface PortfolioHealthOptions {
 }
 
 /**
- * Portfolio-aware /health endpoint. Exposes one shared collateral/gas/risk
- * block plus a per-market breakdown (circuit-breaker state, last error,
- * position, top of book) so ops can see partial degradation rather than an
- * all-or-nothing status.
+ * Portfolio-aware health server.
+ *
+ *   GET /health      → human-readable strings ("1500 USDC", "44m 35s", …)
+ *   GET /health/raw  → machine-readable base units (previous /health shape)
+ *   POST /stop|/start → pause / resume the tick loop
  */
 export class PortfolioHealthCheck {
   private server: Server | null = null;
@@ -53,7 +62,8 @@ export class PortfolioHealthCheck {
         try {
           if (req.method === "POST" && req.url === "/stop") return this.handleStop(res);
           if (req.method === "POST" && req.url === "/start") return this.handleStart(res);
-          if (req.method === "GET" && req.url === "/health") return this.handleHealth(res);
+          if (req.method === "GET" && req.url === "/health") return this.handleHealthHuman(res);
+          if (req.method === "GET" && req.url === "/health/raw") return this.handleHealthRaw(res);
           res.writeHead(404);
           res.end();
         } catch (err) {
@@ -64,7 +74,13 @@ export class PortfolioHealthCheck {
       });
       const { logger, port } = this.opts;
       this.server.listen(port, () => {
-        logger.info({ url: `http://localhost:${port}/health` }, "health endpoint started");
+        logger.info(
+          {
+            human: `http://localhost:${port}/health`,
+            raw: `http://localhost:${port}/health/raw`,
+          },
+          "health endpoints started",
+        );
         resolve();
       });
     });
@@ -81,7 +97,64 @@ export class PortfolioHealthCheck {
     });
   }
 
-  private handleHealth(res: ServerResponse): void {
+  /** Ops-facing: wallet vs vault USDC called out; amounts/durations as labeled strings. */
+  private handleHealthHuman(res: ServerResponse): void {
+    const { collateral, gas, risk } = this.opts;
+    const uptimeSec = Math.floor((Date.now() - this.startedAt) / 1000);
+    const body = JSON.stringify(
+      {
+        app: this.opts.appName,
+        status: this.status,
+        walletAddress: this.walletAddress,
+        lastError: this.lastError,
+        uptime: formatDurationSec(uptimeSec),
+        lastTickAt: formatTimestampMs(this.lastTickAt),
+        lastTickAge: formatAgeMs(this.lastTickAt),
+        collateral: {
+          walletUsdc: formatUsdcAmount(collateral.walletTokenBalance),
+          vaultUsdc: formatUsdcAmount(collateral.vaultBalance),
+          portfolioImUsdc: formatUsdcAmount(collateral.portfolioIM),
+          portfolioMmUsdc: formatUsdcAmount(collateral.portfolioMM),
+          venueOrderMarginUsdc: formatUsdcAmount(collateral.venueOrderMargin),
+          venueUnrealizedPnlUsdc: formatUsdcAmount(collateral.venueUnrealizedPnl),
+          ethBalance: formatEthAmount(collateral.nativeBalance),
+          utilization: `${collateral.utilizationPct}%`,
+        },
+        gas: {
+          gasPrice: `${(Number(gas.currentGasPrice) / 1e9).toFixed(4)} gwei`,
+          gasSpiking: gas.isGasSpiking,
+          gasSpike: `${fractionToNumber(gas.gasSpikePct).toFixed(0)}%`,
+        },
+        risk: {
+          throttled: risk.throttled,
+          throttleReason: risk.throttleReason,
+          cumulativeGasCostUsdc: formatUsdcAmount(risk.cumulativeGasCostUsd),
+        },
+        markets: this.markets().map((m) => {
+          const s = m.healthState();
+          return {
+            id: s.id,
+            breaker: s.breaker,
+            consecutiveErrors: s.consecutiveErrors,
+            lastError: s.lastError,
+            oraclePrice: formatPrice(BigInt(s.oraclePrice)),
+            bestBid: s.bestBid === "0" ? "none" : formatPrice(BigInt(s.bestBid)),
+            bestAsk: s.bestAsk === "0" ? "none" : formatPrice(BigInt(s.bestAsk)),
+            netPosition: s.netPosition,
+            ownOrders: s.ownOrders,
+          };
+        }),
+        stats: {
+          tickCount: this.tickCount,
+        },
+      },
+      bigIntReplacer,
+    );
+    this.respondJson(res, body);
+  }
+
+  /** Machine-readable: previous /health payload (base units as decimal strings). */
+  private handleHealthRaw(res: ServerResponse): void {
     const { collateral, gas, risk } = this.opts;
     const body = JSON.stringify(
       {
@@ -116,16 +189,21 @@ export class PortfolioHealthCheck {
       },
       bigIntReplacer,
     );
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(body);
+    this.respondJson(res, body);
   }
 
   private handleStop(res: ServerResponse): void {
-    if (this.paused) return this.respondOk(res);
+    if (this.paused) {
+      this.respondOk(res);
+      return;
+    }
     this.paused = true;
     this.status = "stopped";
     this.lastError = null;
-    if (!this.onStop) return this.respondOk(res);
+    if (!this.onStop) {
+      this.respondOk(res);
+      return;
+    }
     this.onStop()
       .then(() => this.respondOk(res))
       .catch((err) => {
@@ -136,11 +214,17 @@ export class PortfolioHealthCheck {
   }
 
   private handleStart(res: ServerResponse): void {
-    if (!this.paused) return this.respondOk(res);
+    if (!this.paused) {
+      this.respondOk(res);
+      return;
+    }
     this.paused = false;
     this.status = "running";
     this.lastError = null;
-    if (!this.onStart) return this.respondOk(res);
+    if (!this.onStart) {
+      this.respondOk(res);
+      return;
+    }
     this.onStart()
       .then(() => this.respondOk(res))
       .catch((err) => {
@@ -151,8 +235,12 @@ export class PortfolioHealthCheck {
   }
 
   private respondOk(res: ServerResponse): void {
+    this.respondJson(res, JSON.stringify({ ok: true, status: this.status }));
+  }
+
+  private respondJson(res: ServerResponse, body: string): void {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true, status: this.status }));
+    res.end(body);
   }
 }
 

@@ -1,6 +1,24 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { parseUsd, secondsToMs } from "../../../src/core/config/units.ts";
+import { formatUsd, parseUsd, secondsToMs } from "../../../src/core/config/units.ts";
+
+describe("formatUsd", () => {
+  it("formats whole USDC amounts", () => {
+    assert.strictEqual(formatUsd(50_000_000n), "50");
+    assert.strictEqual(formatUsd(0n), "0");
+  });
+
+  it("formats fractional USDC without trailing zeros", () => {
+    assert.strictEqual(formatUsd(500_000n), "0.5");
+    assert.strictEqual(formatUsd(1n), "0.000001");
+    assert.strictEqual(formatUsd(123_456_789n), "123.456789");
+  });
+
+  it("formats negative amounts", () => {
+    assert.strictEqual(formatUsd(-50_000_000n), "-50");
+    assert.strictEqual(formatUsd(-500_000n), "-0.5");
+  });
+});
 
 describe("parseUsd", () => {
   it("converts integer USD to 6-decimal bigint", () => {

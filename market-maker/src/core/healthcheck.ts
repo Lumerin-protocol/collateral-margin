@@ -10,6 +10,14 @@ import type { GasTracker } from "./gasTracker.ts";
 import type { RiskManager } from "./riskManager.ts";
 import type { ErrorInfo } from "./errors.ts";
 import type { OwnOrder } from "./adapter.ts";
+import {
+  formatAgeMs,
+  formatDurationSec,
+  formatEthAmount,
+  formatPrice,
+  formatTimestampMs,
+  formatUsdcAmount,
+} from "./healthFormat.ts";
 
 export interface ExecutorStats {
   ordersPlaced: number;
@@ -39,9 +47,10 @@ export interface HealthCheckOptions {
 /**
  * HTTP endpoint exposing health, status, and runtime config.
  *
- *  GET /health  → JSON snapshot of all trackers and config (sanitised)
- *  POST /stop   → pause the main loop, cancel resting orders (via onStop)
- *  POST /start  → resume the main loop (via onStart)
+ *  GET /health      → human-readable strings ("1500 USDC", "44m 35s", …)
+ *  GET /health/raw  → machine-readable base units (previous /health shape)
+ *  POST /stop       → pause the main loop, cancel resting orders (via onStop)
+ *  POST /start      → resume the main loop (via onStart)
  */
 export class HealthCheck {
   private server: Server | null = null;
@@ -75,7 +84,9 @@ export class HealthCheck {
           if (req.method === "POST" && req.url === "/start")
             return this.handleStart(res);
           if (req.method === "GET" && req.url === "/health")
-            return this.handleHealth(res);
+            return this.handleHealthHuman(res);
+          if (req.method === "GET" && req.url === "/health/raw")
+            return this.handleHealthRaw(res);
           res.writeHead(404);
           res.end();
         } catch (err) {
@@ -89,8 +100,11 @@ export class HealthCheck {
       const port = this.opts.port;
       this.server.listen(port, () => {
         logger.info(
-          { url: `http://localhost:${port}/health` },
-          "health endpoint started",
+          {
+            human: `http://localhost:${port}/health`,
+            raw: `http://localhost:${port}/health/raw`,
+          },
+          "health endpoints started",
         );
         resolve();
       });
@@ -108,7 +122,62 @@ export class HealthCheck {
     });
   }
 
-  private handleHealth(res: ServerResponse): void {
+  private handleHealthHuman(res: ServerResponse): void {
+    const { oracle, inventory, collateral, book, gas, risk } = this.opts;
+    const uptimeSec = Math.floor((Date.now() - this.startedAt) / 1000);
+    const body = JSON.stringify(
+      {
+        app: this.opts.appName,
+        status: this.status,
+        walletAddress: this.walletAddress,
+        lastError: this.lastError,
+        uptime: formatDurationSec(uptimeSec),
+        lastTickAt: formatTimestampMs(this.lastTickAt),
+        lastTickAge: formatAgeMs(this.lastTickAt),
+        market: {
+          oraclePrice: formatPrice(oracle.currentPrice),
+          bestBid: book.bestBid === 0n ? "none" : formatPrice(book.bestBid),
+          bestAsk: book.bestAsk === 0n ? "none" : formatPrice(book.bestAsk),
+          ownOrders: serializeOwnOrders(book.ownOrders),
+        },
+        inventory: {
+          netPosition: inventory.netQuantity.toString(),
+          inventorySkew: fractionToNumber(inventory.inventorySkew),
+        },
+        collateral: {
+          walletUsdc: formatUsdcAmount(collateral.walletTokenBalance),
+          vaultUsdc: formatUsdcAmount(collateral.vaultBalance),
+          portfolioImUsdc: formatUsdcAmount(collateral.portfolioIM),
+          portfolioMmUsdc: formatUsdcAmount(collateral.portfolioMM),
+          venueOrderMarginUsdc: formatUsdcAmount(collateral.venueOrderMargin),
+          venueUnrealizedPnlUsdc: formatUsdcAmount(collateral.venueUnrealizedPnl),
+          ethBalance: formatEthAmount(collateral.nativeBalance),
+          utilization: `${collateral.utilizationPct}%`,
+        },
+        gas: {
+          gasPrice: `${(Number(gas.currentGasPrice) / 1e9).toFixed(4)} gwei`,
+          gasSpiking: gas.isGasSpiking,
+          gasSpike: `${fractionToNumber(gas.gasSpikePct).toFixed(0)}%`,
+        },
+        risk: {
+          throttled: risk.throttled,
+          throttleReason: risk.throttleReason,
+          cumulativeGasCostUsdc: formatUsdcAmount(risk.cumulativeGasCostUsd),
+        },
+        stats: {
+          tickCount: this.tickCount,
+          ordersPlaced: this.executorStats?.ordersPlaced ?? 0,
+          ordersCancelled: this.executorStats?.ordersCancelled ?? 0,
+          reconcileCount: this.executorStats?.reconcileCount ?? 0,
+        },
+      },
+      bigIntReplacer,
+    );
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(body);
+  }
+
+  private handleHealthRaw(res: ServerResponse): void {
     const { oracle, inventory, collateral, book, gas, risk } = this.opts;
     const body = JSON.stringify(
       {
