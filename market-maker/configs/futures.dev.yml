@@ -90,4 +90,4 @@ health:
 
 readBatchSize: 30
 # Per-operation batch sizes for writes (futures: closeOrder limit / createOrders limit).
-writeBatchSize: 20
+writeBatchSize: 100

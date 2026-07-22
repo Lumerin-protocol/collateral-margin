@@ -182,14 +182,13 @@ function findClosestCrossings(
 // Close-to-IM-buffer sizing (the batched-liquidation solvers)
 //
 // The on-chain `liquidatePositions` (futures) / `liquidatePosition(user,
-// closeQty)` (perps) do NOT recompute margin per unit — they close the
-// keeper-supplied amount and enforce a single end-of-tx `OverLiquidation`
-// guard: with positions remaining and a real IM buffer (`im > mm`), the
-// leftover balance must sit at/under IM. These solvers pick, off-chain, the
-// deepest close that keeps the account inside the `[MM, IM]` band (healthy but
-// not over-liquidated). If no in-band partial exists (deep crash / bad debt)
-// they fall back to a full close, which the contract lets through (the guard
-// is skipped once no positions remain).
+// closeQty)` (perps) treat the keeper-supplied amount as an upper bound and
+// revert `OverLiquidation` when a partial leaves balance above IM with a real
+// IM buffer (`im > mm`). These solvers pick, off-chain, the deepest close that
+// keeps the account inside the `[MM, IM]` band (healthy but not
+// over-liquidated). If no in-band partial exists (deep crash / bad debt) they
+// fall back to a full close, which the contract lets through (the guard is
+// skipped once no positions remain).
 // ───────────────────────────────────────────────────────────────────────────
 
 /**
@@ -326,7 +325,13 @@ export function solveFuturesClosesToTarget(
       closeQty: abs(p.netQuantity),
     }));
   }
-  return coalesceUnitPrefix(unitSequence, bestPrefix);
+  // Emit 1-qty legs in round-robin order (not coalesced/sorted by expiry).
+  // `liquidatePositions` stops once healthy; coalescing into [A:N, B:M] would
+  // drain A first and skip B. Interleaved unit legs keep the prefix balanced.
+  return unitSequence.slice(0, bestPrefix).map((expirationAt) => ({
+    expirationAt,
+    closeQty: 1n,
+  }));
 }
 
 /**

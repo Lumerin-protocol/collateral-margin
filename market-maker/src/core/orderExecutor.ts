@@ -25,9 +25,10 @@ export interface OrderExecutorConfig {
 /**
  * Diff desired quotes vs the resting book; cancel + place via venue multicall.
  *
- * Stale-order detection (limit LOB): a resting buy is stale iff its price <
- * worst desired bid; a resting sell is stale iff its price > worst desired ask.
- * Orders better-than-the-grid are kept (better priority + better price).
+ * Exact set-diff (limit LOB): cancel resting orders whose (side, price) is not
+ * in the desired grid, or that contribute excess size at a desired price;
+ * create only size deficits at desired prices. The resting book is driven to
+ * match the quote grid — no band-based “keep better leftovers” policy.
  */
 export class OrderExecutor {
   readonly stats = { ordersPlaced: 0, ordersCancelled: 0, reconcileCount: 0 };
@@ -95,7 +96,7 @@ export class OrderExecutor {
     }
 
     const cancels = this.findStaleOrders(desired);
-    const creates = this.findNewOrders(desired);
+    const creates = this.findNewOrders(desired, cancels);
     if (cancels.length === 0 && creates.length === 0) {
       this.logger.debug("no order changes needed");
       return null;
@@ -257,39 +258,54 @@ export class OrderExecutor {
   }
 
   /**
-   * Stale = should be cancelled. Keep orders at-least-as-aggressive as the
-   * worst desired price for that side (higher bid / lower ask).
+   * Cancel targets for an exact set-diff against `desired`:
+   *   - every resting order at a (side, price) not in the desired grid
+   *   - at desired prices, enough whole orders that aggregated size exceeds
+   *     desired (cancel until remaining ≤ desired; deficits are topped up
+   *     by `findNewOrders`)
    */
   private findStaleOrders(desired: OrderIntent[]): OwnOrder[] {
-    let worstDesiredBid: bigint | undefined;
-    let worstDesiredAsk: bigint | undefined;
+    const desiredSize = new Map<string, bigint>();
     for (const i of desired) {
-      if (i.side === "buy") {
-        if (worstDesiredBid === undefined || i.price < worstDesiredBid)
-          worstDesiredBid = i.price;
-      } else {
-        if (worstDesiredAsk === undefined || i.price > worstDesiredAsk)
-          worstDesiredAsk = i.price;
-      }
+      const k = keyOf(i.side, i.price);
+      desiredSize.set(k, (desiredSize.get(k) ?? 0n) + i.size);
     }
-    const stale: OwnOrder[] = [];
+
+    const byKey = new Map<string, OwnOrder[]>();
     for (const order of this.book.ownOrders.values()) {
-      if (order.side === "buy") {
-        if (worstDesiredBid === undefined || order.price < worstDesiredBid) {
-          stale.push(order);
-        }
-      } else {
-        if (worstDesiredAsk === undefined || order.price > worstDesiredAsk) {
-          stale.push(order);
-        }
+      const k = keyOf(order.side, order.price);
+      const list = byKey.get(k);
+      if (list) list.push(order);
+      else byKey.set(k, [order]);
+    }
+
+    const stale: OwnOrder[] = [];
+    for (const [k, orders] of byKey) {
+      const want = desiredSize.get(k);
+      if (want === undefined) {
+        for (const o of orders) stale.push(o);
+        continue;
+      }
+      let have = 0n;
+      for (const o of orders) have += o.size;
+      if (have <= want) continue;
+      // Drop whole orders until remaining size fits; prefer cancelling the
+      // trailing entries so FIFO priority of earlier quotes is preserved.
+      let excess = have - want;
+      for (let i = orders.length - 1; i >= 0 && excess > 0n; i--) {
+        stale.push(orders[i]);
+        excess -= orders[i].size;
       }
     }
     return stale;
   }
 
-  /** New orders = desired levels missing size at exactly the desired price. */
-  private findNewOrders(desired: OrderIntent[]): OrderIntent[] {
-    const existing = this.aggregateOwnSizeByPriceSide();
+  /**
+   * New orders = desired levels missing size at exactly the desired price,
+   * after subtracting any orders already selected for cancel in this plan.
+   */
+  private findNewOrders(desired: OrderIntent[], cancels: OwnOrder[]): OrderIntent[] {
+    const existing = this.aggregateOwnSizeByPriceSide(cancels);
     const out: OrderIntent[] = [];
     for (const i of desired) {
       const have = existing.get(keyOf(i.side, i.price)) ?? 0n;
@@ -313,9 +329,11 @@ export class OrderExecutor {
     return false;
   }
 
-  private aggregateOwnSizeByPriceSide(): Map<string, bigint> {
+  private aggregateOwnSizeByPriceSide(cancels: OwnOrder[] = []): Map<string, bigint> {
+    const cancelled = new Set(cancels.map((c) => c.orderId));
     const m = new Map<string, bigint>();
     for (const o of this.book.ownOrders.values()) {
+      if (cancelled.has(o.orderId)) continue;
       const k = keyOf(o.side, o.price);
       m.set(k, (m.get(k) ?? 0n) + o.size);
     }

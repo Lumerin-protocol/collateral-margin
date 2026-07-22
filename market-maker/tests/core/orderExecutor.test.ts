@@ -167,17 +167,17 @@ describe("OrderExecutor requote guards (regression)", () => {
   });
 
   /**
-   * Worse leftovers coexist with correct grid orders — cancel only the worse
-   * ones. Better-than-grid leftovers are kept (limit LOB policy).
+   * Off-grid leftovers coexist with correct grid orders — cancel only the
+   * off-grid ones (exact set-diff).
    */
-  it("cancels worse leftovers while keeping the desired grid", async () => {
+  it("cancels off-grid leftovers while keeping the desired grid", async () => {
     const deps = makeDeps();
     const executor = makeExecutor(deps);
 
     seedOrder(deps.book, 1, "buy", 95_000_000n, 1_000_000n);
     seedOrder(deps.book, 2, "sell", 96_000_000n, 1_000_000n);
 
-    // Worse leftovers (cancels failed on a prior tick).
+    // Off-grid leftovers (cancels failed on a prior tick).
     seedOrder(deps.book, 3, "buy", 90_000_000n, 1_000_000n);
     seedOrder(deps.book, 4, "sell", 101_000_000n, 1_000_000n);
 
@@ -188,7 +188,7 @@ describe("OrderExecutor requote guards (regression)", () => {
 
     await executor.reconcile(desired);
 
-    assert.equal(deps.cancelledOrderIds.length, 2, "worse leftovers cancelled");
+    assert.equal(deps.cancelledOrderIds.length, 2, "off-grid leftovers cancelled");
     assert.equal(
       deps.placedIntents.length,
       0,
@@ -196,18 +196,18 @@ describe("OrderExecutor requote guards (regression)", () => {
     );
   });
 
-  it("keeps better-than-grid leftovers (does not cancel them as stale)", async () => {
+  it("cancels better-than-grid leftovers not on the desired set", async () => {
     const deps = makeDeps();
     const executor = makeExecutor(deps);
 
     seedOrder(deps.book, 1, "buy", 95_000_000n, 1_000_000n);
     seedOrder(deps.book, 2, "sell", 96_000_000n, 1_000_000n);
-    seedOrder(deps.book, 3, "buy", 99_000_000n, 1_000_000n); // better bid
-    seedOrder(deps.book, 4, "sell", 94_000_000n, 1_000_000n); // better ask
+    seedOrder(deps.book, 3, "buy", 99_000_000n, 1_000_000n); // better bid, off-grid
+    seedOrder(deps.book, 4, "sell", 94_000_000n, 1_000_000n); // better ask, off-grid
 
     await executor.reconcile([desiredBuy(95_000_000n), desiredSell(96_000_000n)]);
 
-    assert.equal(deps.cancelledOrderIds.length, 0, "better leftovers kept");
+    assert.equal(deps.cancelledOrderIds.length, 2, "off-grid leftovers cancelled");
     assert.equal(deps.placedIntents.length, 0);
   });
 
@@ -337,41 +337,57 @@ describe("OrderExecutor.plan", () => {
 // ── stale detection ────────────────────────────────────────────────────────
 
 describe("OrderExecutor stale detection", () => {
-  it("keeps orders at-least-as-aggressive as the grid, cancels worse ones", () => {
+  it("cancels off-grid prices and keeps exact desired levels", () => {
     const deps = makeDeps();
     const executor = makeExecutor(deps);
-    seedOrder(deps.book, 1, "buy", 96_000_000n); // better than worst bid → keep
-    seedOrder(deps.book, 2, "buy", 93_000_000n); // worse than worst bid → stale
-    seedOrder(deps.book, 3, "sell", 95_000_000n); // better than worst ask → keep
-    seedOrder(deps.book, 4, "sell", 98_000_000n); // worse than worst ask → stale
+    seedOrder(deps.book, 1, "buy", 95_000_000n); // on-grid → keep
+    seedOrder(deps.book, 2, "buy", 93_000_000n); // off-grid → cancel
+    seedOrder(deps.book, 3, "sell", 96_000_000n); // on-grid → keep
+    seedOrder(deps.book, 4, "sell", 98_000_000n); // off-grid → cancel
 
     const planned = executor.plan([
       desiredBuy(95_000_000n),
-      desiredBuy(94_000_000n), // worst desired bid
+      desiredBuy(94_000_000n),
       desiredSell(96_000_000n),
-      desiredSell(97_000_000n), // worst desired ask
+      desiredSell(97_000_000n),
     ]);
     assert.ok(planned);
     const cancelled = new Set(planned.cancels.map((o) => o.orderId));
-    assert.ok(cancelled.has(makeOrderId(2)) && cancelled.has(makeOrderId(4)), "worse cancelled");
-    assert.ok(!cancelled.has(makeOrderId(1)) && !cancelled.has(makeOrderId(3)), "better kept");
+    assert.ok(cancelled.has(makeOrderId(2)) && cancelled.has(makeOrderId(4)), "off-grid cancelled");
+    assert.ok(!cancelled.has(makeOrderId(1)) && !cancelled.has(makeOrderId(3)), "on-grid kept");
+    assert.equal(planned.creates.length, 2, "missing grid levels placed");
   });
 
-  it("treats every resting order on a side as stale when that side is absent from the grid", () => {
+  it("cancels every resting order on a side when that side is absent from the grid", () => {
     const deps = makeDeps();
     const executor = makeExecutor(deps);
     seedOrder(deps.book, 1, "buy", 96_000_000n);
     seedOrder(deps.book, 2, "buy", 93_000_000n);
-    seedOrder(deps.book, 3, "sell", 95_000_000n); // better than ask@96 → keep
-    seedOrder(deps.book, 4, "sell", 98_000_000n); // worse → stale
+    seedOrder(deps.book, 3, "sell", 96_000_000n); // on desired ask → keep
+    seedOrder(deps.book, 4, "sell", 98_000_000n); // off-grid → cancel
 
-    // Desired has only an ask side → no desired bid → all resting buys stale.
+    // Desired has only an ask side → no desired bid → all resting buys cancel.
     const planned = executor.plan([desiredSell(96_000_000n)]);
     assert.ok(planned);
     const cancelled = new Set(planned.cancels.map((o) => o.orderId));
-    assert.ok(cancelled.has(makeOrderId(1)) && cancelled.has(makeOrderId(2)), "all bids stale");
-    assert.ok(cancelled.has(makeOrderId(4)), "worse ask stale");
-    assert.ok(!cancelled.has(makeOrderId(3)), "aggressive ask kept");
+    assert.ok(cancelled.has(makeOrderId(1)) && cancelled.has(makeOrderId(2)), "all bids cancelled");
+    assert.ok(cancelled.has(makeOrderId(4)), "off-grid ask cancelled");
+    assert.ok(!cancelled.has(makeOrderId(3)), "on-grid ask kept");
+  });
+
+  it("cancels excess size at a desired price", () => {
+    const deps = makeDeps();
+    const executor = makeExecutor(deps);
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 2n);
+    seedOrder(deps.book, 2, "buy", 95_000_000n, 2n); // aggregate 4 > desired 3
+
+    const planned = executor.plan([desiredBuy(95_000_000n, 3n)]);
+    assert.ok(planned);
+    assert.equal(planned.cancels.length, 1, "one whole order dropped for excess");
+    assert.equal(planned.cancels[0].orderId, makeOrderId(2));
+    // After cancelling size 2, remaining is 2 < 3 → top up 1.
+    assert.equal(planned.creates.length, 1);
+    assert.equal(planned.creates[0].size, 1n);
   });
 });
 

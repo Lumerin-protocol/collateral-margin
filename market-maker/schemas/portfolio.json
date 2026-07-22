@@ -1228,8 +1228,8 @@
               "description": "Environment variable interpolation (resolved at startup)"
             }
           ],
-          "description": "Max encoded multicall entries per tx before chunking.",
-          "default": 50
+          "description": "Max cost units per tx before chunking (not raw call count).",
+          "default": 100
         },
         "confirmationTimeoutSec": {
           "default": 60,
@@ -1492,7 +1492,7 @@
           "description": "Environment variable interpolation (resolved at startup)"
         }
       ],
-      "default": 20
+      "default": 100
     }
   }
 }

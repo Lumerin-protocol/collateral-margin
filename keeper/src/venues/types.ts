@@ -43,8 +43,7 @@ export type LiquidateOrdersOutcome =
  *       - `nothingToClose`  — the off-chain sizing found the account already
  *         at/above the IM buffer (no lots to close).
  *       - `notLiquidatable` — the venue's on-chain predicate rejected the batch
- *         (healthy, or a stale snapshot / `OverLiquidation` race). Planner
- *         re-snapshots and retries.
+ *         (healthy, or a stale snapshot / race). Planner re-snapshots and retries.
  *       - `ordersStillOpen` — resting orders must be cleared first.
  */
 export type ReduceToTargetOutcome =
@@ -78,12 +77,9 @@ export interface Venue {
   readPositions(user: Address): Promise<VenuePosition[]>;
 
   /**
-   * Calls `liquidateOrders` on the venue. Cancels across all markets owned by
-   * `user` (or the supplied `ids` for venues that take a calldata id list).
-   *
-   * - Perps: takes `ids[]` so the keeper can multicall specific high-margin orders.
-   * - Futures: ignores `ids` — the contract sweeps FIFO until healthy.
-   * - Options: TBD when added.
+   * Calls `liquidateOrders(user, ids[])` on the venue. Keeper-chosen ids;
+   * on-chain stop-on-failure keeps prior cancels and stops when healthy.
+   * When `ids` is omitted the venue reads `getUserOrders` first.
    */
   liquidateOrders(user: Address, ids?: readonly Hex[]): Promise<LiquidateOrdersOutcome>;
 
@@ -98,10 +94,11 @@ export interface Venue {
    *      a full close.
    *   3. Submit ONE tx — futures `liquidatePositions(user, expirationAts[],
    *      closeQtys[])`, perps `liquidatePosition(user, closeQty)`.
+   *      Oversize partials revert `OverLiquidation` (re-size off-chain).
    *
    * Reverts on-chain with `OrdersStillOpen` (orders must be cleared first) or
-   * `OverLiquidation` (a price race made the sizing overshoot IM) are
-   * translated into `{ skipped }` so the planner re-plans without crashing.
+   * `NotLiquidatable` are translated into `{ skipped }` so the planner
+   * re-plans without crashing.
    */
   reduceToTarget(user: Address): Promise<ReduceToTargetOutcome>;
 }

@@ -135,8 +135,12 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
     const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE);
     assert.ok(totalCloseQty(closes) > 1n);
 
-    const countA = closes.find((c) => c.expirationAt === EXPIRY_A)?.closeQty ?? 0n;
-    const countB = closes.find((c) => c.expirationAt === EXPIRY_B)?.closeQty ?? 0n;
+    const countA = closes
+      .filter((c) => c.expirationAt === EXPIRY_A)
+      .reduce((s, c) => s + c.closeQty, 0n);
+    const countB = closes
+      .filter((c) => c.expirationAt === EXPIRY_B)
+      .reduce((s, c) => s + c.closeQty, 0n);
     assert.ok(countA >= 1n && countB >= 1n, `both expirations must be reduced (A=${countA}, B=${countB})`);
     assert.ok(
       countA - countB <= 1n && countB - countA <= 1n,
@@ -161,8 +165,12 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
     });
     const P = P_MODERATE;
     const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE);
-    const countA = closes.find((c) => c.expirationAt === EXPIRY_A)?.closeQty ?? 0n;
-    const countB = closes.find((c) => c.expirationAt === EXPIRY_B)?.closeQty ?? 0n;
+    const countA = closes
+      .filter((c) => c.expirationAt === EXPIRY_A)
+      .reduce((s, c) => s + c.closeQty, 0n);
+    const countB = closes
+      .filter((c) => c.expirationAt === EXPIRY_B)
+      .reduce((s, c) => s + c.closeQty, 0n);
     // A is twice B → roughly 2:1 close ratio when both are touched.
     if (countA > 0n && countB > 0n) {
       assert.ok(countA >= countB, `A=${countA} should close at least as many as B=${countB}`);

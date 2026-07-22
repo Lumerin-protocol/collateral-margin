@@ -106,8 +106,8 @@ const txCoordinatorSchema = Type.Object(
   {
     maxCallsPerTx: Type.Integer({
       minimum: 1,
-      default: 50,
-      description: "Max encoded multicall entries per tx before chunking.",
+      default: 100,
+      description: "Max cost units per tx before chunking (not raw call count).",
     }),
     confirmationTimeoutSec: TypeSeconds({
       minimum: 1,
@@ -194,7 +194,7 @@ export const portfolioRootSchema = Type.Object(
         "Seconds shared inputs may be stale before new placements are paused (existing orders kept).",
     }),
     readBatchSize: Type.Number({ minimum: 1, default: 10 }),
-    writeBatchSize: Type.Number({ minimum: 1, default: 20 }),
+    writeBatchSize: Type.Number({ minimum: 1, default: 100 }),
   },
   { ...Closed, description: "Titan Market Maker — unified portfolio app config." },
 );
@@ -323,7 +323,7 @@ export function loadPortfolioConfig(
     env: opts.env,
     parse: (raw) => {
       const tx = raw.txCoordinator ?? {
-        maxCallsPerTx: 50,
+        maxCallsPerTx: 100,
         confirmationTimeoutSec: 60,
         maxReplacements: 2,
         replacementFeeBumpPct: 15,

@@ -99,7 +99,7 @@ health:
 
 # Centralized submission / nonce recovery.
 txCoordinator:
-  maxCallsPerTx: 50
+  maxCallsPerTx: 100
   confirmationTimeoutSec: 60
   maxReplacements: 2
   replacementFeeBumpPct: 15
@@ -114,4 +114,4 @@ rollCheckIntervalSec: 300
 sharedStalenessGraceSec: 30
 
 readBatchSize: 100
-writeBatchSize: 20
+writeBatchSize: 100

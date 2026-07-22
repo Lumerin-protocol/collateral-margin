@@ -90,16 +90,16 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: Lumerin-protocol/derivatives-marketplace
-          ref: c8078b9e430df8a5ec8bc64865d692b38cc69d8c
+          # updateOrders + liquidateOrders(user, ids) (PR #78).
+          ref: 7df057016ed148058ba2916c441e951a7b56a08c
           path: perps
 
       - name: Checkout futures-marketplace
         uses: actions/checkout@v5
         with:
           repository: Lumerin-protocol/futures-marketplace
-          # Futures 3.0 aggregate positions (PR Lumerin-protocol/futures-marketplace#215).
-          # After that merges to dev, retarget this pin to the merge commit / dev tip.
-          ref: 2e2c1b599eec37f2f27973e78bafaf0870e1df7a
+          # updateOrders + liquidateOrders(user, ids) (PR #223).
+          ref: ac6b2d8fbd8f9fd5a47468eec7ced6cdd9ca6a42
           path: futures-marketplace
 
       - name: Install perps contracts dependencies

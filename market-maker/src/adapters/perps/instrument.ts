@@ -75,6 +75,44 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
     });
   }
 
+  encodeUpdateOrders(
+    cancels: CancelIntent[],
+    creates: OrderIntent[],
+  ): `0x${string}` {
+    if (cancels.length === 0 && creates.length === 0) {
+      throw new Error("perps: encodeUpdateOrders requires cancels and/or creates");
+    }
+    // Local ABI fragment until published perps-contracts includes updateOrders.
+    const updateOrdersAbi = [
+      {
+        type: "function",
+        name: "updateOrders",
+        stateMutability: "nonpayable",
+        inputs: [
+          { name: "_cancelIds", type: "bytes32[]" },
+          {
+            name: "_intents",
+            type: "tuple[]",
+            components: [
+              { name: "price", type: "uint256" },
+              { name: "quantity", type: "int256" },
+            ],
+          },
+        ],
+        outputs: [],
+      },
+    ] as const;
+    const batch = creates.map((intent) => ({
+      price: intent.price,
+      quantity: intent.side === "buy" ? intent.size : -intent.size,
+    }));
+    return encodeFunctionData({
+      abi: updateOrdersAbi,
+      functionName: "updateOrders",
+      args: [cancels.map((c) => c.orderId), batch],
+    });
+  }
+
   encodeCancel(intent: CancelIntent): `0x${string}` {
     return encodeFunctionData({
       abi: HashPowerPerpsDEXAbi,
@@ -92,8 +130,7 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
   }
 
   /**
-   * Execute cancels then creates on-chain. Perps uses individual
-   * cancelOrder / createOrder calls (no batch functions on the contract).
+   * Execute cancels + creates via `updateOrders` (IM checked once on-chain).
    */
   async executeOrders(
     intent: ExecuteOrdersIntent,
@@ -111,89 +148,49 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
     intent: ExecuteOrdersIntent,
     logger: pino.Logger,
   ): Promise<ExecuteOrdersResult> {
-    // 1. Build the ordered call list: cancels first, then creates.
-    const cancelSize = this.venue.cancelBatchSize;
-    const createSize = this.venue.createBatchSize;
-    const calls: `0x${string}`[] = [];
-
-    // Cancels: chunk by cancelBatchSize.
-    for (let i = 0; i < intent.cancels.length; i += cancelSize) {
-      const batch = intent.cancels.slice(i, i + cancelSize);
-      for (const c of batch) calls.push(this.encodeCancel(c));
-    }
-
-    // Creates: chunk by createBatchSize.
-    for (let i = 0; i < intent.creates.length; i += createSize) {
-      const batch = intent.creates.slice(i, i + createSize);
-      for (const c of batch) calls.push(this.encodeCreate(c));
-    }
-
-    if (calls.length === 0) {
+    if (intent.cancels.length === 0 && intent.creates.length === 0) {
       return { receipts: [], errors: [] };
     }
 
-    // 2. Chunk into tx-sized groups and broadcast sequentially.
-    // Perps has no batch contract functions — each cancel/create is one call.
-    // The cancelBatchSize / createBatchSize already control grouping, so we
-    // use a generous tx-level safety limit.
-    const max = 200;
+    const data = this.encodeUpdateOrders(intent.cancels, intent.creates);
 
     if (intent.dryRun) {
-      const totalBatches = Math.ceil(calls.length / max);
       logger.info(
         {
           cancels: intent.cancels.length,
           creates: intent.creates.length,
-          calls: calls.length,
-          batches: totalBatches,
         },
-        "DRY RUN: would send multicall batches",
+        "DRY RUN: would send updateOrders",
       );
       return { receipts: [], errors: [] };
     }
 
-    const receipts: { gasUsed: bigint; effectiveGasPrice: bigint }[] = [];
-    const errors: Error[] = [];
-    const totalBatches = Math.ceil(calls.length / max);
-
-    for (let offset = 0; offset < calls.length; offset += max) {
-      const chunk = calls.slice(offset, offset + max);
-      const batchNum = Math.floor(offset / max) + 1;
-
-      try {
-        const hash = await this.venue.multicall(chunk, {
-          maxFeePerGas: intent.maxFeePerGas,
-        });
-        const receipt = await this.venue.publicClient.waitForTransactionReceipt(
-          { hash },
-        );
-        receipts.push({
-          gasUsed: receipt.gasUsed,
-          effectiveGasPrice: receipt.effectiveGasPrice,
-        });
-        logger.info(
-          {
-            calls: chunk.length,
-            batch: `${batchNum}/${totalBatches}`,
-            gas: receipt.gasUsed.toString(),
-          },
-          "perps multicall chunk executed",
-        );
-      } catch (err) {
-        const wrapped = err instanceof Error ? err : new Error(String(err));
-        errors.push(wrapped);
-        logger.error(
-          {
-            err: wrapped,
-            calls: chunk.length,
-            batch: `${batchNum}/${totalBatches}`,
-          },
-          "perps multicall chunk failed — continuing with next chunk",
-        );
-      }
+    try {
+      const hash = await this.venue.sendCall(data, {
+        maxFeePerGas: intent.maxFeePerGas,
+      });
+      const receipt = await this.venue.publicClient.waitForTransactionReceipt({
+        hash,
+      });
+      logger.info(
+        {
+          cancels: intent.cancels.length,
+          creates: intent.creates.length,
+          gas: receipt.gasUsed.toString(),
+        },
+        "perps updateOrders executed",
+      );
+      return {
+        receipts: [
+          { gasUsed: receipt.gasUsed, effectiveGasPrice: receipt.effectiveGasPrice },
+        ],
+        errors: [],
+      };
+    } catch (err) {
+      const wrapped = err instanceof Error ? err : new Error(String(err));
+      logger.error({ err: wrapped }, "perps updateOrders failed");
+      return { receipts: [], errors: [wrapped] };
     }
-
-    return { receipts, errors };
   }
 
   /**

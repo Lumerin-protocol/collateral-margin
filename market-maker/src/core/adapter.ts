@@ -25,6 +25,12 @@ export interface OrderIntent {
   side: Side;
   price: bigint;
   size: bigint;
+  /**
+   * Futures delivery date (unix seconds). Required when encoding a cross-expiry
+   * `updateOrders` batch; per-instrument encoders fall back to their market's
+   * expiry when omitted. Ignored on perps.
+   */
+  expirationAt?: bigint;
 }
 
 export interface CancelIntent {
@@ -298,6 +304,16 @@ export interface InstrumentAdapter {
   encodeCancel(intent: CancelIntent): `0x${string}`;
 
   /**
+   * Encode venue `updateOrders(cancelIds, creates)` — cancels first, then
+   * GTC creates, with a single end-of-call collateral check. Either side may
+   * be empty; callers must skip the encode when both are empty.
+   */
+  encodeUpdateOrders(
+    cancels: CancelIntent[],
+    creates: OrderIntent[],
+  ): `0x${string}`;
+
+  /**
    * Relative gas weight of placing this create, in "cost units" where one unit
    * is roughly the cheapest single call. The shared `TxCoordinator` sums these
    * against one per-tx budget when chunking a venue batch, so venues with very
@@ -306,6 +322,7 @@ export interface InstrumentAdapter {
    *   - Futures: `size` (qty) — `createOrder(…, int8 qty)` does one unit of
    *              work per contract, so gas scales with total qty, not calls.
    * Cancels are always weight 1 (the coordinator assumes this).
+   * A batched `encodeUpdateOrders` call weighs cancels + Σ create weights.
    */
   createCallWeight(intent: OrderIntent): number;
 
@@ -381,9 +398,18 @@ export interface VenueAdapter {
   listInstruments(): Promise<InstrumentAdapter[]>;
 
   /**
-   * Batch cancels/creates in one tx. Returns tx hash. Implementations route
-   * through the venue contract's multicall function. `nonce` is supplied by the
-   * shared NonceManager when the portfolio runner sequences multi-venue txs.
+   * Send a single calldata payload to the venue contract (e.g. `updateOrders`).
+   * `nonce` is supplied by the shared NonceManager when the portfolio runner
+   * sequences multi-venue txs.
+   */
+  sendCall(
+    data: `0x${string}`,
+    opts: { maxFeePerGas?: bigint; nonce?: number },
+  ): Promise<`0x${string}`>;
+
+  /**
+   * @deprecated Prefer {@link sendCall} with a single `updateOrders` encoding.
+   * Multicall wrapping is no longer used by the portfolio coordinator.
    */
   multicall(
     calls: `0x${string}`[],
