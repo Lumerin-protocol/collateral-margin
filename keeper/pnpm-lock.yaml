@@ -210,7 +210,7 @@ packages:
     resolution: {integrity: sha512-2P0p0pFGzHS5EMnhdxQi7aJN+iMheud0UhG4dlE1DLAlvL8JHjJJTX/CSm4JXwV0Ka5nGk3zC5mcb5bUQUxxMA==}
 
   derivatives-marketplace-abi@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/9b81be323ec1bbea0891ce6f87842b92d2fb8963#path:/contracts/abi:
-    resolution: {gitHosted: true, integrity: sha512-s9voZzUVZLcypnh3Dk//u4Ifo5ujsGvsLmP6vKcAjOxaOVOZilkfiQHCtXxowAupkfdbCSRKxrXJPVaUsrv0RQ==, tarball: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/9b81be323ec1bbea0891ce6f87842b92d2fb8963}
+    resolution: {gitHosted: true, path: /contracts/abi, integrity: sha512-s9voZzUVZLcypnh3Dk//u4Ifo5ujsGvsLmP6vKcAjOxaOVOZilkfiQHCtXxowAupkfdbCSRKxrXJPVaUsrv0RQ==, tarball: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/9b81be323ec1bbea0891ce6f87842b92d2fb8963}
     version: 0.0.0
 
   end-of-stream@1.4.5:
@@ -226,7 +226,7 @@ packages:
     resolution: {integrity: sha512-W+KJc2dmILlPplD/H4K9l9LcAHAfPtP6BY84uVLXQ6Evcz9Lcg33Y2z1IVblT6xdY54PXYVHEv+0Wpq8Io6zkA==}
 
   futures-marketplace-abi@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/baec46ef8f428d7be4c397dc2d03721805c1b46f#path:/contracts/abi:
-    resolution: {gitHosted: true, integrity: sha512-Ew90WlZvizYDzSjPKoOqWwdhVcTKeXhH8qz5nPLMLnQEzM3LtGNP4shHXGb3uR55V224KESmZhxZAc306c8Ulg==, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/baec46ef8f428d7be4c397dc2d03721805c1b46f}
+    resolution: {gitHosted: true, path: /contracts/abi, integrity: sha512-Ew90WlZvizYDzSjPKoOqWwdhVcTKeXhH8qz5nPLMLnQEzM3LtGNP4shHXGb3uR55V224KESmZhxZAc306c8Ulg==, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/baec46ef8f428d7be4c397dc2d03721805c1b46f}
     version: 0.0.0
 
   help-me@5.0.0:
