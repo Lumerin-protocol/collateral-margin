@@ -310,6 +310,8 @@ function parseVenue(raw: RawVenue): ParsedVenue {
     sizing: {
       ...raw.sizing,
       baseQuantity: configBigint(String(raw.sizing.baseQuantity), "venue.sizing.baseQuantity"),
+      // Default may be stripped from the venues union schema (AJV combinator rule).
+      expirySizeDecay: raw.sizing.expirySizeDecay ?? 0.6,
     },
   };
 }

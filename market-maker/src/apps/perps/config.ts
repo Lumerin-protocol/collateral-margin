@@ -26,9 +26,9 @@ import { ConfigError } from "../../core/errors.ts";
  * Perps app config schema.
  *
  * Pricing locked to "effective-spread" (symmetric, limit-matched) — that's
- * the strategy that fits the perps order book. Sizing locked to "linear"
- * for the same reason: deeper levels are larger because they only fill
- * after the shallower ones do.
+ * the strategy that fits the perps order book. Sizing locked to
+ * "geometric-taper" so the front level (highest fill prob) is the largest,
+ * matching futures.
  *
  * No runtime ternaries — the schema demands the right shape, the loader
  * rejects mismatches, and the Quoter / Executor read the static values.
@@ -84,28 +84,35 @@ export const perpsPricingSchema = Type.Object(
   { ...Closed, description: "Effective-spread pricing parameters." },
 );
 
-// `baseQuantity` is venue-native (perps: hashrate base units). It's a bigint
-// expressed as a decimal string; numbers are accepted but use strings if
-// values exceed Number.MAX_SAFE_INTEGER.
+// `baseQuantity` is venue-native (perps: hashrate base units). Bigint
+// expressed as a decimal string; numbers accepted but use strings if values
+// exceed Number.MAX_SAFE_INTEGER. Quoter distributes
+// `baseQuantity × numLevelsPerSide` across the ladder via taperRatio.
 export const perpsSizingSchema = Type.Object(
   {
-    strategy: Type.Literal("linear", {
+    strategy: Type.Literal("geometric-taper", {
       description:
-        "Sizing strategy. Perps lock to 'linear' (level k receives (k+1) × baseQuantity).",
+        "Sizing strategy. Perps lock to 'geometric-taper' (front level largest, decays by taperRatio).",
     }),
     baseQuantity: Type.Union(
       [Type.String({ pattern: "^\\d+$" }), Type.Number()],
       {
         description:
-          "Per-level base size in venue-native units (perps: hashrate base units). Use a string for values > 2^53.",
+          "Per-level size unit in venue-native units (perps: hashrate base). Total per-side budget is baseQuantity × numLevelsPerSide, distributed via taperRatio. Use a string for values > 2^53.",
       },
     ),
     numLevelsPerSide: Type.Number({
       minimum: 1,
       description: "Number of price levels quoted per side.",
     }),
+    taperRatio: Type.Number({
+      exclusiveMinimum: 0,
+      exclusiveMaximum: 1,
+      description:
+        "Geometric decay ratio in (0, 1). Each subsequent level is taperRatio × the previous.",
+    }),
   },
-  { ...Closed, description: "Linear-ladder sizing parameters." },
+  { ...Closed, description: "Geometric-taper sizing parameters." },
 );
 
 export const perpsRootSchema = Type.Object(

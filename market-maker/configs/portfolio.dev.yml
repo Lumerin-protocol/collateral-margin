@@ -48,9 +48,10 @@ venues:
       inventorySkewGamma: 0.5
       maxSkewTicks: 20
     sizing:
-      strategy: linear
+      strategy: geometric-taper
       baseQuantity: "1000000" # venue-native (perps hashrate base units)
       numLevelsPerSide: 5
+      taperRatio: 0.6
 
   - kind: futures
     address: ${FUTURES_ADDRESS}
@@ -68,15 +69,15 @@ venues:
       maxSkewTicks: 0
     sizing:
       strategy: geometric-taper
-      # Futures orders are capped on-chain at MAX_ORDERS_PER_PARTICIPANT = 100,
-      # and every qty unit becomes a distinct resting order. The quoter spreads
-      # baseQuantity × numLevelsPerSide across the ladder, so total resting
-      # orders ≈ 2 sides × baseQuantity × numLevelsPerSide × expiries. At 3
-      # expiries × 3 levels that is 18 × baseQuantity, so keep baseQuantity ≤ 5
-      # (4 ⇒ ~66 worst-case) to stay under 100 with roll-overlap headroom.
-      baseQuantity: 4 # venue-native (contracts base units)
-      numLevelsPerSide: 3
+      # 1 futures contract ≈ 1.0 perps qty (1e6). Perps total/side =
+      # baseQuantity×numLevels/1e6 = 5. Split across `count` expiries; base=4
+      # is the integer floor that keeps all 5 taper levels non-zero
+      # ([8,5,3,1,1]). Order count is 2×levels×expiries (=30), not ×qty.
+      baseQuantity: 4 # venue-native (contracts)
+      numLevelsPerSide: 5
       taperRatio: 0.6
+      # Nearest expiry keeps full size; each further date × this factor.
+      expirySizeDecay: 0.6
 
 # Shared portfolio-wide budget across every market.
 risk:

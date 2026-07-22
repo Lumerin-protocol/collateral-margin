@@ -39,9 +39,10 @@ pricing:
   maxSkewTicks: 20
 
 sizing:
-  strategy: linear
+  strategy: geometric-taper
   baseQuantity: "100000" # venue-native units (hashrate base)
   numLevelsPerSide: 3
+  taperRatio: 0.6
 
 risk:
   # All *Usd fields are USD (decimals OK). Loader converts to 6-dec USDC.

@@ -87,8 +87,8 @@ graph LR
   controlled by `inventorySkewGamma` and `maxSkewTicks`
 - **Gas spike penalty**: widens spread proportionally when gas exceeds
   median by `gasSpikeThresholdPct`
-- **Level sizing**: geometric taper — outer levels are progressively
-  larger by `levelSizeRatio`
+- **Level sizing**: geometric taper — front level is largest; each
+  deeper level is `taperRatio` × the previous
 
 ### Risk controls
 

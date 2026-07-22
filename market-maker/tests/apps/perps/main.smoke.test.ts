@@ -22,7 +22,8 @@ describe("perps app config smoke", () => {
       const cfg = loadPerpsConfig({ path, env });
       assert.equal(cfg.venue.kind, "perps");
       assert.equal(cfg.pricing.strategy, "effective-spread");
-      assert.equal(cfg.sizing.strategy, "linear");
+      assert.equal(cfg.sizing.strategy, "geometric-taper");
+      assert.ok(cfg.sizing.taperRatio > 0 && cfg.sizing.taperRatio < 1);
       assert.ok(cfg.timing.levelSpacingTicks >= 1);
     });
   }
