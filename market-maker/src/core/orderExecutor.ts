@@ -3,6 +3,7 @@ import type {
   InstrumentAdapter,
   OrderIntent,
   OwnOrder,
+  ReduceIntent,
   Side,
 } from "./adapter.ts";
 import type { Quoter } from "./quoter.ts";
@@ -69,14 +70,16 @@ export class OrderExecutor {
   }
 
   /**
-   * Compute the diff (stale cancels + missing creates) for `desired` without
-   * submitting anything. Returns `null` when no requote should happen this
-   * cycle (cooldown, no drift, or gas-spike deferral). The portfolio runner
-   * feeds the returned intents to the shared `TxCoordinator`, which runs the
-   * aggregate pre-trade gate — so `plan()` deliberately does NOT call
-   * `canPlaceOrders` (that would under-count across markets).
+   * Compute the diff (cancels / in-place reduces / creates) for `desired`
+   * without submitting. Returns `null` when no requote should happen this
+   * cycle. Size increases create only the delta; size decreases prefer
+   * reduce-only amend (FIFO kept) over cancel+recreate.
    */
-  plan(desired: OrderIntent[]): { cancels: OwnOrder[]; creates: OrderIntent[] } | null {
+  plan(desired: OrderIntent[]): {
+    cancels: OwnOrder[];
+    reduces: ReduceIntent[];
+    creates: OrderIntent[];
+  } | null {
     if (!this.shouldRequote(desired)) return null;
 
     if (this.gas.isGasSpiking) {
@@ -95,13 +98,13 @@ export class OrderExecutor {
       this.logger.warn({ drift }, "proceeding with requote despite gas spike");
     }
 
-    const cancels = this.findStaleOrders(desired);
-    const creates = this.findNewOrders(desired, cancels);
-    if (cancels.length === 0 && creates.length === 0) {
+    const { cancels, reduces } = this.findStaleOrders(desired);
+    const creates = this.findNewOrders(desired, cancels, reduces);
+    if (cancels.length === 0 && reduces.length === 0 && creates.length === 0) {
       this.logger.debug("no order changes needed");
       return null;
     }
-    return { cancels, creates };
+    return { cancels, reduces, creates };
   }
 
   /**
@@ -137,27 +140,22 @@ export class OrderExecutor {
       );
     }
 
-    if (ordersToCancel.length === 0 && places.length === 0) {
+    if (ordersToCancel.length === 0 && planned.reduces.length === 0 && places.length === 0) {
       return;
     }
 
-    // Delegate full lifecycle to the adapter: encoding, batching, tx chunking,
-    // nonce sequencing, gas optimisation. The executor no longer leaks multicall
-    // details — it just says what to do and gets back what happened.
     const result = await this.instrument.executeOrders({
       cancels: ordersToCancel.map((o) => ({ orderId: o.orderId })),
+      reduces: planned.reduces,
       creates: places,
       maxFeePerGas: this.gas.cappedGasPrice(),
       dryRun: this.cfg.dryRun,
     });
 
-    // Record gas cost from successful tx chunks.
     for (const receipt of result.receipts) {
       this.risk.recordGasCost(this.computeTxGasCost(receipt));
     }
 
-    // Stats count intended orders; partial failure undercounts but metrics
-    // remain directionally correct (next reconciliation retries the remainder).
     this.stats.ordersCancelled += ordersToCancel.length;
     this.stats.ordersPlaced += places.length;
 
@@ -218,8 +216,9 @@ export class OrderExecutor {
       return true;
     }
 
-    if (this.findStaleOrders(desired).length > 0) {
-      this.logger.debug("requote triggered: stale orders at wrong prices");
+    const stale = this.findStaleOrders(desired);
+    if (stale.cancels.length > 0 || stale.reduces.length > 0) {
+      this.logger.debug("requote triggered: stale / excess size at level");
       return true;
     }
 
@@ -258,13 +257,15 @@ export class OrderExecutor {
   }
 
   /**
-   * Cancel targets for an exact set-diff against `desired`:
-   *   - every resting order at a (side, price) not in the desired grid
-   *   - at desired prices, enough whole orders that aggregated size exceeds
-   *     desired (cancel until remaining ≤ desired; deficits are topped up
-   *     by `findNewOrders`)
+   * Cancel / reduce targets for an exact set-diff against `desired`:
+   *   - every resting order at a (side, price) not in the desired grid → cancel
+   *   - at desired prices with excess size: reduce the trailing order in place
+   *     when possible (FIFO kept); cancel whole trailing orders otherwise
    */
-  private findStaleOrders(desired: OrderIntent[]): OwnOrder[] {
+  private findStaleOrders(desired: OrderIntent[]): {
+    cancels: OwnOrder[];
+    reduces: ReduceIntent[];
+  } {
     const desiredSize = new Map<string, bigint>();
     for (const i of desired) {
       const k = keyOf(i.side, i.price);
@@ -279,33 +280,48 @@ export class OrderExecutor {
       else byKey.set(k, [order]);
     }
 
-    const stale: OwnOrder[] = [];
+    const cancels: OwnOrder[] = [];
+    const reduces: ReduceIntent[] = [];
     for (const [k, orders] of byKey) {
       const want = desiredSize.get(k);
       if (want === undefined) {
-        for (const o of orders) stale.push(o);
+        for (const o of orders) cancels.push(o);
         continue;
       }
       let have = 0n;
       for (const o of orders) have += o.size;
       if (have <= want) continue;
-      // Drop whole orders until remaining size fits; prefer cancelling the
-      // trailing entries so FIFO priority of earlier quotes is preserved.
+      // Trim from the trailing order so earlier FIFO priority is preserved.
       let excess = have - want;
       for (let i = orders.length - 1; i >= 0 && excess > 0n; i--) {
-        stale.push(orders[i]);
-        excess -= orders[i].size;
+        const o = orders[i];
+        if (o.size <= excess) {
+          cancels.push(o);
+          excess -= o.size;
+        } else {
+          reduces.push({
+            orderId: o.orderId,
+            newSize: o.size - excess,
+            side: o.side,
+          });
+          excess = 0n;
+        }
       }
     }
-    return stale;
+    return { cancels, reduces };
   }
 
   /**
    * New orders = desired levels missing size at exactly the desired price,
-   * after subtracting any orders already selected for cancel in this plan.
+   * after applying cancels/reduces from this plan. Size increases only create
+   * the delta — resting orders at that level are never cancelled for a top-up.
    */
-  private findNewOrders(desired: OrderIntent[], cancels: OwnOrder[]): OrderIntent[] {
-    const existing = this.aggregateOwnSizeByPriceSide(cancels);
+  private findNewOrders(
+    desired: OrderIntent[],
+    cancels: OwnOrder[],
+    reduces: ReduceIntent[],
+  ): OrderIntent[] {
+    const existing = this.aggregateOwnSizeByPriceSide(cancels, reduces);
     const out: OrderIntent[] = [];
     for (const i of desired) {
       const have = existing.get(keyOf(i.side, i.price)) ?? 0n;
@@ -329,13 +345,18 @@ export class OrderExecutor {
     return false;
   }
 
-  private aggregateOwnSizeByPriceSide(cancels: OwnOrder[] = []): Map<string, bigint> {
+  private aggregateOwnSizeByPriceSide(
+    cancels: OwnOrder[] = [],
+    reduces: ReduceIntent[] = [],
+  ): Map<string, bigint> {
     const cancelled = new Set(cancels.map((c) => c.orderId));
+    const reduced = new Map(reduces.map((r) => [r.orderId, r.newSize]));
     const m = new Map<string, bigint>();
     for (const o of this.book.ownOrders.values()) {
       if (cancelled.has(o.orderId)) continue;
+      const size = reduced.get(o.orderId) ?? o.size;
       const k = keyOf(o.side, o.price);
-      m.set(k, (m.get(k) ?? 0n) + o.size);
+      m.set(k, (m.get(k) ?? 0n) + size);
     }
     return m;
   }

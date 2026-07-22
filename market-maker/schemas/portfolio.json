@@ -1241,28 +1241,12 @@
       "description": "Centralized submission / nonce recovery.",
       "type": "object",
       "required": [
-        "maxCallsPerTx",
         "confirmationTimeoutSec",
         "maxReplacements",
         "replacementFeeBumpPct",
         "maxNonceResyncs"
       ],
       "properties": {
-        "maxCallsPerTx": {
-          "anyOf": [
-            {
-              "minimum": 1,
-              "type": "integer"
-            },
-            {
-              "type": "string",
-              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
-              "description": "Environment variable interpolation (resolved at startup)"
-            }
-          ],
-          "description": "Max cost units per tx before chunking (not raw call count).",
-          "default": 100
-        },
         "confirmationTimeoutSec": {
           "default": 60,
           "description": "Seconds to wait for a tx receipt before replacing by fee.",

@@ -14,6 +14,7 @@ import type {
   OwnOrderEvent,
   OwnOrderSource,
   Position,
+  ReduceIntent,
   Unsubscribe,
 } from "../../core/adapter.ts";
 import { HashPowerPerpsDEXAbi } from "perps-contracts/abi/HashPowerPerpsDEX.ts";
@@ -77,12 +78,10 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
 
   encodeUpdateOrders(
     cancels: CancelIntent[],
+    reduces: ReduceIntent[],
     creates: OrderIntent[],
   ): `0x${string}` {
-    if (cancels.length === 0 && creates.length === 0) {
-      throw new Error("perps: encodeUpdateOrders requires cancels and/or creates");
-    }
-    // Local ABI fragment until published perps-contracts includes updateOrders.
+    // Local ABI fragment until published perps-contracts includes the reduces arg.
     const updateOrdersAbi = [
       {
         type: "function",
@@ -90,6 +89,14 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
         stateMutability: "nonpayable",
         inputs: [
           { name: "_cancelIds", type: "bytes32[]" },
+          {
+            name: "_reduces",
+            type: "tuple[]",
+            components: [
+              { name: "orderId", type: "bytes32" },
+              { name: "newQuantity", type: "int256" },
+            ],
+          },
           {
             name: "_intents",
             type: "tuple[]",
@@ -102,6 +109,15 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
         outputs: [],
       },
     ] as const;
+    const reduceBatch = reduces.map((r) => {
+      if (r.newSize <= 0n) {
+        throw new Error(`perps: reduce newSize ${r.newSize} must be > 0`);
+      }
+      return {
+        orderId: r.orderId,
+        newQuantity: r.side === "buy" ? r.newSize : -r.newSize,
+      };
+    });
     const batch = creates.map((intent) => ({
       price: intent.price,
       quantity: intent.side === "buy" ? intent.size : -intent.size,
@@ -109,7 +125,7 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
     return encodeFunctionData({
       abi: updateOrdersAbi,
       functionName: "updateOrders",
-      args: [cancels.map((c) => c.orderId), batch],
+      args: [cancels.map((c) => c.orderId), reduceBatch, batch],
     });
   }
 
@@ -122,15 +138,7 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
   }
 
   /**
-   * One cost unit per order: a perps `createOrder` is a single price-level
-   * insertion whose gas is independent of the order's size.
-   */
-  createCallWeight(_intent: OrderIntent): number {
-    return 1;
-  }
-
-  /**
-   * Execute cancels + creates via `updateOrders` (IM checked once on-chain).
+   * Execute cancels + reduces + creates via `updateOrders` (IM checked once).
    */
   async executeOrders(
     intent: ExecuteOrdersIntent,
@@ -148,16 +156,18 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
     intent: ExecuteOrdersIntent,
     logger: pino.Logger,
   ): Promise<ExecuteOrdersResult> {
-    if (intent.cancels.length === 0 && intent.creates.length === 0) {
+    const reduces = intent.reduces ?? [];
+    if (intent.cancels.length === 0 && reduces.length === 0 && intent.creates.length === 0) {
       return { receipts: [], errors: [] };
     }
 
-    const data = this.encodeUpdateOrders(intent.cancels, intent.creates);
+    const data = this.encodeUpdateOrders(intent.cancels, reduces, intent.creates);
 
     if (intent.dryRun) {
       logger.info(
         {
           cancels: intent.cancels.length,
+          reduces: reduces.length,
           creates: intent.creates.length,
         },
         "DRY RUN: would send updateOrders",
@@ -175,6 +185,7 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
       logger.info(
         {
           cancels: intent.cancels.length,
+          reduces: reduces.length,
           creates: intent.creates.length,
           gas: receipt.gasUsed.toString(),
         },
@@ -365,13 +376,11 @@ class PerpsOwnOrders implements OwnOrderSource {
         }
         case "order-updated": {
           if (evt.participant.toLowerCase() !== own) return;
-          // We don't have side/price from the update event; signal a refresh
-          // is needed by emitting "removed". The next BookTracker resync will
-          // re-pick it up via list() if it still exists.
           if (evt.newSize === 0n) {
             cb({ type: "removed", orderId: evt.orderId });
           } else {
-            cb({ type: "updated", orderId: evt.orderId });
+            // Price/side come from BookTracker's existing entry; patch size only.
+            cb({ type: "updated", orderId: evt.orderId, newSize: evt.newSize });
           }
           return;
         }

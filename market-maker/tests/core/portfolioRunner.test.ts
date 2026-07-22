@@ -67,6 +67,7 @@ function makeMarket(
         cancels: Array.from({ length: planResult.cancels }, (_, i) => ({
           orderId: `0x${i.toString(16).padStart(64, "0")}` as `0x${string}`,
         })),
+        reduces: [],
         creates: Array.from({ length: planResult.creates }, () => ({
           side: "buy" as const,
           price: 1n,
@@ -129,6 +130,7 @@ function makeDeps(over: DepOverrides = {}): Tracked {
     errors: [],
     ordersPlaced: all.reduce((n, i) => n + i.creates.length, 0),
     ordersCancelled: all.reduce((n, i) => n + i.cancels.length, 0),
+    ordersReduced: all.reduce((n, i) => n + (i.reduces?.length ?? 0), 0),
     gateDenied: false,
   });
 
@@ -305,6 +307,7 @@ describe("runPortfolioTick", () => {
         errors: [new Error("venue revert")],
         ordersPlaced: 0,
         ordersCancelled: 0,
+        ordersReduced: 0,
         gateDenied: false,
       }),
     });
