@@ -765,10 +765,11 @@
       "type": "object",
       "required": [
         "pollIntervalSec",
-        "requoteThresholdTicks",
         "requoteCooldownSec",
         "resyncIntervalSec",
-        "levelSpacingTicks"
+        "levelSpacingTicks",
+        "staleBandAllowanceUsd",
+        "staleSizeAllowanceUsd"
       ],
       "properties": {
         "pollIntervalSec": {
@@ -802,21 +803,6 @@
               ]
             }
           ]
-        },
-        "requoteThresholdTicks": {
-          "anyOf": [
-            {
-              "minimum": 0,
-              "type": "number"
-            },
-            {
-              "type": "string",
-              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
-              "description": "Environment variable interpolation (resolved at startup)"
-            }
-          ],
-          "description": "Tick deviation from current target before a resting order is replaced.",
-          "default": 2
         },
         "requoteCooldownSec": {
           "default": 1,
@@ -896,6 +882,68 @@
           ],
           "description": "Ticks between successive quote levels. 1 = quote every tick, 5 = every fifth.",
           "default": 1
+        },
+        "staleBandAllowanceUsd": {
+          "default": 0.03,
+          "description": "USD price distance outside the worst desired bid/ask that still counts as in-band (kept). Independent of venue tick size. 0 = strict worst-desired edge. Default 0.03 ≈ 3 ticks when tick = $0.01.",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^-?\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        },
+        "staleSizeAllowanceUsd": {
+          "default": 1,
+          "description": "USD notional size allowance (reduce and top-up). Converted to venue-native qty at the level price (nearest unit; perps 1e6 scale, futures whole contracts) and compared to |have−want|. 0 = exact size match. Default 1.",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^-?\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
         }
       }
     },

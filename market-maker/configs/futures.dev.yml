@@ -46,7 +46,7 @@ pricing:
 sizing:
   strategy: geometric-taper
   baseQuantity: 8 # venue-native (contracts base units)
-  numLevelsPerSide: 6
+  numLevelsPerSide: 10
   taperRatio: 0.6
 
 risk:
@@ -65,15 +65,16 @@ gas:
 
 timing:
   pollIntervalSec: 10
-  requoteThresholdTicks: 2
   requoteCooldownSec: 1
   resyncIntervalSec: 60
   levelSpacingTicks: 1
+  staleBandAllowanceUsd: 0.03
+  staleSizeAllowanceUsd: 1
 
 collateral:
   autoDeposit: true
   autoDepositMinAmount: 500
-  maxCollateralAmount: 1000
+  maxCollateralAmount: 5000
 
 oracle:
   # Window de-duplicates by price, so 60 samples ≈ 60 oracle updates regardless

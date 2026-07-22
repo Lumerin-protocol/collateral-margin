@@ -147,8 +147,11 @@ async function main(): Promise<void> {
     instrument,
     {
       requoteCooldownMs: config.timing.requoteCooldownMs,
-      requoteThresholdTicks: config.timing.requoteThresholdTicks,
       urgentRequoteThresholdTicks: config.risk.urgentRequoteThresholdTicks,
+      staleBandAllowance: config.timing.staleBandAllowance,
+      staleSizeAllowance: config.timing.staleSizeAllowance,
+      // Futures size is whole contracts; notional ≈ price × contracts.
+      quantityScale: 1n,
       dryRun: config.dryRun,
     },
     quoter,

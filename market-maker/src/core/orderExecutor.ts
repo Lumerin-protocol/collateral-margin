@@ -11,25 +11,43 @@ import type { BookTracker } from "./bookTracker.ts";
 import type { GasTracker } from "./gasTracker.ts";
 import type { RiskManager } from "./riskManager.ts";
 import type { OracleTracker } from "./oracleTracker.ts";
-import { bigAbs } from "./math.ts";
+import { bigAbs, notionalToSize } from "./math.ts";
 
 export interface OrderExecutorConfig {
   /** Skip a requote if elapsed since last < cooldown (ms). */
   requoteCooldownMs: number;
-  /** Skip if price drifted < N ticks from last quote mid. */
-  requoteThresholdTicks: number;
-  /** Override threshold (in ticks) when gas is spiking — quote anyway if drift >= this. */
+  /** During a gas spike, proceed only if mid drift (ticks) is at least this. */
   urgentRequoteThresholdTicks: number;
+  /**
+   * Price-unit allowance outside the worst desired bid/ask that still counts as
+   * in-band (kept). Same decimals as book/oracle prices (typically 6dp USD).
+   * `0n` = strict worst-desired edge.
+   */
+  staleBandAllowance: bigint;
+  /**
+   * On-grid size allowance in USD notional (both reduce and top-up). Converted
+   * to venue-native size at the level price via {@link notionalToSize}
+   * (rounded nearest) and compared to `|have − want|`. Deltas at or below that
+   * qty are ignored. `0n` = exact size match required.
+   */
+  staleSizeAllowance: bigint;
+  /**
+   * Divisor in `notional = price × size / quantityScale`.
+   * Perps: `QUANTITY_SCALE` (1e6). Futures: `1n` (whole contracts).
+   */
+  quantityScale: bigint;
   dryRun: boolean;
 }
 
 /**
  * Diff desired quotes vs the resting book; cancel + place via venue multicall.
  *
- * Exact set-diff (limit LOB): cancel resting orders whose (side, price) is not
- * in the desired grid, or that contribute excess size at a desired price;
- * create only size deficits at desired prices. The resting book is driven to
- * match the quote grid — no band-based “keep better leftovers” policy.
+ * Stale-order detection (limit LOB + USD allowance): a resting buy is stale
+ * iff its price is below `worstDesiredBid − staleBandAllowance`; a resting
+ * sell is stale iff above `worstDesiredAsk + staleBandAllowance`. Orders
+ * inside that keep zone (including better-than-grid leftovers) are kept.
+ * On-grid size is reconciled (reduce / top-up) only when the size delta
+ * exceeds the USD size allowance converted to native qty (nearest unit).
  */
 export class OrderExecutor {
   readonly stats = { ordersPlaced: 0, ordersCancelled: 0, reconcileCount: 0 };
@@ -222,20 +240,14 @@ export class OrderExecutor {
       return true;
     }
 
-    const drift = this.priceDriftTicks();
-    const threshold = this.effectiveRequoteThreshold();
-    if (drift >= threshold) {
-      this.logger.debug({ drift, threshold }, "requote triggered: price drift");
-      return true;
-    }
-
     this.logger.debug(
-      { drift, threshold, actualCount, expectedCount },
-      "requote skipped: no deficit / no stale / no drift",
+      { actualCount, expectedCount },
+      "requote skipped: no deficit / no stale",
     );
     return false;
   }
 
+  /** Oracle mid drift in ticks since the last successful requote (gas-spike gate). */
   private priceDriftTicks(): number {
     if (this.lastQuoteMidPrice === 0n) return Number.POSITIVE_INFINITY;
     const tick = this.quoter.getTick();
@@ -250,49 +262,74 @@ export class OrderExecutor {
       : this.cfg.requoteCooldownMs;
   }
 
-  private effectiveRequoteThreshold(): number {
-    return this.risk.throttled
-      ? this.cfg.requoteThresholdTicks * 2
-      : this.cfg.requoteThresholdTicks;
-  }
-
   /**
-   * Cancel / reduce targets for an exact set-diff against `desired`:
-   *   - every resting order at a (side, price) not in the desired grid → cancel
-   *   - at desired prices with excess size: reduce the trailing order in place
-   *     when possible (FIFO kept); cancel whole trailing orders otherwise
+   * Cancel / reduce targets against `desired`:
+   *   - outside the keep zone (worst desired ± staleBandAllowance) → cancel
+   *   - at desired prices with excess notional above threshold: reduce the
+   *     trailing order in place when possible (FIFO kept); cancel whole
+   *     trailing orders otherwise
+   *   - better leftovers / within-allowance off-grid → keep
    */
   private findStaleOrders(desired: OrderIntent[]): {
     cancels: OwnOrder[];
     reduces: ReduceIntent[];
   } {
+    let worstDesiredBid: bigint | undefined;
+    let worstDesiredAsk: bigint | undefined;
     const desiredSize = new Map<string, bigint>();
     for (const i of desired) {
       const k = keyOf(i.side, i.price);
       desiredSize.set(k, (desiredSize.get(k) ?? 0n) + i.size);
+      if (i.side === "buy") {
+        if (worstDesiredBid === undefined || i.price < worstDesiredBid) {
+          worstDesiredBid = i.price;
+        }
+      } else if (worstDesiredAsk === undefined || i.price > worstDesiredAsk) {
+        worstDesiredAsk = i.price;
+      }
     }
 
+    const allowance = this.cfg.staleBandAllowance;
+    const cancels: OwnOrder[] = [];
+    const reduces: ReduceIntent[] = [];
     const byKey = new Map<string, OwnOrder[]>();
+
     for (const order of this.book.ownOrders.values()) {
+      if (order.side === "buy") {
+        // price + allowance < worst avoids bigint underflow when allowance > price.
+        if (
+          worstDesiredBid === undefined ||
+          order.price + allowance < worstDesiredBid
+        ) {
+          cancels.push(order);
+          continue;
+        }
+      } else if (
+        worstDesiredAsk === undefined ||
+        order.price > worstDesiredAsk + allowance
+      ) {
+        cancels.push(order);
+        continue;
+      }
+
       const k = keyOf(order.side, order.price);
       const list = byKey.get(k);
       if (list) list.push(order);
       else byKey.set(k, [order]);
     }
 
-    const cancels: OwnOrder[] = [];
-    const reduces: ReduceIntent[] = [];
     for (const [k, orders] of byKey) {
       const want = desiredSize.get(k);
-      if (want === undefined) {
-        for (const o of orders) cancels.push(o);
-        continue;
-      }
+      // Off-grid but inside keep zone (better leftover / within-allowance) → keep.
+      if (want === undefined) continue;
+
       let have = 0n;
       for (const o of orders) have += o.size;
       if (have <= want) continue;
-      // Trim from the trailing order so earlier FIFO priority is preserved.
       let excess = have - want;
+      // Same USD size allowance as top-ups — leave dust oversizing alone.
+      if (!this.sizeDeltaAboveThreshold(orders[0].price, excess)) continue;
+      // Trim from the trailing order so earlier FIFO priority is preserved.
       for (let i = orders.length - 1; i >= 0 && excess > 0n; i--) {
         const o = orders[i];
         if (o.size <= excess) {
@@ -315,6 +352,7 @@ export class OrderExecutor {
    * New orders = desired levels missing size at exactly the desired price,
    * after applying cancels/reduces from this plan. Size increases only create
    * the delta — resting orders at that level are never cancelled for a top-up.
+   * Dust deficits (within staleSizeAllowance) are ignored.
    */
   private findNewOrders(
     desired: OrderIntent[],
@@ -326,7 +364,7 @@ export class OrderExecutor {
     for (const i of desired) {
       const have = existing.get(keyOf(i.side, i.price)) ?? 0n;
       const deficit = i.size - have;
-      if (deficit > 0n) {
+      if (deficit > 0n && this.sizeDeltaAboveThreshold(i.price, deficit)) {
         out.push({ side: i.side, price: i.price, size: deficit });
       }
     }
@@ -336,13 +374,27 @@ export class OrderExecutor {
   private hasQuantityDeficit(desired: OrderIntent[]): boolean {
     const existing = this.aggregateOwnSizeByPriceSide();
     for (const i of desired) {
-      const have = existing.get(keyOf(i.side, i.price));
-      // Deficit means: no orders at this price at all, OR fewer than desired.
-      // The `undefined` branch catches stale orders at wrong prices that the
-      // other guards (count, price-drift) would also miss.
-      if (have === undefined || i.size - have > 0n) return true;
+      const have = existing.get(keyOf(i.side, i.price)) ?? 0n;
+      const deficit = i.size - have;
+      if (deficit > 0n && this.sizeDeltaAboveThreshold(i.price, deficit)) {
+        return true;
+      }
     }
     return false;
+  }
+
+  /**
+   * True when `delta` exceeds the USD size allowance converted to venue-native
+   * qty at `price` (nearest unit). Futures (`quantityScale = 1`) rounds to
+   * whole contracts; perps uses 1e6 scale.
+   */
+  private sizeDeltaAboveThreshold(price: bigint, delta: bigint): boolean {
+    const allowanceQty = notionalToSize(
+      price,
+      this.cfg.staleSizeAllowance,
+      this.cfg.quantityScale,
+    );
+    return delta > allowanceQty;
   }
 
   private aggregateOwnSizeByPriceSide(

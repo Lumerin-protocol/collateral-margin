@@ -40,6 +40,23 @@ export function calculateNotional(price: bigint, absQuantity: bigint): bigint {
   return (price * q) / QUANTITY_SCALE;
 }
 
+/**
+ * Convert a USD notional amount to venue-native size at `price`, rounded to
+ * the nearest native unit (half-up).
+ *
+ * Inverts `notional = price * size / quantityScale`:
+ *   - perps: `quantityScale = QUANTITY_SCALE` (1e6)
+ *   - futures: `quantityScale = 1n` (size is whole contracts; 1 contract ≈ $price)
+ */
+export function notionalToSize(
+  price: bigint,
+  notionalUsd: bigint,
+  quantityScale: bigint,
+): bigint {
+  if (price <= 0n || notionalUsd <= 0n || quantityScale <= 0n) return 0n;
+  return (notionalUsd * quantityScale + price / 2n) / price;
+}
+
 /** Apply basis-point offset to a price: price * (BPS_SCALE +/- bps) / BPS_SCALE. */
 export function applyBps(price: bigint, bps: bigint): bigint {
   return (price * (BPS_SCALE + bps)) / BPS_SCALE;

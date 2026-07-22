@@ -31,6 +31,7 @@ import {
   type PortfolioMakerConfig,
 } from "./config.ts";
 import { expirySizeScale } from "../../core/sizing/expiryDecay.ts";
+import { QUANTITY_SCALE } from "../../core/math.ts";
 
 /** Shared context passed to every market factory. */
 interface BuildContext {
@@ -150,8 +151,10 @@ function buildMarket(
     instrument,
     {
       requoteCooldownMs: config.timing.requoteCooldownMs,
-      requoteThresholdTicks: config.timing.requoteThresholdTicks,
       urgentRequoteThresholdTicks: config.risk.urgentRequoteThresholdTicks,
+      staleBandAllowance: config.timing.staleBandAllowance,
+      staleSizeAllowance: config.timing.staleSizeAllowance,
+      quantityScale: venue.kind === "futures" ? 1n : QUANTITY_SCALE,
       dryRun: config.dryRun,
     },
     quoter,

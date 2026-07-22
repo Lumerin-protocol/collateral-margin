@@ -40,7 +40,7 @@ pricing:
 sizing:
   strategy: geometric-taper
   baseQuantity: "100000000" # venue-native (contracts base units)
-  numLevelsPerSide: 6
+  numLevelsPerSide: 10
   taperRatio: 0.6
 
 risk:
@@ -59,15 +59,16 @@ gas:
 
 timing:
   pollIntervalSec: 3
-  requoteThresholdTicks: 2
   requoteCooldownSec: 1
   resyncIntervalSec: 60
   levelSpacingTicks: 1
+  staleBandAllowanceUsd: 0.03
+  staleSizeAllowanceUsd: 1
 
 collateral:
   autoDeposit: true
   autoDepositMinAmount: 1
-
+  maxCollateralAmount: 4000
 oracle:
   # 60 de-duplicated samples → ±9% standard error on σ. With Chainlink heartbeat
   # of a few minutes and historyLookbackMultiplier=4, backfill covers ~4 hours

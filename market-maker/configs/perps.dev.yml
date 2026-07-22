@@ -46,7 +46,7 @@ pricing:
 sizing:
   strategy: geometric-taper
   baseQuantity: "1000000" # venue-native units (hashrate base)
-  numLevelsPerSide: 5
+  numLevelsPerSide: 10
   taperRatio: 0.6
 
 risk:
@@ -65,7 +65,6 @@ gas:
 
 timing:
   pollIntervalSec: 30
-  requoteThresholdTicks: 2
   requoteCooldownSec: 1
   resyncIntervalSec: 60
   # Perps matching is "limit" — deeper levels fill conditional on shallower
@@ -73,11 +72,13 @@ timing:
   # spread inventory risk along the book. In dev we keep it tight (1 tick)
   # to match futures and visually verify the level layout.
   levelSpacingTicks: 1
+  staleBandAllowanceUsd: 0.03
+  staleSizeAllowanceUsd: 1
 
 collateral:
   autoDeposit: true
   autoDepositMinAmount: 500
-  maxCollateralAmount: 1000
+  maxCollateralAmount: 5000
 
 oracle:
   # Window de-duplicates by price, so 60 samples ≈ 60 oracle updates regardless
