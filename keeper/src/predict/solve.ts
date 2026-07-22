@@ -325,7 +325,13 @@ export function solveFuturesClosesToTarget(
       closeQty: abs(p.netQuantity),
     }));
   }
-  return coalesceUnitPrefix(unitSequence, bestPrefix);
+  // Emit 1-qty legs in round-robin order (not coalesced/sorted by expiry).
+  // `liquidatePositions` stops once healthy; coalescing into [A:N, B:M] would
+  // drain A first and skip B. Interleaved unit legs keep the prefix balanced.
+  return unitSequence.slice(0, bestPrefix).map((expirationAt) => ({
+    expirationAt,
+    closeQty: 1n,
+  }));
 }
 
 /**

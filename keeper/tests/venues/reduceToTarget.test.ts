@@ -102,10 +102,11 @@ describe("futures venue: reduceToTarget", () => {
       bigint[],
     ];
     assert.equal(participant, USER);
-    assert.equal(expirationAts.length, 1);
-    assert.equal(expirationAts[0], EXPIRY);
-    assert.ok(closeQtys[0]! > 0n && closeQtys[0]! < 12n, "strict subset of contracts");
-    assert.ok("feeEarned" in outcome && outcome.positionsClosed === Number(closeQtys[0]));
+    assert.ok(expirationAts.length >= 1);
+    assert.ok(expirationAts.every((e) => e === EXPIRY));
+    const totalClose = closeQtys.reduce((s, q) => s + q, 0n);
+    assert.ok(totalClose > 0n && totalClose < 12n, "strict subset of contracts");
+    assert.ok("feeEarned" in outcome && outcome.positionsClosed === Number(totalClose));
   });
 
   it("caps the batch to maxLotsPerLiquidationTx (expiry-leg chunking)", async () => {
