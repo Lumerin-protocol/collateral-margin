@@ -111,7 +111,7 @@ jobs:
         with:
           repository: Lumerin-protocol/derivatives-marketplace
           # reduceOrderSize + three-arg updateOrders (PR #80).
-          ref: 9b81be323ec1bbea0891ce6f87842b92d2fb8963
+          ref: 85ce3c88afe23d2c4b6e451f7de6447cac0eda6d
           path: perps
 
       - name: Checkout futures-marketplace
@@ -119,7 +119,7 @@ jobs:
         with:
           repository: Lumerin-protocol/futures-marketplace
           # reduceOrderSize + three-arg updateOrders (PR #227).
-          ref: baec46ef8f428d7be4c397dc2d03721805c1b46f
+          ref: a2115badfbd78206c172b0bd5cb47d697985bca9
           path: futures-marketplace
 
       - name: Install perps contracts dependencies
