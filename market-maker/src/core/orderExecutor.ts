@@ -44,10 +44,11 @@ export interface OrderExecutorConfig {
  *
  * Stale-order detection (limit LOB + USD allowance): a resting buy is stale
  * iff its price is below `worstDesiredBid − staleBandAllowance`; a resting
- * sell is stale iff above `worstDesiredAsk + staleBandAllowance`. Orders
- * inside that keep zone (including better-than-grid leftovers) are kept.
- * On-grid size is reconciled (reduce / top-up) only when the size delta
- * exceeds the USD size allowance converted to native qty (nearest unit).
+ * sell is stale iff above `worstDesiredAsk + staleBandAllowance`. Slightly
+ * worse leftovers inside that zone are kept. Better-than-grid leftovers and
+ * any resting order that would lock/cross the desired opposite BBO are
+ * cancelled (self-match prevention). On-grid size is reconciled (reduce /
+ * top-up) only when the size delta exceeds the USD size allowance.
  */
 export class OrderExecutor {
   readonly stats = { ordersPlaced: 0, ordersCancelled: 0, reconcileCount: 0 };
@@ -265,10 +266,12 @@ export class OrderExecutor {
   /**
    * Cancel / reduce targets against `desired`:
    *   - outside the keep zone (worst desired ± staleBandAllowance) → cancel
+   *   - better-than-grid leftovers → cancel (avoid self-match on new creates)
+   *   - resting orders that lock/cross the desired opposite BBO → cancel
    *   - at desired prices with excess notional above threshold: reduce the
    *     trailing order in place when possible (FIFO kept); cancel whole
    *     trailing orders otherwise
-   *   - better leftovers / within-allowance off-grid → keep
+   *   - within-allowance worse off-grid → keep
    */
   private findStaleOrders(desired: OrderIntent[]): {
     cancels: OwnOrder[];
@@ -276,6 +279,8 @@ export class OrderExecutor {
   } {
     let worstDesiredBid: bigint | undefined;
     let worstDesiredAsk: bigint | undefined;
+    let bestDesiredBid: bigint | undefined;
+    let bestDesiredAsk: bigint | undefined;
     const desiredSize = new Map<string, bigint>();
     for (const i of desired) {
       const k = keyOf(i.side, i.price);
@@ -284,8 +289,16 @@ export class OrderExecutor {
         if (worstDesiredBid === undefined || i.price < worstDesiredBid) {
           worstDesiredBid = i.price;
         }
-      } else if (worstDesiredAsk === undefined || i.price > worstDesiredAsk) {
-        worstDesiredAsk = i.price;
+        if (bestDesiredBid === undefined || i.price > bestDesiredBid) {
+          bestDesiredBid = i.price;
+        }
+      } else {
+        if (worstDesiredAsk === undefined || i.price > worstDesiredAsk) {
+          worstDesiredAsk = i.price;
+        }
+        if (bestDesiredAsk === undefined || i.price < bestDesiredAsk) {
+          bestDesiredAsk = i.price;
+        }
       }
     }
 
@@ -304,10 +317,25 @@ export class OrderExecutor {
           cancels.push(order);
           continue;
         }
+        // Better-than-grid or would lock/cross desired asks → cancel (STP).
+        if (
+          (bestDesiredBid !== undefined && order.price > bestDesiredBid) ||
+          (bestDesiredAsk !== undefined && order.price >= bestDesiredAsk)
+        ) {
+          cancels.push(order);
+          continue;
+        }
       } else if (
         worstDesiredAsk === undefined ||
         order.price > worstDesiredAsk + allowance
       ) {
+        cancels.push(order);
+        continue;
+      } else if (
+        (bestDesiredAsk !== undefined && order.price < bestDesiredAsk) ||
+        (bestDesiredBid !== undefined && order.price <= bestDesiredBid)
+      ) {
+        // Better-than-grid ask or would lock/cross desired bids → cancel.
         cancels.push(order);
         continue;
       }

@@ -208,19 +208,36 @@ describe("OrderExecutor requote guards (regression)", () => {
     );
   });
 
-  it("keeps better-than-grid leftovers (does not cancel them as stale)", async () => {
+  it("cancels better-than-grid leftovers to prevent self-matches", async () => {
     const deps = makeDeps();
     const executor = makeExecutor(deps);
 
     seedOrder(deps.book, 1, "buy", 95_000_000n, 1_000_000n);
     seedOrder(deps.book, 2, "sell", 96_000_000n, 1_000_000n);
-    seedOrder(deps.book, 3, "buy", 99_000_000n, 1_000_000n); // better bid
-    seedOrder(deps.book, 4, "sell", 94_000_000n, 1_000_000n); // better ask
+    seedOrder(deps.book, 3, "buy", 99_000_000n, 1_000_000n); // better bid → would cross new asks
+    seedOrder(deps.book, 4, "sell", 94_000_000n, 1_000_000n); // better ask → would cross new bids
 
     await executor.reconcile([desiredBuy(95_000_000n), desiredSell(96_000_000n)]);
 
-    assert.equal(deps.cancelledOrderIds.length, 0, "better leftovers kept");
+    assert.equal(deps.cancelledOrderIds.length, 2, "better leftovers cancelled");
+    assert.ok(deps.cancelledOrderIds.includes(makeOrderId(3)));
+    assert.ok(deps.cancelledOrderIds.includes(makeOrderId(4)));
     assert.equal(deps.placedIntents.length, 0);
+  });
+
+  it("cancels a resting bid that locks the desired best ask", () => {
+    const deps = makeDeps();
+    const executor = makeExecutor(deps);
+    // On-grid sizes already present; leftover bid equals desired ask → lock.
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 1_000_000n);
+    seedOrder(deps.book, 2, "sell", 96_000_000n, 1_000_000n);
+    seedOrder(deps.book, 3, "buy", 96_000_000n, 500_000n);
+
+    const planned = executor.plan([desiredBuy(95_000_000n), desiredSell(96_000_000n)]);
+    assert.ok(planned);
+    assert.equal(planned.cancels.length, 1);
+    assert.equal(planned.cancels[0].orderId, makeOrderId(3));
+    assert.equal(planned.creates.length, 0);
   });
 
   /**
@@ -554,12 +571,12 @@ describe("OrderExecutor band + size allowance integration", () => {
     assert.equal(planned.reduces.length, 0, "no size trim on this slide");
   });
 
-  it("keeps in-band leftover while downsizing on-grid excess above size allowance", () => {
+  it("downsizes on-grid excess and cancels better leftovers that would self-match", () => {
     const deps = makeDeps();
     const executor = makeExecutor(deps);
     // On-grid bid with large excess (>$50) → reduce.
     seedOrder(deps.book, 1, "buy", 95_000_000n, 1_600_000n);
-    // Better leftover bid — inside band, off-grid → keep (not trimmed for size).
+    // Better leftover bid — would cross desired asks → cancel.
     seedOrder(deps.book, 2, "buy", 99_000_000n, 1_000_000n);
     seedOrder(deps.book, 3, "sell", 96_000_000n, 1_000_000n);
 
@@ -571,7 +588,8 @@ describe("OrderExecutor band + size allowance integration", () => {
     assert.equal(planned.reduces.length, 1);
     assert.equal(planned.reduces[0].orderId, makeOrderId(1));
     assert.equal(planned.reduces[0].newSize, 1_000_000n);
-    assert.equal(planned.cancels.length, 0, "better leftover must not be cancelled");
+    assert.equal(planned.cancels.length, 1, "better leftover cancelled");
+    assert.equal(planned.cancels[0].orderId, makeOrderId(2));
     assert.equal(planned.creates.length, 0);
   });
 
