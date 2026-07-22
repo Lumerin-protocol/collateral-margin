@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { TxCoordinator, type MarketIntents } from "../../src/core/txCoordinator.ts";
 import type { NonceManager } from "../../src/core/nonceManager.ts";
-import type { InstrumentAdapter, VenueAdapter } from "../../src/core/adapter.ts";
+import type { InstrumentAdapter, ReduceIntent, VenueAdapter } from "../../src/core/adapter.ts";
 
 const noop = () => {};
 function makeLogger(): never {
@@ -51,6 +51,7 @@ function makeMarket(
   cancels: string[],
   creates: { price: bigint; im: bigint; size?: bigint }[],
   expirationAt?: bigint,
+  reduces: ReduceIntent[] = [],
 ): MarketIntents {
   const instrument = {
     id,
@@ -60,9 +61,13 @@ function makeMarket(
     encodeCreate: (o: { price: bigint }) => `0xO${o.price.toString()}` as `0x${string}`,
     encodeUpdateOrders: (
       cancelIntents: { orderId: `0x${string}` }[],
+      reduceIntents: ReduceIntent[],
       orders: { price: bigint; expirationAt?: bigint }[],
     ) => {
       const cancelPart = cancelIntents.map((c) => c.orderId.slice(2)).join("+");
+      const reducePart = reduceIntents
+        .map((r) => `${r.orderId.slice(2)}=${r.newSize}`)
+        .join("+");
       const createPart = orders
         .map((o) =>
           o.expirationAt !== undefined
@@ -70,15 +75,15 @@ function makeMarket(
             : o.price.toString(),
         )
         .join(",");
-      return `0xU${cancelPart}>${createPart}` as `0x${string}`;
+      return `0xU${cancelPart}|${reducePart}>${createPart}` as `0x${string}`;
     },
     estimateOrderMargin: (o: { price: bigint }) =>
       creates.find((c) => c.price === o.price)?.im ?? 0n,
-    createCallWeight: (o: { size: bigint }) => Number(o.size),
   } as unknown as InstrumentAdapter;
   return {
     instrument,
     cancels: cancels.map((o) => ({ orderId: o as `0x${string}` })),
+    reduces,
     creates: creates.map((c) => ({ side: "buy" as const, price: c.price, size: c.size ?? 1n })),
   };
 }
@@ -118,7 +123,7 @@ describe("TxCoordinator", () => {
     assert.equal(res.ordersPlaced, 0);
     assert.equal(res.ordersCancelled, 1);
     assert.equal(submitCount(), 1);
-    assert.deepEqual(calls, ["0xUdead>"]); // updateOrders with cancels only
+    assert.deepEqual(calls, ["0xUdead|>"]); // updateOrders with cancels only
   });
 
   it("merges all same-venue expiries into one updateOrders call", async () => {
@@ -131,7 +136,27 @@ describe("TxCoordinator", () => {
     ];
     await coord.submit(markets, { maxFeePerGas: 1n, dryRun: false, canPlace: async () => true });
     assert.equal(submitCount(), 1);
-    assert.deepEqual(calls, ["0xUa+b>1@100,2@200"]);
+    assert.deepEqual(calls, ["0xUa+b|>1@100,2@200"]);
+  });
+
+  it("includes reduces in the same venue updateOrders call", async () => {
+    const { nm, submitCount } = makeNonce();
+    const coord = new TxCoordinator(nm, {}, makeLogger());
+    const { venue, calls } = makeVenue("futures");
+    const reduces: ReduceIntent[] = [
+      { orderId: "0xabc", newSize: 2n, side: "buy" },
+    ];
+    const markets = [
+      makeMarket(venue, "f1", ["0xa"], [{ price: 1n, im: 0n, size: 10n }], 100n, reduces),
+    ];
+    const res = await coord.submit(markets, {
+      maxFeePerGas: 1n,
+      dryRun: false,
+      canPlace: async () => true,
+    });
+    assert.equal(submitCount(), 1);
+    assert.deepEqual(calls, ["0xUa|abc=2>1@100"]);
+    assert.equal(res.ordersReduced, 1);
   });
 
   it("isolates venue failures: one venue's revert doesn't block the other", async () => {
@@ -153,36 +178,22 @@ describe("TxCoordinator", () => {
     assert.equal(futures.calls.length, 1);
   });
 
-  it("splits an over-budget venue into cancel-then-create updateOrders txs", async () => {
+  it("keeps a large cancel+create batch in one updateOrders (no weight splitting)", async () => {
     const { nm, submitCount } = makeNonce();
-    const coord = new TxCoordinator(nm, { maxCallsPerTx: 2 }, makeLogger());
+    const coord = new TxCoordinator(nm, {}, makeLogger());
     const { venue, calls } = makeVenue("futures");
-    // 3 cancels + create weight 3 → over budget 2 → cancel chunk(s) then create chunk.
     const markets = [
       makeMarket(
         venue,
         "f1",
         ["0xa", "0xb", "0xc"],
-        [{ price: 1n, im: 0n, size: 3n }],
+        [{ price: 1n, im: 0n, size: 50n }],
         100n,
       ),
     ];
     await coord.submit(markets, { maxFeePerGas: 1n, dryRun: false, canPlace: async () => true });
-    assert.equal(submitCount(), 3);
-    assert.deepEqual(calls, ["0xUa+b>", "0xUc>", "0xU>1@100"]);
-  });
-
-  it("keeps under-budget cancel+create in one updateOrders across expiries", async () => {
-    const { nm, submitCount } = makeNonce();
-    const coord = new TxCoordinator(nm, { maxCallsPerTx: 20 }, makeLogger());
-    const { venue, calls } = makeVenue("futures");
-    const markets = [
-      makeMarket(venue, "f1", ["0xz"], [{ price: 1n, im: 0n, size: 5n }], 100n),
-      makeMarket(venue, "f2", [], [{ price: 2n, im: 0n, size: 1n }], 200n),
-    ];
-    await coord.submit(markets, { maxFeePerGas: 1n, dryRun: false, canPlace: async () => true });
     assert.equal(submitCount(), 1);
-    assert.deepEqual(calls, ["0xUz>1@100,2@200"]);
+    assert.deepEqual(calls, ["0xUa+b+c|>1@100"]);
   });
 
   it("dry run submits nothing but reports intended counts", async () => {

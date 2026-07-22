@@ -18,7 +18,11 @@ function makeLogger(): never {
 
 interface Knobs {
   refreshFails: boolean;
-  plan: { cancels: { orderId: `0x${string}` }[]; creates: unknown[] } | null;
+  plan: {
+    cancels: { orderId: `0x${string}` }[];
+    reduces: unknown[];
+    creates: unknown[];
+  } | null;
 }
 
 function makeDeps(knobs: Knobs): { deps: MarketRuntimeDeps; knobs: Knobs; recorded: number[] } {
@@ -80,7 +84,10 @@ describe("MarketRuntime", () => {
   });
 
   it("quarantines after repeated update failures and skips planning", async () => {
-    const { deps, knobs } = makeDeps({ refreshFails: false, plan: { cancels: [], creates: [] } });
+    const { deps, knobs } = makeDeps({
+      refreshFails: false,
+      plan: { cancels: [], reduces: [], creates: [] },
+    });
     const m = new MarketRuntime(deps);
     await m.start();
 
@@ -113,7 +120,11 @@ describe("MarketRuntime", () => {
   it("plan() emits MarketIntents mapping cancels to orderIds", async () => {
     const { deps } = makeDeps({
       refreshFails: false,
-      plan: { cancels: [{ orderId: "0xabc" }], creates: [{ side: "buy", price: 1n, size: 1n }] },
+      plan: {
+        cancels: [{ orderId: "0xabc" }],
+        reduces: [],
+        creates: [{ side: "buy", price: 1n, size: 1n }],
+      },
     });
     const m = new MarketRuntime(deps);
     await m.start();
@@ -135,7 +146,10 @@ describe("MarketRuntime", () => {
   });
 
   it("lazily initializes on the first update() for a market that never started", async () => {
-    const { deps } = makeDeps({ refreshFails: false, plan: { cancels: [], creates: [] } });
+    const { deps } = makeDeps({
+      refreshFails: false,
+      plan: { cancels: [], reduces: [], creates: [] },
+    });
     let bootstrapped = 0;
     (deps.instrument as unknown as { ownOrders: { bootstrap: () => Promise<void> } }).ownOrders = {
       bootstrap: async () => {
@@ -181,7 +195,10 @@ describe("MarketRuntime", () => {
   });
 
   it("plan() returns null and records an error when quoting throws", async () => {
-    const { deps } = makeDeps({ refreshFails: false, plan: { cancels: [], creates: [] } });
+    const { deps } = makeDeps({
+      refreshFails: false,
+      plan: { cancels: [], reduces: [], creates: [] },
+    });
     (deps.quoter as unknown as { computeQuotes: () => never }).computeQuotes = () => {
       throw new Error("quote boom");
     };

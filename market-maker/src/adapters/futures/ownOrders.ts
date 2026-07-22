@@ -141,11 +141,24 @@ export class FuturesOwnOrders implements OwnOrderSource {
           orderId: evt.orderId,
           price: evt.price,
           side: evt.side,
-          size: 1n,
+          size: evt.size,
           instrumentId: this.instrumentId,
         };
         this.cache.set(evt.orderId, order);
         this.notify({ type: "added", orderId: evt.orderId, order });
+        return;
+      }
+      if (evt.type === "order-updated") {
+        const existing = this.cache.get(evt.orderId);
+        if (!existing) return;
+        if (evt.newSize === 0n) {
+          this.cache.delete(evt.orderId);
+          this.notify({ type: "removed", orderId: evt.orderId });
+          return;
+        }
+        const order: OwnOrder = { ...existing, size: evt.newSize };
+        this.cache.set(evt.orderId, order);
+        this.notify({ type: "updated", orderId: evt.orderId, order });
         return;
       }
       if (evt.type === "order-cancelled") {

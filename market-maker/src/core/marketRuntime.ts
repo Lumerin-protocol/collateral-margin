@@ -118,6 +118,7 @@ export class MarketRuntime {
       return {
         instrument: this.instrument,
         cancels: planned.cancels.map((o) => ({ orderId: o.orderId })),
+        reduces: planned.reduces,
         creates: planned.creates,
       };
     } catch (err) {

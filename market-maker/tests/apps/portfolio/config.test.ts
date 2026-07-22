@@ -114,7 +114,6 @@ describe("loadPortfolioConfig", () => {
   it("applies txCoordinator and circuitBreaker defaults", () => {
     const path = writeTmp(tmpDir, "test.yml", VALID_YAML);
     const cfg = loadPortfolioConfig({ path });
-    assert.equal(cfg.txCoordinator.maxCallsPerTx, 100);
     assert.equal(cfg.txCoordinator.confirmationTimeoutMs, 60_000);
     assert.equal(cfg.circuitBreaker.quarantineThreshold, 3);
     assert.equal(cfg.rollCheckIntervalMs, 300_000);

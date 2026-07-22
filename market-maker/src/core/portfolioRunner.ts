@@ -154,7 +154,9 @@ export async function runPortfolioTick(
     const p = m.plan(now);
     if (p) intents.push(state.pauseNew ? { ...p, creates: [] } : p);
   }
-  const active = intents.filter((i) => i.cancels.length > 0 || i.creates.length > 0);
+    const active = intents.filter(
+      (i) => i.cancels.length > 0 || (i.reduces?.length ?? 0) > 0 || i.creates.length > 0,
+    );
 
   if (active.length > 0) {
     const res = await coordinator.submit(active, {

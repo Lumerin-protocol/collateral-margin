@@ -38,11 +38,23 @@ export interface CancelIntent {
 }
 
 /**
- * Batch of cancellations and creations the adapter should execute on-chain.
- * Cancels always process before creates within each tx.
+ * Shrink a resting order in place (FIFO preserved). `newSize` is unsigned and
+ * must be strictly smaller than the resting size; `side` lets adapters apply
+ * the venue's signed-quantity convention without a book lookup.
+ */
+export interface ReduceIntent {
+  orderId: `0x${string}`;
+  newSize: bigint;
+  side: Side;
+}
+
+/**
+ * Batch of cancellations, in-place reduces, and creations the adapter should
+ * execute on-chain. Order: cancels → reduces → creates (one IM check).
  */
 export interface ExecuteOrdersIntent {
   cancels: CancelIntent[];
+  reduces?: ReduceIntent[];
   creates: OrderIntent[];
   /** Gas price cap. If not set, the wallet estimates from the network. */
   maxFeePerGas?: bigint;
@@ -75,6 +87,8 @@ export interface OwnOrderEvent {
   type: "added" | "updated" | "removed";
   order?: OwnOrder;
   orderId: `0x${string}`;
+  /** Size-only patch when full `order` is unavailable (e.g. perps OrderUpdated). */
+  newSize?: bigint;
 }
 
 /** Position snapshot for a single instrument. */
@@ -304,37 +318,21 @@ export interface InstrumentAdapter {
   encodeCancel(intent: CancelIntent): `0x${string}`;
 
   /**
-   * Encode venue `updateOrders(cancelIds, creates)` — cancels first, then
-   * GTC creates, with a single end-of-call collateral check. Either side may
-   * be empty; callers must skip the encode when both are empty.
+   * Encode venue `updateOrders(cancelIds, reduces, creates)` — cancels, then
+   * in-place reduces (FIFO kept), then GTC creates, with a single end-of-call
+   * collateral check. Any side may be empty; callers must skip the encode when
+   * all three are empty.
    */
   encodeUpdateOrders(
     cancels: CancelIntent[],
+    reduces: ReduceIntent[],
     creates: OrderIntent[],
   ): `0x${string}`;
 
   /**
-   * Relative gas weight of placing this create, in "cost units" where one unit
-   * is roughly the cheapest single call. The shared `TxCoordinator` sums these
-   * against one per-tx budget when chunking a venue batch, so venues with very
-   * different per-call gas profiles share one limiter:
-   *   - Perps:   1 per order — a create is one price-level insertion.
-   *   - Futures: `size` (qty) — `createOrder(…, int8 qty)` does one unit of
-   *              work per contract, so gas scales with total qty, not calls.
-   * Cancels are always weight 1 (the coordinator assumes this).
-   * A batched `encodeUpdateOrders` call weighs cancels + Σ create weights.
-   */
-  createCallWeight(intent: OrderIntent): number;
-
-  /**
-   * Execute a batch of order cancellations and creations on-chain.
+   * Execute a batch of order cancellations, reduces, and creations on-chain.
    *
-   * The adapter owns the full lifecycle: encoding, batching, tx chunking,
-   * nonce sequencing, and gas optimisation. The caller receives receipts
-   * for gas tracking and any non-fatal errors from failed tx chunks.
-   *
-   * Cancels are always processed before creates within each tx to free
-   * margin before adding new risk.
+   * Cancels → reduces → creates in one `updateOrders` call (one IM check).
    */
   executeOrders(intent: ExecuteOrdersIntent): Promise<ExecuteOrdersResult>;
 

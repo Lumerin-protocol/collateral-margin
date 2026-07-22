@@ -127,7 +127,6 @@ txCoordinator:
   # perps = one order per price level; futures = one contract (qty=1). Futures
   # createOrder gas scales with qty, so a full 3-expiry quote is many units and
   # must be chunked to avoid out-of-gas. Lowered from 50 for base-sepolia.
-  maxCallsPerTx: 100
   confirmationTimeoutSec: 60
   maxReplacements: 2
   replacementFeeBumpPct: 15

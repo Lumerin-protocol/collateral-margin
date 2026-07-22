@@ -101,9 +101,17 @@ export class BookTracker {
         case "added":
           if (evt.order) this.ownOrders.set(evt.orderId, evt.order);
           break;
-        case "updated":
-          if (evt.order) this.ownOrders.set(evt.orderId, evt.order);
+        case "updated": {
+          if (evt.order) {
+            this.ownOrders.set(evt.orderId, evt.order);
+          } else if (evt.newSize !== undefined) {
+            const existing = this.ownOrders.get(evt.orderId);
+            if (existing) {
+              this.ownOrders.set(evt.orderId, { ...existing, size: evt.newSize });
+            }
+          }
           break;
+        }
         case "removed":
           this.ownOrders.delete(evt.orderId);
           break;

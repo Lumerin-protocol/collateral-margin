@@ -259,6 +259,8 @@ describe("OrderExecutor quantity deficit", () => {
     executor.recordRequote(0, 0);
     const planned = executor.plan([desiredBuy(95_000_000n, 3n), desiredSell(96_000_000n, 3n)]);
     assert.ok(planned, "requote triggered by quantity deficit");
+    assert.equal(planned.cancels.length, 0, "size increase must not cancel resting");
+    assert.equal(planned.reduces.length, 0);
     assert.equal(planned.creates.length, 1, "tops up the missing buy size");
     assert.equal(planned.creates[0].size, 1n);
   });
@@ -375,19 +377,32 @@ describe("OrderExecutor stale detection", () => {
     assert.ok(!cancelled.has(makeOrderId(3)), "on-grid ask kept");
   });
 
-  it("cancels excess size at a desired price", () => {
+  it("cancels a whole trailing order when excess covers it", () => {
     const deps = makeDeps();
     const executor = makeExecutor(deps);
     seedOrder(deps.book, 1, "buy", 95_000_000n, 2n);
-    seedOrder(deps.book, 2, "buy", 95_000_000n, 2n); // aggregate 4 > desired 3
+    seedOrder(deps.book, 2, "buy", 95_000_000n, 2n); // aggregate 4 > desired 2
+
+    const planned = executor.plan([desiredBuy(95_000_000n, 2n)]);
+    assert.ok(planned);
+    assert.equal(planned.cancels.length, 1, "trailing whole order cancelled");
+    assert.equal(planned.cancels[0].orderId, makeOrderId(2));
+    assert.equal(planned.reduces.length, 0);
+    assert.equal(planned.creates.length, 0);
+  });
+
+  it("reduces trailing order in place when excess is partial", () => {
+    const deps = makeDeps();
+    const executor = makeExecutor(deps);
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 4n);
 
     const planned = executor.plan([desiredBuy(95_000_000n, 3n)]);
     assert.ok(planned);
-    assert.equal(planned.cancels.length, 1, "one whole order dropped for excess");
-    assert.equal(planned.cancels[0].orderId, makeOrderId(2));
-    // After cancelling size 2, remaining is 2 < 3 → top up 1.
-    assert.equal(planned.creates.length, 1);
-    assert.equal(planned.creates[0].size, 1n);
+    assert.equal(planned.cancels.length, 0, "FIFO kept via reduce, not cancel");
+    assert.equal(planned.reduces.length, 1);
+    assert.equal(planned.reduces[0].orderId, makeOrderId(1));
+    assert.equal(planned.reduces[0].newSize, 3n);
+    assert.equal(planned.creates.length, 0);
   });
 });
 

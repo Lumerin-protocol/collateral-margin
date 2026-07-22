@@ -104,11 +104,6 @@ const futuresVenueSchema = Type.Object(
 
 const txCoordinatorSchema = Type.Object(
   {
-    maxCallsPerTx: Type.Integer({
-      minimum: 1,
-      default: 100,
-      description: "Max cost units per tx before chunking (not raw call count).",
-    }),
     confirmationTimeoutSec: TypeSeconds({
       minimum: 1,
       default: 60,
@@ -254,7 +249,6 @@ export interface ParsedFuturesVenue {
 export type ParsedVenue = ParsedPerpsVenue | ParsedFuturesVenue;
 
 export interface ParsedTxCoordinatorConfig {
-  maxCallsPerTx: number;
   confirmationTimeoutMs: number;
   maxReplacements: number;
   replacementFeeBumpPct: number;
@@ -325,7 +319,6 @@ export function loadPortfolioConfig(
     env: opts.env,
     parse: (raw) => {
       const tx = raw.txCoordinator ?? {
-        maxCallsPerTx: 100,
         confirmationTimeoutSec: 60,
         maxReplacements: 2,
         replacementFeeBumpPct: 15,
@@ -344,7 +337,6 @@ export function loadPortfolioConfig(
         oracle: parseOracleConfig(raw.oracle),
         venues: raw.venues.map(parseVenue),
         txCoordinator: {
-          maxCallsPerTx: tx.maxCallsPerTx,
           confirmationTimeoutMs: secondsToMs(tx.confirmationTimeoutSec, "txCoordinator.confirmationTimeoutSec"),
           maxReplacements: tx.maxReplacements,
           replacementFeeBumpPct: tx.replacementFeeBumpPct,

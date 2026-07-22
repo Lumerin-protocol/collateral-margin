@@ -11,6 +11,7 @@ import type {
   OrderBookSnapshot,
   OrderIntent,
   Position,
+  ReduceIntent,
 } from "../../core/adapter.ts";
 import { FuturesAbi } from "futures-contracts/abi/Futures";
 import type { FuturesVenueAdapter } from "./venue.ts";
@@ -97,12 +98,10 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
 
   encodeUpdateOrders(
     cancels: CancelIntent[],
+    reduces: ReduceIntent[],
     creates: OrderIntent[],
   ): `0x${string}` {
-    if (cancels.length === 0 && creates.length === 0) {
-      throw new Error("futures: encodeUpdateOrders requires cancels and/or creates");
-    }
-    // Local ABI fragment until published futures-contracts includes updateOrders.
+    // Local ABI fragment until published futures-contracts includes the reduces arg.
     const updateOrdersAbi = [
       {
         type: "function",
@@ -110,6 +109,14 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
         stateMutability: "nonpayable",
         inputs: [
           { name: "_cancelIds", type: "bytes32[]" },
+          {
+            name: "_reduces",
+            type: "tuple[]",
+            components: [
+              { name: "orderId", type: "bytes32" },
+              { name: "newQuantity", type: "int256" },
+            ],
+          },
           {
             name: "_intents",
             type: "tuple[]",
@@ -123,6 +130,15 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
         outputs: [],
       },
     ] as const;
+    const reduceBatch = reduces.map((r) => {
+      if (r.newSize <= 0n) {
+        throw new Error(`futures: reduce newSize ${r.newSize} must be > 0`);
+      }
+      return {
+        orderId: r.orderId,
+        newQuantity: r.side === "buy" ? r.newSize : -r.newSize,
+      };
+    });
     const batch = creates.map((intent) => {
       const qty = intent.size;
       if (qty <= 0n) {
@@ -137,7 +153,7 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
     return encodeFunctionData({
       abi: updateOrdersAbi,
       functionName: "updateOrders",
-      args: [cancels.map((c) => c.orderId), batch],
+      args: [cancels.map((c) => c.orderId), reduceBatch, batch],
     });
   }
 
@@ -150,26 +166,23 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
   }
 
   /**
-   * Cost units = qty. A futures create does work proportional to matched /
-   * resting contracts, so gas scales with qty (a qty=1 create ≈ one cancel).
-   */
-  createCallWeight(intent: OrderIntent): number {
-    return Number(intent.size);
-  }
-
-  /**
-   * Execute cancels then creates for this expiry via `updateOrders`. Kept for
-   * single-market callers and tests; the portfolio runner routes through the
-   * shared `TxCoordinator` instead.
+   * Execute cancels + reduces + creates via `updateOrders` (IM checked once).
    */
   async executeOrders(intent: ExecuteOrdersIntent): Promise<ExecuteOrdersResult> {
     return this.executeOrdersImpl(intent, this.venue.getLogger());
   }
 
   /** Build the call list for this expiry: one `updateOrders` when there is work. */
-  buildCalls(intent: { cancels: CancelIntent[]; creates: OrderIntent[] }): `0x${string}`[] {
-    if (intent.cancels.length === 0 && intent.creates.length === 0) return [];
-    return [this.encodeUpdateOrders(intent.cancels, intent.creates)];
+  buildCalls(intent: {
+    cancels: CancelIntent[];
+    reduces?: ReduceIntent[];
+    creates: OrderIntent[];
+  }): `0x${string}`[] {
+    const reduces = intent.reduces ?? [];
+    if (intent.cancels.length === 0 && reduces.length === 0 && intent.creates.length === 0) {
+      return [];
+    }
+    return [this.encodeUpdateOrders(intent.cancels, reduces, intent.creates)];
   }
 
   // ── Private implementation ──────────────────────────────────────────
@@ -178,14 +191,19 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
     intent: ExecuteOrdersIntent,
     logger: pino.Logger,
   ): Promise<ExecuteOrdersResult> {
-    if (intent.cancels.length === 0 && intent.creates.length === 0) {
+    const reduces = intent.reduces ?? [];
+    if (intent.cancels.length === 0 && reduces.length === 0 && intent.creates.length === 0) {
       return { receipts: [], errors: [] };
     }
-    const data = this.encodeUpdateOrders(intent.cancels, intent.creates);
+    const data = this.encodeUpdateOrders(intent.cancels, reduces, intent.creates);
 
     if (intent.dryRun) {
       logger.info(
-        { cancels: intent.cancels.length, creates: intent.creates.length },
+        {
+          cancels: intent.cancels.length,
+          reduces: reduces.length,
+          creates: intent.creates.length,
+        },
         "DRY RUN: would send updateOrders",
       );
       return { receipts: [], errors: [] };
@@ -201,6 +219,7 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
       logger.info(
         {
           cancels: intent.cancels.length,
+          reduces: reduces.length,
           creates: intent.creates.length,
           gas: receipt.gasUsed.toString(),
         },

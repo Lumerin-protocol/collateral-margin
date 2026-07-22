@@ -297,7 +297,7 @@ async function main(): Promise<void> {
   );
   const coordinator = new TxCoordinator(
     nonce,
-    { maxCallsPerTx: config.txCoordinator.maxCallsPerTx },
+    {},
     logger,
   );
 
