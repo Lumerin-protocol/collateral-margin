@@ -208,19 +208,36 @@ describe("OrderExecutor requote guards (regression)", () => {
     );
   });
 
-  it("keeps better-than-grid leftovers (does not cancel them as stale)", async () => {
+  it("cancels better-than-grid leftovers to prevent self-matches", async () => {
     const deps = makeDeps();
     const executor = makeExecutor(deps);
 
     seedOrder(deps.book, 1, "buy", 95_000_000n, 1_000_000n);
     seedOrder(deps.book, 2, "sell", 96_000_000n, 1_000_000n);
-    seedOrder(deps.book, 3, "buy", 99_000_000n, 1_000_000n); // better bid
-    seedOrder(deps.book, 4, "sell", 94_000_000n, 1_000_000n); // better ask
+    seedOrder(deps.book, 3, "buy", 99_000_000n, 1_000_000n); // better bid → would cross new asks
+    seedOrder(deps.book, 4, "sell", 94_000_000n, 1_000_000n); // better ask → would cross new bids
 
     await executor.reconcile([desiredBuy(95_000_000n), desiredSell(96_000_000n)]);
 
-    assert.equal(deps.cancelledOrderIds.length, 0, "better leftovers kept");
+    assert.equal(deps.cancelledOrderIds.length, 2, "better leftovers cancelled");
+    assert.ok(deps.cancelledOrderIds.includes(makeOrderId(3)));
+    assert.ok(deps.cancelledOrderIds.includes(makeOrderId(4)));
     assert.equal(deps.placedIntents.length, 0);
+  });
+
+  it("cancels a resting bid that locks the desired best ask", () => {
+    const deps = makeDeps();
+    const executor = makeExecutor(deps);
+    // On-grid sizes already present; leftover bid equals desired ask → lock.
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 1_000_000n);
+    seedOrder(deps.book, 2, "sell", 96_000_000n, 1_000_000n);
+    seedOrder(deps.book, 3, "buy", 96_000_000n, 500_000n);
+
+    const planned = executor.plan([desiredBuy(95_000_000n), desiredSell(96_000_000n)]);
+    assert.ok(planned);
+    assert.equal(planned.cancels.length, 1);
+    assert.equal(planned.cancels[0].orderId, makeOrderId(3));
+    assert.equal(planned.creates.length, 0);
   });
 
   /**
@@ -511,6 +528,110 @@ describe("OrderExecutor stale detection", () => {
     const planned = executor.plan([desiredBuy(95_000_000n, 1n)]);
     assert.ok(planned);
     assert.ok(planned.cancels.length + planned.reduces.length > 0);
+  });
+});
+
+// ── combined band + size (grid-slide / strict mode) ────────────────────────
+
+describe("OrderExecutor band + size allowance integration", () => {
+  it("on a 1-tick grid slide: places new levels, keeps in-band leftovers, cancels outside", () => {
+    const deps = makeDeps();
+    const executor = makeExecutor(deps, {
+      staleBandAllowance: DEFAULT_ALLOWANCE, // $0.03
+      staleSizeAllowance: DEFAULT_SIZE_ALLOWANCE,
+    });
+
+    // Prior book at mid≈95.5: bid@95 / ask@96 (full size).
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 1_000_000n);
+    seedOrder(deps.book, 2, "sell", 96_000_000n, 1_000_000n);
+    // Leftover from an earlier failed cancel — slightly worse bid, still in band
+    // once the grid slides to worstBid=94.99 (94_990_000): 94.98 >= 94.99−0.03.
+    seedOrder(deps.book, 3, "buy", 94_980_000n, 1_000_000n);
+    // Far worse ask — outside new worstAsk=97.01 + 0.03.
+    seedOrder(deps.book, 4, "sell", 98_000_000n, 1_000_000n);
+
+    // Grid slides up one tick on each side (new levels at 94.99 / 97.01).
+    const planned = executor.plan([
+      desiredBuy(95_000_000n),
+      desiredBuy(94_990_000n),
+      desiredSell(96_000_000n),
+      desiredSell(97_010_000n),
+    ]);
+    assert.ok(planned);
+
+    const cancelled = new Set(planned.cancels.map((o) => o.orderId));
+    assert.ok(cancelled.has(makeOrderId(4)), "far ask cancelled");
+    assert.ok(!cancelled.has(makeOrderId(1)), "old on-grid bid kept (now better leftover)");
+    assert.ok(!cancelled.has(makeOrderId(2)), "old on-grid ask kept");
+    assert.ok(!cancelled.has(makeOrderId(3)), "in-band worse bid kept");
+
+    const createdPrices = new Set(planned.creates.map((c) => c.price));
+    assert.ok(createdPrices.has(94_990_000n), "new bid level placed");
+    assert.ok(createdPrices.has(97_010_000n), "new ask level placed");
+    assert.equal(planned.reduces.length, 0, "no size trim on this slide");
+  });
+
+  it("downsizes on-grid excess and cancels better leftovers that would self-match", () => {
+    const deps = makeDeps();
+    const executor = makeExecutor(deps);
+    // On-grid bid with large excess (>$50) → reduce.
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 1_600_000n);
+    // Better leftover bid — would cross desired asks → cancel.
+    seedOrder(deps.book, 2, "buy", 99_000_000n, 1_000_000n);
+    seedOrder(deps.book, 3, "sell", 96_000_000n, 1_000_000n);
+
+    const planned = executor.plan([
+      desiredBuy(95_000_000n, 1_000_000n),
+      desiredSell(96_000_000n, 1_000_000n),
+    ]);
+    assert.ok(planned);
+    assert.equal(planned.reduces.length, 1);
+    assert.equal(planned.reduces[0].orderId, makeOrderId(1));
+    assert.equal(planned.reduces[0].newSize, 1_000_000n);
+    assert.equal(planned.cancels.length, 1, "better leftover cancelled");
+    assert.equal(planned.cancels[0].orderId, makeOrderId(2));
+    assert.equal(planned.creates.length, 0);
+  });
+
+  it("strict mode (zero allowances): cancels any off-grid and trims any size excess", () => {
+    const deps = makeDeps();
+    const executor = makeExecutor(deps, {
+      staleBandAllowance: 0n,
+      staleSizeAllowance: 0n,
+    });
+
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 1_000_010n); // tiny excess → trim
+    seedOrder(deps.book, 2, "buy", 94_990_000n, 1_000_000n); // 1 tick worse, no band slack → cancel
+    seedOrder(deps.book, 3, "sell", 96_000_000n, 1_000_000n);
+
+    const planned = executor.plan([
+      desiredBuy(95_000_000n, 1_000_000n),
+      desiredSell(96_000_000n, 1_000_000n),
+    ]);
+    assert.ok(planned);
+    const cancelled = new Set(planned.cancels.map((o) => o.orderId));
+    assert.ok(cancelled.has(makeOrderId(2)), "off-grid cancelled with zero band allowance");
+    assert.ok(!cancelled.has(makeOrderId(1)), "on-grid kept for reduce");
+    assert.equal(planned.reduces.length, 1);
+    assert.equal(planned.reduces[0].newSize, 1_000_000n);
+    assert.equal(planned.creates.length, 0);
+  });
+
+  it("does not requote on mid move when book stays inside band and size allowance", () => {
+    const deps = makeDeps();
+    const executor = makeExecutor(deps);
+    // Book matches desired; mid can move but structural gates stay clean.
+    seedOrder(deps.book, 1, "buy", 95_000_000n, 1_000_000n);
+    seedOrder(deps.book, 2, "sell", 96_000_000n, 1_000_000n);
+    executor.recordRequote(0, 0);
+    // Simulate oracle mid drift without changing the desired grid.
+    (deps.oracle as { currentPrice: bigint }).currentPrice = 100_050_000n;
+
+    assert.equal(
+      executor.plan([desiredBuy(95_000_000n), desiredSell(96_000_000n)]),
+      null,
+      "mid drift alone must not trigger requote after band/size gates",
+    );
   });
 });
 
