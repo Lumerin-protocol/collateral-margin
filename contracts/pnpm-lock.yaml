@@ -42,6 +42,9 @@ importers:
       hardhat:
         specifier: ^3.9.1
         version: 3.9.1
+      hardhat-viem-abi:
+        specifier: github:lsheva/hardhat-viem-abi#v1.0.0-alpha.1&path:packages/hardhat-viem-abi
+        version: git+https://git@github.com:lsheva/hardhat-viem-abi.git#194bf0c28cc1ef7a37e4d6aec024fbd191f5b8a9&path:packages/hardhat-viem-abi(hardhat@3.9.1)(viem@2.52.2(typescript@5.9.3)(zod@3.25.76))
       typescript:
         specifier: ^5.8.0
         version: 5.9.3
@@ -750,6 +753,14 @@ packages:
 
   get-tsconfig@4.13.7:
     resolution: {integrity: sha512-7tN6rFgBlMgpBML5j8typ92BKFi2sFQvIdpAqLA2beia5avZDrMs0FLZiM5etShWq5irVyGcGMEA1jcDaK7A/Q==}
+
+  hardhat-viem-abi@git+https://git@github.com:lsheva/hardhat-viem-abi.git#194bf0c28cc1ef7a37e4d6aec024fbd191f5b8a9&path:packages/hardhat-viem-abi:
+    resolution: {commit: 194bf0c28cc1ef7a37e4d6aec024fbd191f5b8a9, path: packages/hardhat-viem-abi, repo: git@github.com:lsheva/hardhat-viem-abi.git, type: git}
+    version: 1.0.0-alpha.1
+    engines: {node: '>=22'}
+    peerDependencies:
+      hardhat: ^3.0.0
+      viem: ^2.0.0
 
   hardhat@3.9.1:
     resolution: {integrity: sha512-yg+0oH5tWqdsxITh6fAJjAWOSHOkC2VPlsJDJwoifs2QS1t7kyRciMy5O2F846qzH+4iqRn1rbv/5voykX3RSQ==}
@@ -1694,6 +1705,11 @@ snapshots:
   get-tsconfig@4.13.7:
     dependencies:
       resolve-pkg-maps: 1.0.0
+
+  hardhat-viem-abi@git+https://git@github.com:lsheva/hardhat-viem-abi.git#194bf0c28cc1ef7a37e4d6aec024fbd191f5b8a9&path:packages/hardhat-viem-abi(hardhat@3.9.1)(viem@2.52.2(typescript@5.9.3)(zod@3.25.76)):
+    dependencies:
+      hardhat: 3.9.1
+      viem: 2.52.2(typescript@5.9.3)(zod@3.25.76)
 
   hardhat@3.9.1:
     dependencies:

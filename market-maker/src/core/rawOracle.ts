@@ -7,17 +7,16 @@
  * 2-tick floor on the symmetric bid/ask layout.
  *
  * `RawOracleReader` reads the underlying Chainlink aggregator directly and
- * applies the same `10^(oracle.decimals − token.decimals)` rebase AND the same
- * contract-size multiplier (`contractSizeHpsDay / ORACLE_UNIT_HPS_DAY`) the venue does,
+ * applies the same `10^(oracle.decimals − token.decimals)` rebase the venue does,
  * but skips the tick rounding. The MM gets a unit-precision mid that lands
  * between ticks ~99% of the time, so `roundDownToTick(r) → bidMid` and
  * `roundUpToTick(r) → askMid` produce a 1-tick spread without any extra
  * pricing-strategy plumbing.
  *
- * The two venues differ only in *how* the (oracle address, scaling divisor,
- * contract-size multiplier) tuple is discovered. Each adapter supplies that as a
- * `resolve()` callback; the reader caches the result for the lifetime of the
- * process (all three change only on `setOracle`/`setContractSize`-style admin txs).
+ * The two venues differ only in *how* the (oracle address, scaling divisor)
+ * tuple is discovered. Each adapter supplies that as a `resolve()` callback;
+ * the reader caches the result for the lifetime of the process (both change
+ * only on `setOracle`-style admin txs).
  */
 
 import type { PublicClient } from "viem";
@@ -50,10 +49,6 @@ export interface RawOracleConfig {
   oracle: `0x${string}`;
   /** 10^(oracle.decimals − token.decimals); used to rebase the answer to token decimals. */
   divisor: bigint;
-  /** Contract size in hashes/s·day (`contractSizeHpsDay`). Numerator of the unit rebase. */
-  contractSizeHpsDay: bigint;
-  /** The oracle's quote basis in hashes/s·day (`ORACLE_UNIT_HPS_DAY`). Denominator of the unit rebase. */
-  oracleUnitHpsDay: bigint;
 }
 
 export class RawOracleReader {
@@ -88,9 +83,8 @@ export class RawOracleReader {
     if (answer <= 0n) {
       throw new Error(`${this.label}: oracle returned non-positive answer (${answer.toString()})`);
     }
-    // Mirror the venue's `getMarketPrice()`: rebase decimals first, then apply the
-    // contract-size multiplier (contractSizeHpsDay / ORACLE_UNIT_HPS_DAY).
-    return ((answer / this.cache.divisor) * this.cache.contractSizeHpsDay) / this.cache.oracleUnitHpsDay;
+    // Mirror the venue's `getMarketPrice()` decimal rebase (no unit factor).
+    return answer / this.cache.divisor;
   }
 
   /** Drop cached (oracle, divisor) — next `read()` will re-resolve. */

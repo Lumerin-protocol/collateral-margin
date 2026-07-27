@@ -109,28 +109,17 @@ export class PerpsVenueAdapter implements VenueAdapter {
           abi: HashPowerPerpsDEXAbi,
           functionName: "priceOracle",
         });
-        const [oracleDecimals, tokenDecimals, contractSizeHpsDay, oracleUnitHpsDay] =
-          await this.publicClient.multicall({
-            allowFailure: false,
-            contracts: [
-              {
-                address: oracle,
-                abi: chainlinkAggregatorAbi,
-                functionName: "decimals",
-              },
-              { address: token, abi: erc20Abi, functionName: "decimals" },
-              {
-                address: this.address,
-                abi: HashPowerPerpsDEXAbi,
-                functionName: "CONTRACT_SIZE_HPS_DAY",
-              },
-              {
-                address: this.address,
-                abi: HashPowerPerpsDEXAbi,
-                functionName: "ORACLE_UNIT_HPS_DAY",
-              },
-            ],
-          });
+        const [oracleDecimals, tokenDecimals] = await this.publicClient.multicall({
+          allowFailure: false,
+          contracts: [
+            {
+              address: oracle,
+              abi: chainlinkAggregatorAbi,
+              functionName: "decimals",
+            },
+            { address: token, abi: erc20Abi, functionName: "decimals" },
+          ],
+        });
         if (tokenDecimals > oracleDecimals) {
           throw new Error(
             `perps: tokenDecimals (${tokenDecimals}) > oracleDecimals (${oracleDecimals})`,
@@ -139,8 +128,6 @@ export class PerpsVenueAdapter implements VenueAdapter {
         return {
           oracle,
           divisor: 10n ** BigInt(oracleDecimals - tokenDecimals),
-          contractSizeHpsDay,
-          oracleUnitHpsDay,
         };
       },
     });
