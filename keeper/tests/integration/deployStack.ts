@@ -93,17 +93,16 @@ export interface DeployedStack {
     tokenDecimals: number;
     oracleDecimals: number;
     /**
-     * Raw hashprice oracle answer (per 100 TH/s·day, i.e. `ORACLE_UNIT_HPS_DAY`).
-     * Both venues rebase this to a per-contract mark via
-     * `market = answer × CONTRACT_SIZE_HPS_DAY / ORACLE_UNIT_HPS_DAY` (= ×10),
-     * so this seed is `initialMarketPrice / 10`. Fixtures that need to re-post
-     * the oracle (e.g. delivery settlement) write this value directly.
+     * Raw hashprice oracle answer (per 1 PH/s·day). Matches `initialMarketPrice`
+     * when oracle and token decimals align — venues apply only decimal scaling.
+     * Fixtures that need to re-post the oracle (e.g. delivery settlement) write
+     * this value directly.
      */
     initialHashprice: bigint;
     /**
-     * Per-contract mark at deploy time (= `initialHashprice × 10`). This is the
-     * unit orders and positions are denominated in — scenarios use it as the
-     * at-the-money entry price.
+     * Per-contract mark at deploy time (= `initialHashprice` after decimal scale).
+     * This is the unit orders and positions are denominated in — scenarios use
+     * it as the at-the-money entry price.
      */
     initialMarketPrice: bigint;
     initialBtcUsdc: bigint;
@@ -125,24 +124,14 @@ const ORACLE_DECIMALS = 6;
 const QUANTITY_DECIMALS = 6;
 
 /**
- * Ratio by which both venues rebase the oracle answer into a per-contract mark:
- * `CONTRACT_SIZE_HPS_DAY / ORACLE_UNIT_HPS_DAY = 1e15 / 1e14 = 10`. The oracle
- * quotes 100 TH/s·day; one contract settles 1 PH/s·day, so the mark is ×10 the
- * raw answer. Exported so scenarios convert market prices → oracle answers in
- * one place.
- */
-export const ORACLE_TO_MARKET_MULTIPLIER = 10n;
-
-/**
  * Per-contract mark at deploy time. Positions and orders are denominated in this
- * (contract) unit; the oracle answer is seeded at `/ ORACLE_TO_MARKET_MULTIPLIER`
- * so `getMarketPrice()` (answer × 10) lands back here. Kept at $4.21 so the
- * pre-existing perps fixtures (which never carried the duration factor) keep
- * their dollar sizing unchanged.
+ * (contract) unit; the oracle answer is seeded to the same value so
+ * `getMarketPrice()` lands here (oracle already quotes 1 PH/s·day). Kept at
+ * $4.21 so pre-existing perps fixtures keep their dollar sizing unchanged.
  */
 const INITIAL_MARKET_PRICE = parseUnits("4.21", TOKEN_DECIMALS);
-/** Raw hashprice oracle answer (per 100 TH/s·day) — rebased ×10 into the mark above. */
-const INITIAL_HASHPRICE = INITIAL_MARKET_PRICE / ORACLE_TO_MARKET_MULTIPLIER;
+/** Raw hashprice oracle answer (per 1 PH/s·day) — equals the mark above. */
+const INITIAL_HASHPRICE = INITIAL_MARKET_PRICE;
 /** Reference BTC/USDC mid-price; only the *delta* matters for predictor tests. */
 const INITIAL_BTC_USDC = parseUnits("65000", ORACLE_DECIMALS);
 

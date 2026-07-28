@@ -1,13 +1,13 @@
 import { configVariable, defineConfig } from "hardhat/config";
 import hardhatToolboxViem from "@nomicfoundation/hardhat-toolbox-viem";
-import codegenPlugin from "./plugins/codegen/index.ts";
+import hardhatViemAbi from "hardhat-viem-abi";
 import { tryLoadEnvFile } from "./lib/env.ts";
 
 tryLoadEnvFile("./../.env");
 tryLoadEnvFile(".env");
 
 export default defineConfig({
-  plugins: [hardhatToolboxViem, codegenPlugin],
+  plugins: [hardhatToolboxViem, hardhatViemAbi],
   codegen: {
     contracts: [
       "CollateralVault",

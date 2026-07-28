@@ -125,7 +125,7 @@ export class FuturesVenueAdapter implements VenueAdapter {
       publicClient: this.publicClient,
       label: "futures",
       resolve: async () => {
-        const [oracle, divisor, contractSizeHpsDay, oracleUnitHpsDay] = await this.publicClient.multicall({
+        const [oracle, divisor] = await this.publicClient.multicall({
           allowFailure: false,
           contracts: [
             {
@@ -138,19 +138,9 @@ export class FuturesVenueAdapter implements VenueAdapter {
               abi: FuturesAbi,
               functionName: "hashpriceScalingDivisor",
             },
-            {
-              address: this.address,
-              abi: FuturesAbi,
-              functionName: "CONTRACT_SIZE_HPS_DAY",
-            },
-            {
-              address: this.address,
-              abi: FuturesAbi,
-              functionName: "ORACLE_UNIT_HPS_DAY",
-            },
           ],
         });
-        return { oracle, divisor, contractSizeHpsDay, oracleUnitHpsDay };
+        return { oracle, divisor };
       },
     });
   }

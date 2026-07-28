@@ -1,11 +1,6 @@
 import { parseUnits, type Address } from "viem";
 import { hardhat } from "viem/chains";
-import {
-  deployStack,
-  ORACLE_TO_MARKET_MULTIPLIER,
-  type DeployedStack,
-  type Wallet,
-} from "./deployStack.ts";
+import { deployStack, type DeployedStack, type Wallet } from "./deployStack.ts";
 
 /**
  * Fixture builders.
@@ -36,14 +31,13 @@ import {
 // ─────────────────────────────────────────────────────────────────────────
 
 export interface BaseFixture extends DeployedStack {
-  /** Write a raw hashprice *oracle answer* (per 100 TH/s·day). */
+  /** Write a raw hashprice *oracle answer* (per 1 PH/s·day). */
   bumpHashprice(newPrice: bigint): Promise<void>;
   bumpBtcUsdc(newPrice: bigint): Promise<void>;
   /**
-   * Set the per-contract *mark* (`getMarketPrice()` value). Internally divides
-   * by `ORACLE_TO_MARKET_MULTIPLIER` (×10 rebase) before writing the oracle, so
-   * callers can reason in the same contract unit that orders/positions use.
-   * Does not touch BTC/USDC — used to stage a fixture's at-the-money entry mark.
+   * Set the per-contract *mark* (`getMarketPrice()` value). Writes the same
+   * value to the oracle (oracle already quotes 1 PH/s·day). Does not touch
+   * BTC/USDC — used to stage a fixture's at-the-money entry mark.
    */
   setMark(marketPrice: bigint): Promise<void>;
   /** Deposit USDC into the vault from the given (test-known) wallet. */
@@ -189,27 +183,21 @@ export interface CrossVenueOrdersAndPositionsFixture extends CrossVenueFixture {
 // Base fixture
 // ─────────────────────────────────────────────────────────────────────────
 
-/** Convert a per-contract mark into the raw oracle answer the venues rebase ×10. */
-function markToOracle(marketPrice: bigint): bigint {
-  return marketPrice / ORACLE_TO_MARKET_MULTIPLIER;
-}
-
 export async function baseFixture(rpcUrl: string): Promise<BaseFixture> {
   const stack = await deployStack(rpcUrl);
   return {
     ...stack,
     bumpHashprice: (price) => writeOracle(stack, stack.addresses.hashpriceOracle, price),
     bumpBtcUsdc: (price) => writeOracle(stack, stack.addresses.btcUsdcFeed, price),
-    setMark: (marketPrice) =>
-      writeOracle(stack, stack.addresses.hashpriceOracle, markToOracle(marketPrice)),
+    setMark: (marketPrice) => writeOracle(stack, stack.addresses.hashpriceOracle, marketPrice),
     deposit: (user, amount) => depositTo(stack, user, amount),
     crashOracles: async (marketPrice) => {
-      await writeOracle(stack, stack.addresses.hashpriceOracle, markToOracle(marketPrice));
+      await writeOracle(stack, stack.addresses.hashpriceOracle, marketPrice);
       const movedBtc = (stack.config.initialBtcUsdc * 9n) / 10n;
       await writeOracle(stack, stack.addresses.btcUsdcFeed, movedBtc);
     },
     pumpOracles: async (marketPrice) => {
-      await writeOracle(stack, stack.addresses.hashpriceOracle, markToOracle(marketPrice));
+      await writeOracle(stack, stack.addresses.hashpriceOracle, marketPrice);
       const movedBtc = (stack.config.initialBtcUsdc * 11n) / 10n;
       await writeOracle(stack, stack.addresses.btcUsdcFeed, movedBtc);
     },

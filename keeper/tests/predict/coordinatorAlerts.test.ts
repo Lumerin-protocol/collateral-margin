@@ -64,11 +64,6 @@ function buildHarness({ balance, perpEntry }: { balance: bigint; perpEntry: bigi
     publicClient: {
       readContract: async ({ functionName }: { functionName: string }) => {
         if (functionName === "decimals") return 8;
-        // Contract-size rebase reads (PriceFeed.start). Equal values → 1×
-        // passthrough, so the streamed price stays $100 and matches the IM/MM
-        // the harness derives from the same answer.
-        if (functionName === "CONTRACT_SIZE_HPS_DAY") return 100n * 10n ** 12n;
-        if (functionName === "ORACLE_UNIT_HPS_DAY") return 100n * 10n ** 12n;
         if (functionName === "latestRoundData") {
           return [1n, oracleAnswer, 1_000n, 1_000n, 1n] as const;
         }

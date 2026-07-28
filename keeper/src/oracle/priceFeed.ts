@@ -1,4 +1,3 @@
-import { HashPowerPerpsDEXAbi } from "derivatives-marketplace-abi/HashPowerPerpsDEX.ts";
 import type pino from "pino";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
@@ -39,13 +38,8 @@ export type PriceListener = (update: PriceUpdate) => void;
  * The feed also handles the upstream-decimals → token-decimals rebase: the
  * aggregator answer is `oracle.decimals()` (typically 8 for HashpriceUSD);
  * we rescale to the perps/futures token decimals (USDC = 6) so consumers
- * compare apples to apples with `getMarketPrice()`.
- *
- * The oracle quotes the price of `ORACLE_UNIT_HPS_DAY` (100 TH/s over a day), but the
- * venues denominate one contract in `contractSizeHpsDay` (default 1e15 = 1 PH/s over a
- * day). We read that contract-size multiplier from the perps venue once at `start()` and
- * apply `contractSizeHpsDay / ORACLE_UNIT_HPS_DAY` so the streamed price matches on-chain
- * `getMarketPrice()`. Both venues are assumed to share the same contract size.
+ * compare apples to apples with `getMarketPrice()`. The oracle already quotes
+ * 1 PH/s per day (= venue `CONTRACT_SIZE_HPS_DAY`), so no unit rebase is applied.
  *
  * Lifecycle:
  *   - `start()`: read decimals, prime `current` via one `latestRoundData`,
@@ -60,10 +54,6 @@ export class PriceFeed {
   private unwatch: (() => void) | undefined;
   /** 10^(oracleDecimals - tokenDecimals). Set during `start()`. */
   private rescaleDivisor: bigint = 1n;
-  /** Contract size in hashes/s·day (`contractSizeHpsDay`). Set during `start()`. */
-  private contractSizeHpsDay: bigint = 1n;
-  /** Oracle quote basis in hashes/s·day (`ORACLE_UNIT_HPS_DAY`). Set during `start()`. */
-  private oracleUnitHpsDay: bigint = 1n;
 
   private readonly chain: Chain;
   private readonly config: Config;
@@ -102,28 +92,6 @@ export class PriceFeed {
     }
     this.rescaleDivisor = 10n ** BigInt(oracleDecimals - this.tokenDecimals);
 
-    // Rebase from the oracle's quote basis (100 TH/s/day) to one contract unit
-    // (contractSizeHpsDay/day), matching `getMarketPrice()` on-chain.
-    const [contractSizeHpsDay, oracleUnitHpsDay] = await Promise.all([
-      this.chain.publicClient.readContract({
-        address: this.config.perps.address,
-        abi: HashPowerPerpsDEXAbi,
-        functionName: "CONTRACT_SIZE_HPS_DAY",
-      }) as Promise<bigint>,
-      this.chain.publicClient.readContract({
-        address: this.config.perps.address,
-        abi: HashPowerPerpsDEXAbi,
-        functionName: "ORACLE_UNIT_HPS_DAY",
-      }) as Promise<bigint>,
-    ]);
-    if (contractSizeHpsDay <= 0n || oracleUnitHpsDay <= 0n) {
-      throw new Error(
-        `PriceFeed: invalid contract size (contractSizeHpsDay=${contractSizeHpsDay}, ORACLE_UNIT_HPS_DAY=${oracleUnitHpsDay})`,
-      );
-    }
-    this.contractSizeHpsDay = contractSizeHpsDay;
-    this.oracleUnitHpsDay = oracleUnitHpsDay;
-
     await this.refresh("start");
 
     // We watch BTC/USDC (not HashpriceUSD) because HashpriceUSD is a pure
@@ -147,8 +115,6 @@ export class PriceFeed {
         btcUsdcFeed: this.config.oracle.btcUsdcFeedAddress,
         oracleDecimals,
         tokenDecimals: this.tokenDecimals,
-        contractSizeHpsDay: this.contractSizeHpsDay,
-        oracleUnitHpsDay: this.oracleUnitHpsDay,
         currentPrice: this.currentPrice,
       },
       "PriceFeed started",
@@ -199,9 +165,8 @@ export class PriceFeed {
       return;
     }
 
-    // Mirror on-chain `getMarketPrice()`: rebase decimals first, then apply the
-    // contract-size multiplier (contractSizeHpsDay / ORACLE_UNIT_HPS_DAY).
-    const next = ((answer / this.rescaleDivisor) * this.contractSizeHpsDay) / this.oracleUnitHpsDay;
+    // Mirror on-chain `getMarketPrice()`: rebase decimals only (oracle quotes 1 PH/s/day).
+    const next = answer / this.rescaleDivisor;
     const prev = this.currentPrice;
     if (prev === next) return;
 
