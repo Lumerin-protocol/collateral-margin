@@ -5,7 +5,9 @@ name: Publish @hashpower/collateral-abi
 # semver-correct: the ABI *is* the package's public API, so CI diffs the
 # built ABI surface against the last published version to compute the bump
 # (removed/changed entry -> major, added entry -> minor, metadata -> patch)
-# and commits the new version back before publishing.
+# and publishes with that version. Nothing is committed back — the branch is
+# protected — so the version of record lives on npm and each release is
+# marked with a git tag (collateral-abi-vX.Y.Z) on the source commit.
 #
 # Auth uses npm Trusted Publishing (OIDC) — no NPM_TOKEN secret.
 # NOTE: the very first release must be published manually
@@ -29,7 +31,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write # push the automated version bump
+  contents: write # push release tags
   id-token: write # npm provenance / trusted publishing
 
 concurrency:
@@ -98,24 +100,26 @@ jobs:
             exit 0
           fi
 
-          # Baseline on the published version, then apply the computed bump
+          # Baseline on the published version, then apply the computed bump.
+          # Working-copy only: dev is protected (PRs required) so CI never
+          # pushes commits. npm holds the version of record.
           npm version "$PUBLISHED" --no-git-tag-version --allow-same-version
           npm version "$LEVEL" --no-git-tag-version
           NEW=$(node -p "require('./package.json').version")
-
-          if ! git diff --quiet -- package.json; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add package.json
-            git commit -m "chore(collateral-abi): v$NEW ($LEVEL) [skip ci]"
-            git push
-          fi
           echo "version=$NEW" >> "$GITHUB_OUTPUT"
           echo "Version: $NEW ($LEVEL bump from $PUBLISHED)"
 
       - name: Publish
         if: steps.bump.outputs.level != 'none'
         run: npm publish --access public --provenance
+
+      - name: Tag release
+        if: steps.bump.outputs.level != 'none'
+        continue-on-error: true # traceability only — never blocks a publish
+        run: |
+          TAG="collateral-abi-v${{ steps.bump.outputs.version }}"
+          git tag "$TAG"
+          git push origin "$TAG"
 
       - name: Summary
         if: steps.bump.outputs.level != 'none'
