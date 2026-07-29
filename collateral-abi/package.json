@@ -1,0 +1,39 @@
+{
+  "name": "@hashpower/collateral-abi",
+  "version": "1.0.0",
+  "description": "ABIs and deployment addresses for the Hashpower unified collateral system (CollateralVault, PortfolioMarginEngine, Points) on Base",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Lumerin-protocol/collateral-margin.git",
+    "directory": "collateral-abi"
+  },
+  "keywords": ["hashpower", "collateral", "margin", "vault", "abi", "base", "viem"],
+  "files": ["dist", "json", "deployments.json", "README.md"],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./deployments.json": "./deployments.json",
+    "./json/*.json": "./json/*.json"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs && tsc -p tsconfig.json",
+    "clean": "rm -rf src dist json",
+    "prepublishOnly": "pnpm build"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.28.1",
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,139 @@
+name: Publish @hashpower/collateral-abi
+
+# Publishes the ABI package to npm whenever the generated ABIs or the
+# deployments manifest change on main. Versioning is automatic and
+# semver-correct: the ABI *is* the package's public API, so CI diffs the
+# built ABI surface against the last published version to compute the bump
+# (removed/changed entry -> major, added entry -> minor, metadata -> patch)
+# and commits the new version back before publishing.
+#
+# Auth uses npm Trusted Publishing (OIDC) — no NPM_TOKEN secret.
+# NOTE: the very first release must be published manually
+# (`cd collateral-abi && pnpm build && npm publish --access public`),
+# then configure this repo+workflow as a Trusted Publisher in the
+# package settings on npmjs.com. CI handles every release after that.
+
+on:
+  push:
+    branches:
+      # NOTE: publishing off `dev` while the repo operates there.
+      # At GA, change this to `main` (and update the `npm-publish`
+      # environment's deployment-branch rule to match) so npm only
+      # updates on mainline releases.
+      - dev
+    paths:
+      - "contracts/abi/**"
+      - "collateral-abi/**"
+      - ".github/workflows/publish-collateral-abi.yml"
+  # Manual runs from any branch for testing the pipeline
+  workflow_dispatch:
+
+permissions:
+  contents: write # push the automated version bump
+  id-token: write # npm provenance / trusted publishing
+
+concurrency:
+  group: publish-collateral-abi
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: 📦 Build & publish to npm
+    runs-on: ubuntu-latest
+    # Must match the Trusted Publisher environment configured on npmjs.com
+    environment: npm-publish
+    defaults:
+      run:
+        working-directory: ./collateral-abi
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: collateral-abi/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          cache: "pnpm"
+          cache-dependency-path: collateral-abi/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build package
+        run: pnpm build
+
+      - name: Compute semver bump from ABI diff
+        id: bump
+        run: |
+          PKG=$(node -p "require('./package.json').name")
+          PUBLISHED=$(npm view "$PKG" version 2>/dev/null || echo "none")
+
+          if [ "$PUBLISHED" = "none" ]; then
+            echo "First publish — using version from package.json as-is"
+            echo "level=first" >> "$GITHUB_OUTPUT"
+            echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Fetch the published tarball and diff its ABI surface against the fresh build
+          TARBALL=$(npm pack "$PKG@$PUBLISHED" --silent | tail -1)
+          mkdir -p /tmp/published
+          tar -xzf "$TARBALL" -C /tmp/published
+          rm "$TARBALL"
+
+          LEVEL=$(node scripts/semver-diff.mjs /tmp/published/package .)
+          echo "Published: $PUBLISHED — ABI diff requires: $LEVEL"
+          echo "level=$LEVEL" >> "$GITHUB_OUTPUT"
+
+          if [ "$LEVEL" = "none" ]; then
+            echo "No ABI or metadata changes — skipping publish"
+            echo "version=$PUBLISHED" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Baseline on the published version, then apply the computed bump
+          npm version "$PUBLISHED" --no-git-tag-version --allow-same-version
+          npm version "$LEVEL" --no-git-tag-version
+          NEW=$(node -p "require('./package.json').version")
+
+          if ! git diff --quiet -- package.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add package.json
+            git commit -m "chore(collateral-abi): v$NEW ($LEVEL) [skip ci]"
+            git push
+          fi
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
+          echo "Version: $NEW ($LEVEL bump from $PUBLISHED)"
+
+      - name: Publish
+        if: steps.bump.outputs.level != 'none'
+        run: npm publish --access public --provenance
+
+      - name: Summary
+        if: steps.bump.outputs.level != 'none'
+        run: |
+          PKG=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          echo "## 📦 Published $PKG@$VERSION" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "https://www.npmjs.com/package/$PKG/v/$VERSION" >> $GITHUB_STEP_SUMMARY
+
+      - name: Send Slack notification
+        if: always() && steps.bump.outputs.level != 'none' && steps.bump.outputs.level != ''
+        uses: ./.github/actions/slack-notify
+        with:
+          status: ${{ job.status }}
+          environment: "npm"
+          service_name: "@hashpower/collateral-abi"
+          version: ${{ steps.bump.outputs.version || 'unknown' }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          additional_info: "${{ format('*Semver bump:* `{0}` • *Package:* <https://www.npmjs.com/package/@hashpower/collateral-abi/v/{1}|@hashpower/collateral-abi@{1}>', steps.bump.outputs.level, steps.bump.outputs.version) }}"
