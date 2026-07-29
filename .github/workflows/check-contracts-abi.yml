@@ -1,0 +1,86 @@
+name: Check ABI Up-to-Date
+
+on:
+  pull_request:
+    paths:
+      - "contracts/**"
+      - ".github/workflows/check-contracts-abi.yml"
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - "contracts/**"
+      - ".github/workflows/check-contracts-abi.yml"
+
+jobs:
+  check-abi:
+    name: 🔍 Verify ABIs are up-to-date
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./contracts
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: contracts/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: contracts/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Compile contracts and generate ABIs
+        run: pnpm compile
+
+      - name: Check for ABI differences
+        run: |
+          if [ -n "$(git diff --name-only -- abi/)" ]; then
+            echo "::error::Generated ABIs do not match committed ABIs. Please run 'pnpm compile' in contracts/ and commit the updated ABI files."
+            echo ""
+            echo "Changed files:"
+            git diff --name-only -- abi/
+            echo ""
+            echo "Diff:"
+            git diff -- abi/
+            exit 1
+          fi
+
+          if [ -n "$(git ls-files --others --exclude-standard -- abi/)" ]; then
+            echo "::error::New ABI files were generated but not committed. Please run 'pnpm compile' in contracts/ and commit the new ABI files."
+            echo ""
+            echo "Untracked files:"
+            git ls-files --others --exclude-standard -- abi/
+            exit 1
+          fi
+
+          echo "✅ All ABIs are up-to-date."
+
+      - name: Summary
+        if: failure()
+        run: |
+          echo "## ❌ ABI Check Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The committed ABI files do not match what the contracts generate." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**To fix:** Run the following locally and commit the changes:" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "cd contracts && pnpm compile" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Summary (success)
+        if: success()
+        run: |
+          echo "## ✅ ABI Check Passed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All generated ABIs match the committed versions." >> $GITHUB_STEP_SUMMARY
