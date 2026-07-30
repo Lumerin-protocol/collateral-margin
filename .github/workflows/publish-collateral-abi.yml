@@ -5,7 +5,8 @@ name: Publish @hashpower/collateral-abi
 # semver-correct: the ABI *is* the package's public API, so CI diffs the
 # built ABI surface against the last published version to compute the bump
 # (removed/changed entry -> major, added entry -> minor, metadata -> patch)
-# and publishes with that version. Nothing is committed back — the branch is
+# — demoted while the published major is 0, per semver's 0.x convention
+# (breaking -> minor, additive -> patch) — and publishes with that version. Nothing is committed back — the branch is
 # protected — so the version of record lives on npm and each release is
 # marked with a git tag (collateral-abi-vX.Y.Z) on the source commit.
 #
@@ -27,8 +28,14 @@ on:
       - "contracts/abi/**"
       - "collateral-abi/**"
       - ".github/workflows/publish-collateral-abi.yml"
-  # Manual runs from any branch for testing the pipeline
+  # Manual runs from any branch for testing the pipeline. `version` publishes
+  # exactly that version, skipping the ABI diff (one-time resets / recovery).
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Exact version to publish (skips semver diff)"
+        required: false
+        default: ""
 
 permissions:
   contents: write # push release tags
@@ -73,7 +80,17 @@ jobs:
 
       - name: Compute semver bump from ABI diff
         id: bump
+        env:
+          FORCED_VERSION: ${{ inputs.version || '' }}
         run: |
+          if [ -n "$FORCED_VERSION" ]; then
+            npm version "$FORCED_VERSION" --no-git-tag-version --allow-same-version
+            echo "Forced version: $FORCED_VERSION (semver diff skipped)"
+            echo "level=forced" >> "$GITHUB_OUTPUT"
+            echo "version=$FORCED_VERSION" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           PKG=$(node -p "require('./package.json').name")
           PUBLISHED=$(npm view "$PKG" version 2>/dev/null || echo "none")
 
@@ -92,6 +109,17 @@ jobs:
 
           LEVEL=$(node scripts/semver-diff.mjs /tmp/published/package .)
           echo "Published: $PUBLISHED — ABI diff requires: $LEVEL"
+
+          # Pre-1.0 the package is explicitly unstable (semver 0.x rules), so
+          # demote: breaking -> minor, additive -> patch. Cutting 1.0.0 at GA
+          # (from main) ends the demotion automatically.
+          if [ "${PUBLISHED%%.*}" = "0" ]; then
+            case "$LEVEL" in
+              major) LEVEL=minor ;;
+              minor) LEVEL=patch ;;
+            esac
+            echo "0.x pre-release line — demoted bump to: $LEVEL"
+          fi
           echo "level=$LEVEL" >> "$GITHUB_OUTPUT"
 
           if [ "$LEVEL" = "none" ]; then
