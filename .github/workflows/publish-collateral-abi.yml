@@ -151,6 +151,23 @@ jobs:
           git tag "$TAG"
           git push origin "$TAG"
 
+      - name: Trigger hashpower.io rebuild
+        if: steps.bump.outputs.level != 'none'
+        continue-on-error: true # site refresh is best-effort — never blocks a publish
+        env:
+          DISPATCH_TOKEN: ${{ secrets.HASHPOWER_IO_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$DISPATCH_TOKEN" ]; then
+            echo "::warning::HASHPOWER_IO_DISPATCH_TOKEN is not set — hashpower.io will not auto-refresh /deployments.json and /build. Add a fine-grained PAT (hashpower-io repo, Contents: read/write) as an org or repo secret."
+            exit 0
+          fi
+          curl -sf -X POST \
+            -H "Authorization: Bearer $DISPATCH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/Lumerin-protocol/hashpower-io/dispatches \
+            -d "{\"event_type\":\"abi-published\",\"client_payload\":{\"package\":\"@hashpower/collateral-abi\",\"version\":\"${{ steps.bump.outputs.version }}\",\"source_ref\":\"${{ github.ref_name }}\"}}"
+          echo "Dispatched abi-published to Lumerin-protocol/hashpower-io"
+
       - name: Summary
         if: steps.bump.outputs.level != 'none'
         run: |
