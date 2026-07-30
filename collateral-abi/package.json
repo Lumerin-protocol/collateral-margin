@@ -1,6 +1,6 @@
 {
   "name": "@hashpower/collateral-abi",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "ABIs and deployment addresses for the Hashpower unified collateral system (CollateralVault, PortfolioMarginEngine, Points) on Base",
   "license": "MIT",
   "type": "module",
