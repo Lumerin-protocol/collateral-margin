@@ -29,7 +29,18 @@ function canon(value) {
 }
 
 const abiEntries = (file) => new Set(JSON.parse(readFileSync(file, "utf8")).map(canon));
-const listJson = (dir) => (existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".json")).sort() : []);
+
+// Only ABI files (JSON arrays) count toward the diff; stray manifests like a
+// codegen-emitted package.json are ignored on both sides.
+const isAbiFile = (dir, f) => {
+  try {
+    return Array.isArray(JSON.parse(readFileSync(path.join(dir, f), "utf8")));
+  } catch {
+    return false;
+  }
+};
+const listJson = (dir) =>
+  existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".json") && isAbiFile(dir, f)).sort() : [];
 
 const oldDir = path.join(publishedRoot, "json");
 const newDir = path.join(currentRoot, "json");
