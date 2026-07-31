@@ -329,13 +329,13 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     [PERPS_LIQUIDATION_FEE],
   );
 
-  // Futures -> PME + fees + validator URL.
+  // Futures -> PME + fees.
   await write(
     publicClient,
     owner.client,
     futures,
     futuresArt.abi,
-    "setMarginEngine",
+    "setPortfolioMargin",
     [pme],
   );
   await write(
