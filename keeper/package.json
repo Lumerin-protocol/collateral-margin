@@ -21,11 +21,11 @@
     "lint:fix": "biome check --write ."
   },
   "dependencies": {
-    "@hashpower/portfolio-margin": "github:Lumerin-protocol/collateral-margin#feat/hashprice-usd-1ph-unit&path:/portfolio-margin",
+    "@hashpower/portfolio-margin": "github:Lumerin-protocol/collateral-margin#4846d1e293561554060d690746e14161750e0cf4&path:/portfolio-margin",
     "amaro": "^1.1.9",
-    "collateral-margin-abi": "github:Lumerin-protocol/collateral-margin#dev&path:/contracts/abi",
-    "derivatives-marketplace-abi": "github:Lumerin-protocol/derivatives-marketplace#85ce3c88afe23d2c4b6e451f7de6447cac0eda6d&path:/contracts/abi",
-    "futures-marketplace-abi": "github:Lumerin-protocol/futures-marketplace#a2115badfbd78206c172b0bd5cb47d697985bca9&path:/contracts/abi",
+    "collateral-margin-abi": "github:Lumerin-protocol/collateral-margin#4846d1e293561554060d690746e14161750e0cf4&path:/contracts/abi",
+    "derivatives-marketplace-abi": "github:Lumerin-protocol/derivatives-marketplace#6f9e653a4fef16b129b6d3ec6bc3e7d70817e20a&path:/contracts/abi",
+    "futures-marketplace-abi": "github:Lumerin-protocol/futures-marketplace#4f068e7bda814a9987fcfd2dd860fdacda7751c0&path:/contracts/abi",
     "pino": "^10.3.1",
     "viem": "^2.48.8"
   },
