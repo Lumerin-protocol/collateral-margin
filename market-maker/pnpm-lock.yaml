@@ -61,56 +61,6 @@ importers:
         specifier: ^5.8.0
         version: 5.9.3
 
-  apps/maker:
-    dependencies:
-      '@titan-mm/core':
-        specifier: workspace:*
-        version: link:../../packages/core
-      pino:
-        specifier: ^10.3.1
-        version: 10.3.1
-    devDependencies:
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.19.17
-      typescript:
-        specifier: ^5.8.0
-        version: 5.9.3
-
-  packages/core:
-    dependencies:
-      ajv:
-        specifier: ^8.17.1
-        version: 8.18.0
-      ajv-formats:
-        specifier: ^3.0.1
-        version: 3.0.1(ajv@8.18.0)
-      fraction.js:
-        specifier: ^5.2.2
-        version: 5.3.4
-      js-yaml:
-        specifier: ^4.1.0
-        version: 4.1.1
-      pino:
-        specifier: ^10.3.1
-        version: 10.3.1
-      viem:
-        specifier: ^2.45.3
-        version: 2.48.4(typescript@5.9.3)
-    devDependencies:
-      '@sinclair/typebox':
-        specifier: ^0.34.49
-        version: 0.34.49
-      '@types/js-yaml':
-        specifier: ^4.0.9
-        version: 4.0.9
-      '@types/node':
-        specifier: ^22.0.0
-        version: 22.19.17
-      typescript:
-        specifier: ^5.8.0
-        version: 5.9.3
-
 packages:
 
   '@adraffy/ens-normalize@1.11.1':
@@ -1686,8 +1636,8 @@ packages:
   hash.js@1.1.7:
     resolution: {integrity: sha512-taOaskGt4z4SOANNseOviYDvjEJinIkRgmp7LbKP2YTTmVxWBl87s/uzK9r+44BclBSp2X7K1hqeNfz9JbBeXA==}
 
-  hashprice-oracle@https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/addc689f9fc69201944caf1bb0066c394742c2ec:
-    resolution: {tarball: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/addc689f9fc69201944caf1bb0066c394742c2ec}
+  hashprice-oracle@https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/2f570d8fd5ba21707d7e4047ead0a64868523b6b:
+    resolution: {tarball: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/2f570d8fd5ba21707d7e4047ead0a64868523b6b}
     version: 1.0.0
 
   hashprice-oracle@https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/b65adbfeb7e6c4417747bfd3d94b6e89e162ed50:
@@ -4973,7 +4923,7 @@ snapshots:
       '@safe-global/protocol-kit': 8.0.4(typescript@5.9.3)
       '@safe-global/types-kit': 4.0.1(typescript@5.9.3)
       collateral-margin: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/ce0b494f3050b96deb4a400f099c53086f2273b9
-      hashprice-oracle: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/addc689f9fc69201944caf1bb0066c394742c2ec
+      hashprice-oracle: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/2f570d8fd5ba21707d7e4047ead0a64868523b6b
       multicall3: '@multicall/multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012'
       solidity-linked-list: 6.5.0
       viem: 2.55.5(typescript@5.9.3)
@@ -5117,7 +5067,7 @@ snapshots:
       inherits: 2.0.4
       minimalistic-assert: 1.0.1
 
-  hashprice-oracle@https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/addc689f9fc69201944caf1bb0066c394742c2ec: {}
+  hashprice-oracle@https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/2f570d8fd5ba21707d7e4047ead0a64868523b6b: {}
 
   hashprice-oracle@https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/b65adbfeb7e6c4417747bfd3d94b6e89e162ed50: {}
 

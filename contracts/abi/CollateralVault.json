@@ -129,6 +129,11 @@
   },
   {
     "inputs": [],
+    "name": "InvalidDependency",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "InvalidInitialization",
     "type": "error"
   },
@@ -194,6 +199,11 @@
       }
     ],
     "name": "UUPSUnsupportedProxiableUUID",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "VaultMismatch",
     "type": "error"
   },
   {

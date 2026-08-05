@@ -259,6 +259,15 @@ export class PerpsVenueAdapter implements VenueAdapter {
   }
 
   /**
+   * The mark from the most recent `getRawMarketPrice()`, or `null` before the first
+   * read. Lets the synchronous `estimateOrderMargin` charge an order's instant fill
+   * loss against the same mark the quotes were built from.
+   */
+  cachedMarketPrice(): bigint | null {
+    return this.rawOracle.lastPrice();
+  }
+
+  /**
    * Assert the compiled `QUANTITY_DECIMALS` matches the on-chain
    * `HashPowerPerpsDEX.QUANTITY_DECIMALS()`. The off-chain sizing/notional math
    * hardcodes this scale for performance, so the chain is the source of truth —
@@ -311,7 +320,13 @@ class PerpsCollateralAccount implements BatchableCollateralAccount {
    * Decompose the snapshot into shared (portfolio-wide) + venue-specific reads
    * so the portfolio aggregator can batch every venue into one multicall.
    * `shared` order is canonical across venues:
-   *   [vaultBalance, portfolioIM, portfolioMM, walletTokenBalance, nativeBalance]
+   *   [vaultBalance, portfolioIM, portfolioMM, walletTokenBalance, nativeBalance,
+   *    portfolioOrderMargin]
+   *
+   * Order margin is a shared read rather than a venue read: the engine nets every
+   * venue's per-side order delta into one portfolio net delta before stressing it, so
+   * asking each venue for its own slice and adding them up would double-count the
+   * stress and ignore the netting.
    */
   async buildMarginReadPlan(): Promise<MarginReadPlan> {
     const owner = this.venue.wallet.account.address;
@@ -324,10 +339,10 @@ class PerpsCollateralAccount implements BatchableCollateralAccount {
       { address: engine, abi: PortfolioMarginEngineAbi, functionName: "computePortfolioMM", args: [owner] },
       { address: token, abi: erc20Abi, functionName: "balanceOf", args: [owner] },
       { address: mc3, abi: Multicall3Abi, functionName: "getEthBalance", args: [owner] },
+      { address: engine, abi: PortfolioMarginEngineAbi, functionName: "orderMarginOf", args: [owner] },
     ] as MarginReadPlan["shared"];
 
     const venue = [
-      { address: this.venue.address, abi: HashPowerPerpsDEXAbi, functionName: "getOrderMargin", args: [owner] },
       { address: this.venue.address, abi: HashPowerPerpsDEXAbi, functionName: "getUnrealizedPnl", args: [owner] },
       { address: this.venue.address, abi: HashPowerPerpsDEXAbi, functionName: "getPendingFunding", args: [owner] },
     ] as MarginReadPlan["venue"];
@@ -335,7 +350,7 @@ class PerpsCollateralAccount implements BatchableCollateralAccount {
     const decode = (results: readonly unknown[]): CollateralSnapshot => {
       const r = results as bigint[];
       const [vaultBalance, portfolioIM, portfolioMM, walletTokenBalance, nativeBalance] = r;
-      const orderMargin = r[5];
+      const portfolioOrderMargin = r[5];
       const perpsUnrealizedPnl = r[6];
       const pendingFunding = r[7];
       // Funding owed (positive) reduces effective unrealized PnL.
@@ -343,7 +358,7 @@ class PerpsCollateralAccount implements BatchableCollateralAccount {
         vaultBalance,
         portfolioIM,
         portfolioMM,
-        venueOrderMargin: orderMargin,
+        portfolioOrderMargin,
         venueUnrealizedPnl: perpsUnrealizedPnl - pendingFunding,
         walletTokenBalance,
         nativeBalance,

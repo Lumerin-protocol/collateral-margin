@@ -17,6 +17,16 @@ import type {
 export type Side = "buy" | "sell";
 
 /**
+ * Mirrors the venues' on-chain `TimeInForce` enum. Every placement carries one;
+ * the maker only ever rests liquidity, so it always quotes GTC.
+ */
+export const TimeInForce = {
+  GTC: 0,
+  IOC: 1,
+  FOK: 2,
+} as const;
+
+/**
  * A single new-order intent. `size` is unsigned and in the **venue's native
  * unit** (e.g. perps uses QUANTITY_SCALE bigints, futures uses int8 contract
  * counts cast to bigint). Each adapter validates the unit internally.
@@ -128,7 +138,13 @@ export interface CollateralSnapshot {
   vaultBalance: bigint;
   portfolioIM: bigint;
   portfolioMM: bigint;
-  venueOrderMargin: bigint;
+  /**
+   * `PortfolioMarginEngine.orderMarginOf(owner)` — the IM the account's resting
+   * orders add on top of its positions, across every registered market. Portfolio-wide
+   * by construction: the engine nets each venue's per-side order delta into portfolio
+   * net delta before stressing, so there is no per-venue figure left to sum.
+   */
+  portfolioOrderMargin: bigint;
   venueUnrealizedPnl: bigint;
   walletTokenBalance: bigint;
   nativeBalance: bigint;
@@ -341,12 +357,19 @@ export interface InstrumentAdapter {
    * wallet's portfolio IM. Used by RiskManager to call
    * `engine.canPlaceOrder(wallet, sumAdditionalIM)` before placing.
    *
-   * Mirrors the on-chain margin computation for the venue:
-   *   - Perps:  imSpotShock × notional / 1e18
-   *   - Futures: pricePerDay × marginPct / 100 (one unit, no duration multiplier)
+   * An upper bound on the engine's two order terms, identical in shape for both
+   * venues now that the engine treats every market's order delta the same way:
    *
-   * Adapter computes synchronously from already-cached state (imSpotShock,
-   * marginPct). Returns 0n if it can't be estimated yet.
+   *   imSpotShock × mark × |size| / 1e18   +   instant fill loss vs. the mark
+   *
+   * A bound rather than the exact figure because the engine stresses the *worse* of
+   * `netDelta + buyOrderDelta` and `netDelta − sellOrderDelta`, so an order's true
+   * marginal cost depends on the whole portfolio and is zero when the order only moves
+   * the account toward flat. Charging its own delta in full can only over-estimate,
+   * which leaves the `canPlaceOrder` gate with slack rather than slop.
+   *
+   * Adapter computes synchronously from already-cached state (imSpotShock and the last
+   * mark). Returns 0n if it can't be estimated yet.
    */
   estimateOrderMargin(intent: OrderIntent): bigint;
 

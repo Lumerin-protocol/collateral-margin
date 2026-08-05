@@ -17,6 +17,7 @@ async function main() {
   const PERPS_ADDRESS = readOptionalAddress("PERPS_ADDRESS");
   const OPTIONS_ENGINE_ADDRESS = readOptionalAddress("OPTIONS_ENGINE_ADDRESS");
   const FUTURES_ADDRESS = readOptionalAddress("FUTURES_ADDRESS");
+  const PRICE_ORACLE_ADDRESS = readOptionalAddress("PRICE_ORACLE_ADDRESS");
 
   const imSpotShock = readOptionalBigInt("IM_SPOT_SHOCK");
   const mmSpotShock = readOptionalBigInt("MM_SPOT_SHOCK");
@@ -47,6 +48,7 @@ async function main() {
     Perps: PERPS_ADDRESS ?? "(none)",
     Options: OPTIONS_ENGINE_ADDRESS ?? "(none)",
     Futures: FUTURES_ADDRESS ?? "(none)",
+    PriceOracle: PRICE_ORACLE_ADDRESS ?? "(none)",
   });
 
   if (overrideShocks) {
@@ -127,9 +129,9 @@ async function main() {
 
   // ── 4. Register product engines on PME (optional) ───────────────────────
   if (PERPS_ADDRESS) {
-    logInfo("PME.setPerps", { perpsDex: PERPS_ADDRESS });
+    logInfo("PME.addLinearMarket (perps)", { market: PERPS_ADDRESS });
     await logPrompt("Proceed?");
-    const sim = await pme.simulate.setPerps([PERPS_ADDRESS]);
+    const sim = await pme.simulate.addLinearMarket([PERPS_ADDRESS]);
     const receipt = await writeAndWait(deployer, sim);
     logStep("Done", txUrl(pc, receipt.transactionHash));
   }
@@ -141,9 +143,16 @@ async function main() {
     logStep("Done", txUrl(pc, receipt.transactionHash));
   }
   if (FUTURES_ADDRESS) {
-    logInfo("PME.setFutures", { futures: FUTURES_ADDRESS });
+    logInfo("PME.addLinearMarket (futures)", { market: FUTURES_ADDRESS });
     await logPrompt("Proceed?");
-    const sim = await pme.simulate.setFutures([FUTURES_ADDRESS]);
+    const sim = await pme.simulate.addLinearMarket([FUTURES_ADDRESS]);
+    const receipt = await writeAndWait(deployer, sim);
+    logStep("Done", txUrl(pc, receipt.transactionHash));
+  }
+  if (PRICE_ORACLE_ADDRESS) {
+    logInfo("PME.setOracle", { oracle: PRICE_ORACLE_ADDRESS });
+    await logPrompt("Proceed?");
+    const sim = await pme.simulate.setOracle([PRICE_ORACLE_ADDRESS]);
     const receipt = await writeAndWait(deployer, sim);
     logStep("Done", txUrl(pc, receipt.transactionHash));
   }

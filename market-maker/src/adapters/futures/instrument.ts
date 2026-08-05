@@ -13,7 +13,9 @@ import type {
   Position,
   ReduceIntent,
 } from "../../core/adapter.ts";
+import { TimeInForce } from "../../core/adapter.ts";
 import { FuturesAbi } from "futures-contracts/abi/Futures";
+import { fillLossFromNotionals } from "../../core/math.ts";
 import type { FuturesVenueAdapter } from "./venue.ts";
 import { FuturesOwnOrders } from "./ownOrders.ts";
 import { futuresInstrumentId } from "./events.ts";
@@ -75,8 +77,11 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
   }
 
   async getContext(): Promise<InstrumentContext> {
-    // Eagerly cache marginPct so `estimateOrderMargin` is synchronous.
-    const { marginPct } = await this.venue.getMarginInputs();
+    // Eagerly cache both margin inputs so `estimateOrderMargin` is synchronous.
+    const [{ marginPct }] = await Promise.all([
+      this.venue.getMarginInputs(),
+      this.venue.fetchImSpotShock(),
+    ]);
     this.marginPercentCache = marginPct;
     return {
       expirationAt: Number(this.expirationAt),
@@ -89,10 +94,25 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
       throw new Error(`futures: order size ${qty} must be > 0`);
     }
     const signed = intent.side === "buy" ? qty : -qty;
+    // Local ABI fragment until published futures-contracts carries the time-in-force arg.
+    const createOrderAbi = [
+      {
+        type: "function",
+        name: "createOrder",
+        stateMutability: "nonpayable",
+        inputs: [
+          { name: "_price", type: "uint256" },
+          { name: "_expirationAt", type: "uint256" },
+          { name: "_quantity", type: "int256" },
+          { name: "_tif", type: "uint8" },
+        ],
+        outputs: [],
+      },
+    ] as const;
     return encodeFunctionData({
-      abi: FuturesAbi,
+      abi: createOrderAbi,
       functionName: "createOrder",
-      args: [intent.price, this.expirationAt, signed],
+      args: [intent.price, this.expirationAt, signed, TimeInForce.GTC],
     });
   }
 
@@ -124,6 +144,7 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
               { name: "price", type: "uint256" },
               { name: "expirationAt", type: "uint256" },
               { name: "quantity", type: "int256" },
+              { name: "timeInForce", type: "uint8" },
             ],
           },
         ],
@@ -148,6 +169,7 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
         price: intent.price,
         expirationAt: intent.expirationAt ?? this.expirationAt,
         quantity: intent.side === "buy" ? qty : -qty,
+        timeInForce: TimeInForce.GTC,
       };
     });
     return encodeFunctionData({
@@ -239,14 +261,36 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
   }
 
   /**
-   * IM added by a new order:
-   *   pricePerDay × |qty| × marginPct / 100   (one unit, no duration multiplier)
-   * Conservative (ignores the profitable-order clamp); the engine's
-   * `canPlaceOrder` is the real authority.
+   * Upper bound on the IM a new order adds, matching the two terms the engine charges:
+   *
+   *   IM_added ≤ imSpotShock × mark × |qty| / 1e18   (its delta joins one stress leg)
+   *            + max(0, |qty| × (limit − mark))       (bid) or
+   *              max(0, |qty| × (mark − limit))       (ask)
+   *
+   * One contract is one unit of delta at `pricePerDay` — no duration multiplier — so
+   * the arithmetic is the perps formula with a quantity scale of 1.
+   *
+   * This used to be `pricePerDay × |qty| × liquidationMarginPercent / 100`. That
+   * coefficient is not what the engine applies: it stresses futures delta with the
+   * portfolio-wide `imSpotShock` alongside every other market's, and it charges the
+   * order's instant fill loss separately. A bound rather than the exact figure for the
+   * same reason as perps — the engine takes the worse of two netted legs, so an order
+   * that moves the portfolio toward flat can be free, and charging it in full can only
+   * over-estimate.
    */
   estimateOrderMargin(intent: OrderIntent): bigint {
-    if (this.marginPercentCache === null) return 0n;
-    return (intent.price * intent.size * this.marginPercentCache) / 100n;
+    const shock = this.venue.cachedImSpotShock();
+    if (shock === null) return 0n;
+    const mark = this.venue.cachedMarketPrice();
+    if (mark === null) return 0n;
+
+    const stress = (mark * intent.size * shock) / 10n ** 18n;
+    const fillLoss = fillLossFromNotionals(
+      intent.price * intent.size,
+      mark * intent.size,
+      intent.side,
+    );
+    return stress + fillLoss;
   }
 
   async estimateCreateGas(account: `0x${string}`): Promise<bigint> {

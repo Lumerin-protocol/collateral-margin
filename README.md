@@ -25,7 +25,7 @@ This package implements a **portfolio-level** view of collateral need so one vau
 
 `PortfolioMarginEngine` is a **pluggable calculator** wired to:
 
-- `IHashPowerPerpsDEX` — position qty, mark/oracle price, order margin, unrealized PnL, pending funding.
+- `ILinearMarket` — `getRiskView(user)`: net position delta, unrealized PnL, pending funding, per-side resting-order delta, per-side instant fill loss. Implemented by both perps and futures; reports raw risk, never a margin figure.
 - `IOptionsEnginePortfolioView` — net options delta / gamma / vega (WAD-scaled) and **reserved** options margin (engine-specific floor).
 
 For a given `user` it computes **IM** (`computePortfolioIM`) and **MM** (`computePortfolioMM`):
@@ -34,11 +34,16 @@ For a given `user` it computes **IM** (`computePortfolioIM`) and **MM** (`comput
 2. **Four stress scenarios** — Spot moves by ±`imSpotShock` or ±`mmSpotShock` (fraction of price); vol moves by ±`imVolShock` or ±`mmVolShock` (WAD absolute IV change). For each corner it approximates PnL as  
    `delta·Δs + ½·gamma·Δs² + vega·Δσ`  
    (implemented in `_worstStressLoss` / `_scenarioLoss`) and takes the **worst loss** across scenarios (only losses count; gains are clipped at zero for that scenario).
-3. **Add structured extras** (same for IM/MM path except shock sizes):
-   - resting **perp order margin** (`getOrderMargin`);
+3. **Run the stress twice and keep the worse leg** — once at `netDelta + Σ buyOrderDelta`, once at `netDelta − Σ sellOrderDelta`. Resting orders are not a separate margin term; their delta is netted into the portfolio's and stressed as if they had filled. A subset of fills leaves net delta between the two legs, stress is convex in delta, so the maximum over that interval sits at an endpoint and the no-fill case is interior — which makes the reservation a provable upper bound over every fill subset. Nothing checks a maker's margin at fill time, so this is the only thing standing between a fill and an under-collateralized account.
+4. **Add structured extras** (same for IM/MM path except shock sizes):
+   - per-side **instant fill loss** on resting orders (`buyOrderFillLoss + sellOrderFillLoss`, clamped per side so a favourably-priced order cannot fund an unfavourable one);
    - **options reserved margin** from the options engine (converted from WAD to token decimals);
-   - **unrealized perp loss** (only if PnL is negative);
+   - **unrealized loss**, clamped differently on the two paths — **IM** clamps per market, so a gain at one venue is ignored; **MM** clamps the portfolio-wide sum, so a gain at one venue offsets a loss at another. MM nets because it decides solvency and both legs settle into one vault, making the offset an accounting identity rather than a bet on correlation; without it a delta-flat cross-venue hedge is liquidated as soon as the mark moves, since the losing leg is charged in full while the winning leg is invisible. IM keeps the conservative form because it gates new risk and, through the vault's withdrawal check, the exit — netting there would let a manipulated mark on one venue release collateral against a real loss on another. Either way a net gain contributes zero rather than a credit, so unrealized profit can never discount the stress term;
    - **funding owed** (only if pending funding is positive — user owes the protocol).
+
+   Allowing profit to offset loss at all is the design choice the Mango Markets exploit is the cautionary tale for. [`docs/mango-attack.md`](./docs/mango-attack.md) works through that attack and why the IM/MM split makes it unprofitable here — in short, unrealized gain never funds a withdrawal or a new position, and even on the MM path a net gain contributes zero rather than a credit.
+
+`orderMarginOf(user)` reports what the resting orders alone add, by differencing the IM with and without them. It is portfolio-wide by construction — since order delta is netted before stressing, there is no per-venue slice to report and summing per-venue figures would both double-count the stress and miss the netting. It is also **not** constant in price, so off-chain models must re-evaluate it rather than snapshot it.
 
 Defaults at `initialize` align rough intent with typical DEX buffers (e.g. 10% / 5% spot shocks for IM/MM, 10 / 5 vol points); governance can retune via `setShocks`.
 

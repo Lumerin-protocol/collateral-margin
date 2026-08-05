@@ -38,12 +38,37 @@ export const PortfolioMarginEngineAbi = [
   },
   {
     "inputs": [],
+    "name": "InvalidDependency",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "InvalidInitialization",
     "type": "error"
   },
   {
     "inputs": [],
+    "name": "InvalidOracle",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "LinearMarketAlreadyRegistered",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "LinearMarketNotRegistered",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "NotInitializing",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OracleNotSet",
     "type": "error"
   },
   {
@@ -86,21 +111,13 @@ export const PortfolioMarginEngineAbi = [
   },
   {
     "inputs": [],
-    "name": "ZeroAddress",
+    "name": "VaultMismatch",
     "type": "error"
   },
   {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": false,
-        "internalType": "address",
-        "name": "futures",
-        "type": "address"
-      }
-    ],
-    "name": "FuturesUpdated",
-    "type": "event"
+    "inputs": [],
+    "name": "ZeroAddress",
+    "type": "error"
   },
   {
     "anonymous": false,
@@ -113,6 +130,32 @@ export const PortfolioMarginEngineAbi = [
       }
     ],
     "name": "Initialized",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "market",
+        "type": "address"
+      }
+    ],
+    "name": "LinearMarketAdded",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "market",
+        "type": "address"
+      }
+    ],
+    "name": "LinearMarketRemoved",
     "type": "event"
   },
   {
@@ -132,6 +175,19 @@ export const PortfolioMarginEngineAbi = [
     "anonymous": false,
     "inputs": [
       {
+        "indexed": false,
+        "internalType": "address",
+        "name": "oracle",
+        "type": "address"
+      }
+    ],
+    "name": "OracleUpdated",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
         "indexed": true,
         "internalType": "address",
         "name": "previousOwner",
@@ -145,19 +201,6 @@ export const PortfolioMarginEngineAbi = [
       }
     ],
     "name": "OwnershipTransferred",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": false,
-        "internalType": "address",
-        "name": "perpsDex",
-        "type": "address"
-      }
-    ],
-    "name": "PerpsDexUpdated",
     "type": "event"
   },
   {
@@ -247,6 +290,19 @@ export const PortfolioMarginEngineAbi = [
     "inputs": [
       {
         "internalType": "address",
+        "name": "_market",
+        "type": "address"
+      }
+    ],
+    "name": "addLinearMarket",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
         "name": "user",
         "type": "address"
       },
@@ -307,12 +363,31 @@ export const PortfolioMarginEngineAbi = [
   },
   {
     "inputs": [],
-    "name": "futures",
+    "name": "getLinearMarkets",
     "outputs": [
       {
-        "internalType": "contract IFutures",
+        "internalType": "address[]",
         "name": "",
+        "type": "address[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "user",
         "type": "address"
+      }
+    ],
+    "name": "hasRestingOrderDelta",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
       }
     ],
     "stateMutability": "view",
@@ -345,14 +420,15 @@ export const PortfolioMarginEngineAbi = [
     "type": "function"
   },
   {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "_vault",
-        "type": "address"
-      }
-    ],
+    "inputs": [],
     "name": "initialize",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "initializeV2",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -371,6 +447,25 @@ export const PortfolioMarginEngineAbi = [
         "internalType": "bool",
         "name": "",
         "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "notional",
+        "type": "uint256"
+      }
+    ],
+    "name": "linearOrderMargin",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -416,6 +511,25 @@ export const PortfolioMarginEngineAbi = [
     "type": "function"
   },
   {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "user",
+        "type": "address"
+      }
+    ],
+    "name": "orderMarginOf",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [],
     "name": "owner",
     "outputs": [
@@ -430,10 +544,10 @@ export const PortfolioMarginEngineAbi = [
   },
   {
     "inputs": [],
-    "name": "perpsDex",
+    "name": "priceOracle",
     "outputs": [
       {
-        "internalType": "contract IHashPowerPerpsDEX",
+        "internalType": "contract AggregatorV3Interface",
         "name": "",
         "type": "address"
       }
@@ -455,21 +569,21 @@ export const PortfolioMarginEngineAbi = [
     "type": "function"
   },
   {
-    "inputs": [],
-    "name": "renounceOwnership",
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_market",
+        "type": "address"
+      }
+    ],
+    "name": "removeLinearMarket",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
   },
   {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "_futuresEngine",
-        "type": "address"
-      }
-    ],
-    "name": "setFutures",
+    "inputs": [],
+    "name": "renounceOwnership",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
@@ -490,12 +604,12 @@ export const PortfolioMarginEngineAbi = [
   {
     "inputs": [
       {
-        "internalType": "address",
-        "name": "_perpsEngine",
+        "internalType": "contract AggregatorV3Interface",
+        "name": "_oracle",
         "type": "address"
       }
     ],
-    "name": "setPerps",
+    "name": "setOracle",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

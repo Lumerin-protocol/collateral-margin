@@ -17,8 +17,9 @@ import type {
   ReduceIntent,
   Unsubscribe,
 } from "../../core/adapter.ts";
+import { TimeInForce } from "../../core/adapter.ts";
 import { HashPowerPerpsDEXAbi } from "perps-contracts/abi/HashPowerPerpsDEX.ts";
-import { calculateNotional } from "../../core/math.ts";
+import { calculateNotional, fillLossFromNotionals } from "../../core/math.ts";
 import type { PerpsVenueAdapter } from "./venue.ts";
 
 const PERPS_INSTRUMENT_ID = "perps";
@@ -69,10 +70,24 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
   encodeCreate(intent: OrderIntent): `0x${string}` {
     // Perps' createOrder takes a SIGNED quantity (positive = buy, negative = sell).
     const signed = intent.side === "buy" ? intent.size : -intent.size;
+    // Local ABI fragment until published perps-contracts carries the time-in-force arg.
+    const createOrderAbi = [
+      {
+        type: "function",
+        name: "createOrder",
+        stateMutability: "nonpayable",
+        inputs: [
+          { name: "_price", type: "uint256" },
+          { name: "_quantity", type: "int256" },
+          { name: "_tif", type: "uint8" },
+        ],
+        outputs: [],
+      },
+    ] as const;
     return encodeFunctionData({
-      abi: HashPowerPerpsDEXAbi,
+      abi: createOrderAbi,
       functionName: "createOrder",
-      args: [intent.price, signed],
+      args: [intent.price, signed, TimeInForce.GTC],
     });
   }
 
@@ -103,6 +118,7 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
             components: [
               { name: "price", type: "uint256" },
               { name: "quantity", type: "int256" },
+              { name: "timeInForce", type: "uint8" },
             ],
           },
         ],
@@ -121,6 +137,7 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
     const batch = creates.map((intent) => ({
       price: intent.price,
       quantity: intent.side === "buy" ? intent.size : -intent.size,
+      timeInForce: TimeInForce.GTC,
     }));
     return encodeFunctionData({
       abi: updateOrdersAbi,
@@ -205,15 +222,27 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
   }
 
   /**
-   * Mirrors `HashPowerPerpsDEX._getMargin` for a single new resting order:
-   *   IM_added = imSpotShock × notional / 1e18
+   * Upper bound on the IM a single new resting order adds, matching the two terms
+   * `PortfolioMarginEngine` charges for it:
    *
-   * The on-chain formula reduces this by any "risk-reducing" overlap with
-   * an existing position, but the MM is conservative on the high side here:
-   * we estimate ignoring the reducer (worst-case more IM, never less),
-   * so the engine.canPlaceOrder gate has slack rather than slop.
+   *   IM_added ≤ imSpotShock × mark × size / 1e18   (its delta joins one stress leg)
+   *            + max(0, size × (limit − mark))       (bid) or
+   *              max(0, size × (mark − limit))       (ask)
    *
-   * Returns 0n if `imSpotShock` hasn't been cached yet — caller treats
+   * A bound rather than the exact figure, deliberately, and for a reason that is now
+   * structural rather than a convenience: the engine takes the *worse* of the
+   * `netDelta + buyOrderDelta` and `netDelta − sellOrderDelta` legs, so a single
+   * order's true marginal cost depends on the whole portfolio's net delta and can be
+   * zero when the order moves the account toward flat. Charging it the full stress on
+   * its own delta can only over-estimate: adding buy delta cannot raise the sell leg,
+   * and vice versa. The `engine.canPlaceOrder` gate therefore has slack, not slop.
+   *
+   * The mark price matters here and did not before. The old estimate used the order's
+   * *limit* price against the shock and nothing else, which under-charged both an
+   * aggressive bid (whose fill loss is the dominant term) and a deep one (whose stress
+   * is set by the mark, not the limit).
+   *
+   * Returns 0n if `imSpotShock` or the mark haven't been cached yet — caller treats
    * "0 additional" as "no information; proceed", which is fine on first
    * tick because the engine itself enforces the floor.
    */
@@ -224,8 +253,16 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
     const cached = (this.venue as unknown as { imSpotShockCache?: bigint })
       .imSpotShockCache;
     if (!cached) return 0n;
-    const notional = calculateNotional(intent.price, intent.size);
-    return (notional * cached) / 10n ** 18n;
+    const mark = this.venue.cachedMarketPrice();
+    if (mark === null) return 0n;
+
+    const stress = (calculateNotional(mark, intent.size) * cached) / 10n ** 18n;
+    const fillLoss = fillLossFromNotionals(
+      calculateNotional(intent.price, intent.size),
+      calculateNotional(mark, intent.size),
+      intent.side,
+    );
+    return stress + fillLoss;
   }
 
   async estimateCreateGas(account: `0x${string}`): Promise<bigint> {

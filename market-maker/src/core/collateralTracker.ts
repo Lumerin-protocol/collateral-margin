@@ -33,7 +33,7 @@ export class CollateralTracker {
   vaultBalance = 0n;
   portfolioIM = 0n;
   portfolioMM = 0n;
-  venueOrderMargin = 0n;
+  portfolioOrderMargin = 0n;
   venueUnrealizedPnl = 0n;
   walletTokenBalance = 0n;
   nativeBalance = 0n;
@@ -120,7 +120,7 @@ export class CollateralTracker {
     this.vaultBalance = s.vaultBalance;
     this.portfolioIM = s.portfolioIM;
     this.portfolioMM = s.portfolioMM;
-    this.venueOrderMargin = s.venueOrderMargin;
+    this.portfolioOrderMargin = s.portfolioOrderMargin;
     this.venueUnrealizedPnl = s.venueUnrealizedPnl;
     this.walletTokenBalance = s.walletTokenBalance;
     this.nativeBalance = s.nativeBalance;

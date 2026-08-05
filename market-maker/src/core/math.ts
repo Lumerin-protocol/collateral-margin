@@ -41,6 +41,22 @@ export function calculateNotional(price: bigint, absQuantity: bigint): bigint {
 }
 
 /**
+ * Mark-to-market loss the account eats the instant a resting order fills, which the
+ * engine charges on top of the stress term. A bid pays its limit for something worth
+ * the mark; an ask sells at its limit something worth the mark. Only the losing
+ * direction counts — the venues clamp each side at zero rather than letting a
+ * favourably-priced order fund an unfavourable one.
+ *
+ * `notional` is the caller's own quantity convention (perps scale by `QUANTITY_SCALE`,
+ * futures pass whole contracts), so both venues can share this by supplying their own
+ * notional function.
+ */
+export function fillLossFromNotionals(limitNotional: bigint, markNotional: bigint, side: "buy" | "sell"): bigint {
+  const loss = side === "buy" ? limitNotional - markNotional : markNotional - limitNotional;
+  return loss > 0n ? loss : 0n;
+}
+
+/**
  * Convert a USD notional amount to venue-native size at `price`, rounded to
  * the nearest native unit (half-up).
  *

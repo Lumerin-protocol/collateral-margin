@@ -56,6 +56,7 @@ export class RawOracleReader {
   private readonly resolve: () => Promise<RawOracleConfig>;
   private readonly label: string;
   private cache: RawOracleConfig | null = null;
+  private lastAnswer: bigint | null = null;
 
   constructor(opts: {
     publicClient: PublicClient;
@@ -84,7 +85,20 @@ export class RawOracleReader {
       throw new Error(`${this.label}: oracle returned non-positive answer (${answer.toString()})`);
     }
     // Mirror the venue's `getMarketPrice()` decimal rebase (no unit factor).
-    return answer / this.cache.divisor;
+    this.lastAnswer = answer / this.cache.divisor;
+    return this.lastAnswer;
+  }
+
+  /**
+   * The most recent price `read()` returned, or `null` before the first read.
+   *
+   * Exists so the synchronous `estimateOrderMargin` can price an order's fill loss
+   * against the mark. Every quoting tick calls `getIndexPrice()` (hence `read()`)
+   * before it decides what to place, so this is the same mark the quotes were built
+   * from — using it keeps the pre-trade IM estimate consistent with them.
+   */
+  lastPrice(): bigint | null {
+    return this.lastAnswer;
   }
 
   /** Drop cached (oracle, divisor) — next `read()` will re-resolve. */

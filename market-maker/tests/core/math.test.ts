@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  fillLossFromNotionals,
   BPS_SCALE,
   RollingBudget,
   RollingWindow,
@@ -220,5 +221,27 @@ describe("bigAbs", () => {
     assert.equal(bigAbs(-42n), 42n);
     assert.equal(bigAbs(42n), 42n);
     assert.equal(bigAbs(0n), 0n);
+  });
+});
+
+describe("fillLossFromNotionals", () => {
+  it("charges a bid that pays above the mark", () => {
+    // 1 contract bid at $101 with the mark at $100 — fills $1 in the red.
+    assert.equal(fillLossFromNotionals(101_000_000n, 100_000_000n, "buy"), 1_000_000n);
+  });
+
+  it("charges an ask that sells below the mark", () => {
+    assert.equal(fillLossFromNotionals(99_000_000n, 100_000_000n, "sell"), 1_000_000n);
+  });
+
+  it("clamps a favourably-priced order to zero rather than crediting it", () => {
+    // Both venues clamp per side, so a bid below the mark cannot fund an ask above it.
+    assert.equal(fillLossFromNotionals(99_000_000n, 100_000_000n, "buy"), 0n);
+    assert.equal(fillLossFromNotionals(101_000_000n, 100_000_000n, "sell"), 0n);
+  });
+
+  it("is zero at the mark on both sides", () => {
+    assert.equal(fillLossFromNotionals(100_000_000n, 100_000_000n, "buy"), 0n);
+    assert.equal(fillLossFromNotionals(100_000_000n, 100_000_000n, "sell"), 0n);
   });
 });

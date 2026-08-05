@@ -52,7 +52,6 @@ export class PortfolioCollateralAccount implements CollateralAccount {
 
     const sharedResults = results.slice(0, shared.length);
     let offset = shared.length;
-    let venueOrderMargin = 0n;
     let venueUnrealizedPnl = 0n;
     let primary: CollateralSnapshot | null = null;
 
@@ -61,24 +60,23 @@ export class PortfolioCollateralAccount implements CollateralAccount {
       offset += plan.venue.length;
       const snap = plan.decode([...sharedResults, ...venueResults]);
       if (!primary) primary = snap;
-      venueOrderMargin += snap.venueOrderMargin;
       venueUnrealizedPnl += snap.venueUnrealizedPnl;
     }
 
-    return { ...(primary as CollateralSnapshot), venueOrderMargin, venueUnrealizedPnl };
+    // `portfolioOrderMargin` comes from a shared read, so it is already the whole
+    // portfolio's figure and must be taken once rather than summed per venue.
+    return { ...(primary as CollateralSnapshot), venueUnrealizedPnl };
   }
 
   /** Fallback: one snapshot RPC per account. */
   private async perAccountSnapshot(): Promise<CollateralSnapshot> {
     const snaps = await Promise.all(this.accounts.map((a) => a.snapshot()));
     const primary = snaps[0];
-    let venueOrderMargin = 0n;
     let venueUnrealizedPnl = 0n;
     for (const s of snaps) {
-      venueOrderMargin += s.venueOrderMargin;
       venueUnrealizedPnl += s.venueUnrealizedPnl;
     }
-    return { ...primary, venueOrderMargin, venueUnrealizedPnl };
+    return { ...primary, venueUnrealizedPnl };
   }
 
   imSpotShock(): Promise<bigint> {

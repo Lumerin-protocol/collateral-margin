@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { getContract, parseUnits, type Hex } from "viem";
 
 import { hashPowerPerpsDexAbi, priceOracleMockAbi } from "../src/abi.ts";
+import { PortfolioMarginEngineAbi } from "collateral-margin-contracts/abi/PortfolioMarginEngine.ts";
 import {
   startHardhatNode,
   waitFor,
@@ -16,6 +17,7 @@ import {
   type HardhatNode,
 } from "./helpers.ts";
 import { deployWithCollateralFixture } from "../../contracts/fixtures/viem.ts";
+import { TimeInForce } from "../src/core/adapter.ts";
 
 const MM_ACCOUNT = HARDHAT_ACCOUNTS[3];
 const TAKER_ACCOUNT = HARDHAT_ACCOUNTS[2];
@@ -189,7 +191,11 @@ describe("MM process — quoting and fills", () => {
       client: { public: publicClient, wallet: takerWallet },
     });
 
-    await perps.write.createOrder([bestAsk, parseUnits("1", deployment.config.quantityDecimals)]);
+    await perps.write.createOrder([
+      bestAsk,
+      parseUnits("1", deployment.config.quantityDecimals),
+      TimeInForce.GTC,
+    ]);
 
     // Wait for MM to detect the fill
     let hAfter!: Record<string, unknown>;
@@ -499,7 +505,7 @@ describe("MM process — post-fill on-chain state", () => {
       abi: hashPowerPerpsDexAbi,
       client: { public: publicClient, wallet: takerWallet },
     });
-    await perps.write.createOrder([bestAsk, qty]);
+    await perps.write.createOrder([bestAsk, qty, TimeInForce.GTC]);
 
     const pos = (await publicClient.readContract({
       address: deployment.contracts.perpsAddress,
@@ -514,9 +520,9 @@ describe("MM process — post-fill on-chain state", () => {
 
   it("should have non-zero required margin after position opens", async () => {
     const reqMargin = (await publicClient.readContract({
-      address: deployment.contracts.perpsAddress,
-      abi: hashPowerPerpsDexAbi,
-      functionName: "getMaintenanceMargin",
+      address: deployment.contracts.pmeAddress,
+      abi: PortfolioMarginEngineAbi,
+      functionName: "computePortfolioMM",
       args: [MM_ACCOUNT.address],
     })) as bigint;
 
@@ -592,7 +598,7 @@ describe("MM process — post-fill on-chain state", () => {
       client: { public: publicClient, wallet: takerWallet },
     });
     // Taker sells into MM's bid
-    await perps.write.createOrder([bestBid, -qty]);
+    await perps.write.createOrder([bestBid, -qty, TimeInForce.GTC]);
 
     const posAfter = (await publicClient.readContract({
       address: deployment.contracts.perpsAddress,
