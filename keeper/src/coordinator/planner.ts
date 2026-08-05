@@ -39,6 +39,13 @@ interface StepReport {
  *   2. If `mmSurplus >= 0`: account is healthy — emit `done`.
  *   3. Else: call `liquidateOrders` on every venue that has open orders.
  *      Re-snapshot health.
+ *
+ *      EVERY venue, not just the one about to be reduced: the venues gate
+ *      position liquidation on `hasRestingOrderDelta` across the whole
+ *      portfolio, so orders left resting anywhere block the position leg
+ *      everywhere. That is not incidental — a position on one venue can be the
+ *      only thing offsetting resting orders on another, and closing it would
+ *      raise the requirement rather than relieve it.
  *   4. If still unhealthy: pick the most-underwater venue (max summed
  *      `unrealizedLoss` across its positions) and call `reduceToTarget(user)`
  *      — ONE batched tx that closes the venue's worst-first positions down to
@@ -289,6 +296,17 @@ export class Planner {
    * DESC); tiebreak is summed `notional` DESC (the bigger book frees more
    * margin when reduced). Venues with no positions are omitted — the position
    * leg only ever calls `reduceToTarget` on venues that have something to close.
+   *
+   * This is a standalone-loss ranking and deliberately coarser than the engine's
+   * own arithmetic: the summed per-position losses are neither what the futures
+   * venue reports (it nets its expiries into one signed number) nor what MM charges
+   * (it nets across venues), so a venue can rank first here while contributing
+   * nothing to the requirement. Which venue goes first only affects how many
+   * `reduceToTarget` rounds it takes to converge — each round re-reads health and
+   * `reduceToTarget` itself sizes the close against the real requirement — so the
+   * gap costs transactions, never correctness. Closing it means ranking on the
+   * portfolio requirement instead of per-venue positions, which is a bigger change
+   * than this loop.
    */
   private async rankVenuesByLoss(
     user: Address,

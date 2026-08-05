@@ -21,6 +21,7 @@
     "lint:fix": "biome check --write ."
   },
   "dependencies": {
+    "@hashpower/portfolio-margin": "github:Lumerin-protocol/collateral-margin#feat/hashprice-usd-1ph-unit&path:/portfolio-margin",
     "amaro": "^1.1.9",
     "collateral-margin-abi": "github:Lumerin-protocol/collateral-margin#dev&path:/contracts/abi",
     "derivatives-marketplace-abi": "github:Lumerin-protocol/derivatives-marketplace#85ce3c88afe23d2c4b6e451f7de6447cac0eda6d&path:/contracts/abi",

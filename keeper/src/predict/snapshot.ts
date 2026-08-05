@@ -1,11 +1,11 @@
-import type { Address } from "viem";
+import { type Address, erc20Abi } from "viem";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
 import { CollateralVaultAbi } from "collateral-margin-abi/CollateralVault.ts";
 import { PortfolioMarginEngineAbi } from "collateral-margin-abi/PortfolioMarginEngine.ts";
 import { HashPowerPerpsDEXAbi } from "derivatives-marketplace-abi/HashPowerPerpsDEX.ts";
 import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
-import type { AccountSnapshot, MMParams } from "./types.ts";
+import type { AccountSnapshot, MMParams } from "@hashpower/portfolio-margin";
 
 /**
  * Read the engine-wide constants once. They only change on PME admin
@@ -17,6 +17,14 @@ export async function readMMParams(
   chain: Chain,
   config: Config,
 ): Promise<MMParams> {
+  // Token decimals come from the vault's collateral token — the venues no
+  // longer expose `decimals()` (the PME caches it from the same source).
+  const collateralToken = await chain.publicClient.readContract({
+    address: config.vault.address,
+    abi: CollateralVaultAbi,
+    functionName: "collateralToken",
+  });
+
   const reads = await chain.publicClient.multicall({
     contracts: [
       {
@@ -30,8 +38,8 @@ export async function readMMParams(
         functionName: "mmSpotShock" as const,
       },
       {
-        address: config.perps.address,
-        abi: HashPowerPerpsDEXAbi,
+        address: collateralToken,
+        abi: erc20Abi,
         functionName: "decimals" as const,
       },
       {
@@ -55,12 +63,21 @@ export async function readMMParams(
  * Read everything needed to evaluate `mmSurplus(P)` for a single user as a
  * function of price. Two RPC round-trips:
  *
- *   1. Bulk multicall: balance, perp position/orderMargin/funding,
- *      futures orderMargin/activeExpirationAts.
- *   2. Per-expiry multicall: hydrate each aggregate via `getUserPosition`.
+ *   1. Bulk multicall: balance, both venues' `getRiskView` / `getOrderValues`,
+ *      the perp position, futures activeExpirationAts.
+ *   2. Per-expiry multicall: hydrate each aggregate via `getUserPosition`, plus
+ *      its `settlementPrice` — an expiry that has settled but not yet been swept
+ *      out of the active set is marked at that pinned price and carries no delta,
+ *      so the predictor cannot treat it like a live leg.
  *
  * Round-trip 2 collapses to zero calls when the user has no futures
  * positions (the common case for perps-only users).
+ *
+ * `getRiskView` carries the per-side order delta but reports fill loss only at the
+ * current mark, and the clamp makes that non-invertible once it reads zero — so the
+ * per-side limit-price totals come from `getOrderValues` and the predictor derives
+ * fill loss at whatever price it is evaluating. Pending funding also rides in
+ * `getRiskView`, replacing the separate `getPendingFunding` read.
  */
 export async function readAccountSnapshot(
   chain: Chain,
@@ -70,9 +87,10 @@ export async function readAccountSnapshot(
   const [
     balance,
     perpPosition,
-    perpOrderMargin,
-    perpFunding,
-    futuresOrderMargin,
+    perpRisk,
+    perpOrderValues,
+    futuresRisk,
+    futuresOrderValues,
     activeExpirationAts,
   ] = await chain.publicClient.multicall({
     contracts: [
@@ -91,19 +109,25 @@ export async function readAccountSnapshot(
       {
         address: config.perps.address,
         abi: HashPowerPerpsDEXAbi,
-        functionName: "getOrderMargin" as const,
+        functionName: "getRiskView" as const,
         args: [user] as const,
       },
       {
         address: config.perps.address,
         abi: HashPowerPerpsDEXAbi,
-        functionName: "getPendingFunding" as const,
+        functionName: "getOrderValues" as const,
         args: [user] as const,
       },
       {
         address: config.futures.address,
         abi: FuturesAbi,
-        functionName: "getOrderMargin" as const,
+        functionName: "getRiskView" as const,
+        args: [user] as const,
+      },
+      {
+        address: config.futures.address,
+        abi: FuturesAbi,
+        functionName: "getOrderValues" as const,
         args: [user] as const,
       },
       {
@@ -119,17 +143,26 @@ export async function readAccountSnapshot(
   const expirationAts = activeExpirationAts as readonly bigint[];
   const futuresPositions: AccountSnapshot["futures"]["positions"] = [];
   if (expirationAts.length > 0) {
-    const positions = await chain.publicClient.multicall({
-      contracts: expirationAts.map((expirationAt) => ({
-        address: config.futures.address,
-        abi: FuturesAbi,
-        functionName: "getUserPosition" as const,
-        args: [user, expirationAt] as const,
-      })),
+    const perExpiry = await chain.publicClient.multicall({
+      contracts: [
+        ...expirationAts.map((expirationAt) => ({
+          address: config.futures.address,
+          abi: FuturesAbi,
+          functionName: "getUserPosition" as const,
+          args: [user, expirationAt] as const,
+        })),
+        ...expirationAts.map((expirationAt) => ({
+          address: config.futures.address,
+          abi: FuturesAbi,
+          functionName: "settlementPrice" as const,
+          args: [expirationAt] as const,
+        })),
+      ],
       allowFailure: false,
     });
     for (let i = 0; i < expirationAts.length; i++) {
-      const pos = positions[i];
+      const pos = perExpiry[i] as { netQuantity: bigint; netEntryValue: bigint } | undefined;
+      const settlementPrice = perExpiry[expirationAts.length + i] as bigint | undefined;
       const expirationAt = expirationAts[i];
       if (pos === undefined || expirationAt === undefined) continue;
       if (pos.netQuantity === 0n) continue;
@@ -137,24 +170,38 @@ export async function readAccountSnapshot(
         expirationAt,
         netQuantity: pos.netQuantity,
         netEntryValue: pos.netEntryValue,
+        settlementPrice: settlementPrice ?? 0n,
       });
     }
   }
 
-  const funding = perpFunding as bigint;
+  const funding = perpRisk.pendingFunding;
   return {
     user,
     balance: balance as bigint,
     perp: {
       netQty: perpPosition.netQuantity,
       entryPrice: perpPosition.aggregatedEntryPrice,
-      orderMargin: perpOrderMargin as bigint,
+      orders: restingOrders(perpRisk, perpOrderValues),
       // PME uses `max(0, pendingFunding)` — only what the user owes.
       fundingOwed: funding > 0n ? funding : 0n,
     },
     futures: {
       positions: futuresPositions,
-      orderMargin: futuresOrderMargin as bigint,
+      orders: restingOrders(futuresRisk, futuresOrderValues),
     },
+  };
+}
+
+/** Pair a venue's `getRiskView` deltas with its `getOrderValues` limit-price totals. */
+function restingOrders(
+  risk: { buyOrderDelta: bigint; sellOrderDelta: bigint },
+  values: readonly [bigint, bigint],
+): AccountSnapshot["perp"]["orders"] {
+  return {
+    buyDelta: risk.buyOrderDelta,
+    sellDelta: risk.sellOrderDelta,
+    buyValue: values[0],
+    sellValue: values[1],
   };
 }

@@ -1,5 +1,5 @@
 import type { Address } from "viem";
-import type { PriceThresholds } from "./types.ts";
+import type { PriceThresholds } from "@hashpower/portfolio-margin";
 
 /**
  * Crossings emitted by `PredictiveIndex.crossings(prev, next)`. The

@@ -12,6 +12,9 @@ importers:
 
   .:
     dependencies:
+      '@hashpower/portfolio-margin':
+        specifier: link:../portfolio-margin
+        version: link:../portfolio-margin
       amaro:
         specifier: ^1.1.9
         version: 1.1.10
@@ -210,7 +213,7 @@ packages:
     resolution: {integrity: sha512-2P0p0pFGzHS5EMnhdxQi7aJN+iMheud0UhG4dlE1DLAlvL8JHjJJTX/CSm4JXwV0Ka5nGk3zC5mcb5bUQUxxMA==}
 
   derivatives-marketplace-abi@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/85ce3c88afe23d2c4b6e451f7de6447cac0eda6d#path:/contracts/abi:
-    resolution: {gitHosted: true, path: /contracts/abi, integrity: sha512-S71kDrzEuZGW+WlkvdKVp/SHe0f5bpA1HnSJnl2ymC1lcr+T07njTa+ZhG5V49qwyOJlCTADED0zvar8E6o+Ew==, tarball: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/85ce3c88afe23d2c4b6e451f7de6447cac0eda6d}
+    resolution: {gitHosted: true, integrity: sha512-S71kDrzEuZGW+WlkvdKVp/SHe0f5bpA1HnSJnl2ymC1lcr+T07njTa+ZhG5V49qwyOJlCTADED0zvar8E6o+Ew==, tarball: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/85ce3c88afe23d2c4b6e451f7de6447cac0eda6d}
     version: 0.0.0
 
   end-of-stream@1.4.5:
@@ -226,7 +229,7 @@ packages:
     resolution: {integrity: sha512-W+KJc2dmILlPplD/H4K9l9LcAHAfPtP6BY84uVLXQ6Evcz9Lcg33Y2z1IVblT6xdY54PXYVHEv+0Wpq8Io6zkA==}
 
   futures-marketplace-abi@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/a2115badfbd78206c172b0bd5cb47d697985bca9#path:/contracts/abi:
-    resolution: {gitHosted: true, path: /contracts/abi, integrity: sha512-DH1KCNN4FM6f+Et4yGxiHfv+GXKShVNxvBmGPvSWE5y/D046FDtzCdcs9ptaeCTgjWPKiHcB6BmB6wp2NGp+HQ==, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/a2115badfbd78206c172b0bd5cb47d697985bca9}
+    resolution: {gitHosted: true, integrity: sha512-DH1KCNN4FM6f+Et4yGxiHfv+GXKShVNxvBmGPvSWE5y/D046FDtzCdcs9ptaeCTgjWPKiHcB6BmB6wp2NGp+HQ==, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/a2115badfbd78206c172b0bd5cb47d697985bca9}
     version: 0.0.0
 
   help-me@5.0.0:

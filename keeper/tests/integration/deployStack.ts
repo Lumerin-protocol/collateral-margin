@@ -108,11 +108,12 @@ export interface DeployedStack {
     initialBtcUsdc: bigint;
     minimumPriceIncrement: bigint;
     quantityDecimals: number;
-    perpsLiquidationFee: bigint;
+    perpsLiquidationFeeBps: bigint;
     perpsTakerFeeBps: bigint;
     perpsMakerFeeBps: bigint;
-    futuresTakerFee: bigint;
-    futuresLiquidationFee: bigint;
+    futuresMakerFeeBps: bigint;
+    futuresTakerFeeBps: bigint;
+    futuresLiquidationFeeBps: bigint;
     futuresFirstExpirationAt: bigint;
     insuranceFund: bigint;
     initialUserBalance: bigint;
@@ -136,11 +137,16 @@ const INITIAL_HASHPRICE = INITIAL_MARKET_PRICE;
 const INITIAL_BTC_USDC = parseUnits("65000", ORACLE_DECIMALS);
 
 const MIN_PRICE_INCREMENT = parseUnits("0.01", TOKEN_DECIMALS);
-const PERPS_LIQUIDATION_FEE = parseUnits("1", TOKEN_DECIMALS);
+// Venue fees are basis-point based (bps of notional). 50 bps = 0.5% mirrors the
+// liquidation-fee values the perps/futures repos use in their own test suites.
+const PERPS_LIQUIDATION_FEE_BPS = 50n;
 const PERPS_TAKER_FEE_BPS = 5n;
 const PERPS_MAKER_FEE_BPS = 0n;
-const FUTURES_TAKER_FEE = parseUnits("1", TOKEN_DECIMALS);
-const FUTURES_LIQUIDATION_FEE = parseUnits("1", TOKEN_DECIMALS);
+// Futures match fees default to 0 (futures repo fixture convention) — scenarios
+// that need fees set them explicitly.
+const FUTURES_MAKER_FEE_BPS = 0n;
+const FUTURES_TAKER_FEE_BPS = 0n;
+const FUTURES_LIQUIDATION_FEE_BPS = 50n;
 const FUTURES_LIQUIDATION_MARGIN_PCT = 20;
 /** Spacing, in days, between successive expiries — must match Futures.EXPIRATION_INTERVAL_DAYS (30). */
 const FUTURES_EXPIRATION_INTERVAL_DAYS = 30;
@@ -220,11 +226,9 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     [usdc],
   );
 
-  // ── Perps (UUPS proxy) ────────────────────────────────────────────────
+  // ── Perps (UUPS proxy; vault is an immutable constructor arg) ─────────
   const perpsArt = artifacts.perps();
-  const perpsImpl = await deploy(publicClient, owner.client, perpsArt, [
-    MIN_PRICE_INCREMENT,
-  ]);
+  const perpsImpl = await deploy(publicClient, owner.client, perpsArt, [vault]);
   const perps = await deployProxy(
     publicClient,
     owner.client,
@@ -271,14 +275,19 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     pmeImpl,
     pmeArt.abi,
     "initialize",
-    [vault],
+    [],
   );
 
   // ── Wire PME ↔ venues ↔ vault ─────────────────────────────────────────
-  // PME -> learn about each venue so portfolio MM math includes both legs.
-  await write(publicClient, owner.client, pme, pmeArt.abi, "setPerps", [perps]);
-  await write(publicClient, owner.client, pme, pmeArt.abi, "setFutures", [
+  // PME -> learn about each venue so portfolio MM math includes both legs,
+  // and point its own spot source at the shared hashprice oracle.
+  await write(publicClient, owner.client, pme, pmeArt.abi, "setVault", [vault]);
+  await write(publicClient, owner.client, pme, pmeArt.abi, "addLinearMarket", [perps]);
+  await write(publicClient, owner.client, pme, pmeArt.abi, "addLinearMarket", [
     futures,
+  ]);
+  await write(publicClient, owner.client, pme, pmeArt.abi, "setOracle", [
+    hashpriceOracle,
   ]);
 
   // Vault -> point at the single margin engine + authorize each venue.
@@ -307,7 +316,7 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     [futures, true],
   );
 
-  // Perps -> PME + fee config.
+  // Perps -> PME + fee config (bps setters).
   await write(
     publicClient,
     owner.client,
@@ -316,8 +325,10 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     "setPortfolioMargin",
     [pme],
   );
-  await write(publicClient, owner.client, perps, perpsArt.abi, "setMatchFee", [
+  await write(publicClient, owner.client, perps, perpsArt.abi, "setTakerFeeBps", [
     Number(PERPS_TAKER_FEE_BPS),
+  ]);
+  await write(publicClient, owner.client, perps, perpsArt.abi, "setMakerFeeBps", [
     Number(PERPS_MAKER_FEE_BPS),
   ]);
   await write(
@@ -325,11 +336,11 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     owner.client,
     perps,
     perpsArt.abi,
-    "setLiquidationFee",
-    [PERPS_LIQUIDATION_FEE],
+    "setLiquidationFeeBps",
+    [Number(PERPS_LIQUIDATION_FEE_BPS)],
   );
 
-  // Futures -> PME + fees.
+  // Futures -> PME + fees (bps setters).
   await write(
     publicClient,
     owner.client,
@@ -343,16 +354,24 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     owner.client,
     futures,
     futuresArt.abi,
-    "setTakerFee",
-    [FUTURES_TAKER_FEE],
+    "setTakerFeeBps",
+    [Number(FUTURES_TAKER_FEE_BPS)],
   );
   await write(
     publicClient,
     owner.client,
     futures,
     futuresArt.abi,
-    "setLiquidationFee",
-    [FUTURES_LIQUIDATION_FEE],
+    "setMakerFeeBps",
+    [Number(FUTURES_MAKER_FEE_BPS)],
+  );
+  await write(
+    publicClient,
+    owner.client,
+    futures,
+    futuresArt.abi,
+    "setLiquidationFeeBps",
+    [Number(FUTURES_LIQUIDATION_FEE_BPS)],
   );
 
   // ── Fund & approve test wallets ───────────────────────────────────────
@@ -412,11 +431,12 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
       initialBtcUsdc: INITIAL_BTC_USDC,
       minimumPriceIncrement: MIN_PRICE_INCREMENT,
       quantityDecimals: QUANTITY_DECIMALS,
-      perpsLiquidationFee: PERPS_LIQUIDATION_FEE,
+      perpsLiquidationFeeBps: PERPS_LIQUIDATION_FEE_BPS,
       perpsTakerFeeBps: PERPS_TAKER_FEE_BPS,
       perpsMakerFeeBps: PERPS_MAKER_FEE_BPS,
-      futuresTakerFee: FUTURES_TAKER_FEE,
-      futuresLiquidationFee: FUTURES_LIQUIDATION_FEE,
+      futuresMakerFeeBps: FUTURES_MAKER_FEE_BPS,
+      futuresTakerFeeBps: FUTURES_TAKER_FEE_BPS,
+      futuresLiquidationFeeBps: FUTURES_LIQUIDATION_FEE_BPS,
       futuresFirstExpirationAt: firstExpirationAt,
       insuranceFund: INSURANCE_FUND,
       initialUserBalance: INITIAL_USER_BALANCE,
