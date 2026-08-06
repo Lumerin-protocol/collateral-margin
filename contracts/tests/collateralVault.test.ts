@@ -4,11 +4,13 @@ import { getAddress, maxUint256, zeroAddress } from "viem";
 import { network } from "hardhat";
 import {
   VAULT_AUTH_OPS_ALICE_DEPOSIT,
+  deployCollateralVaultProxy,
   deployVaultAuthorizedOperationsFixture,
   deployVaultFixture,
 } from "./fixtures.js";
 
-const { viem, networkHelpers } = await network.connect();
+const conn = await network.connect();
+const { viem, networkHelpers } = conn;
 
 /** 1 USDC (6 decimals). Shared across deposit / access-control setup tests. */
 const ONE_USDC = 1_000_000n;
@@ -136,9 +138,63 @@ describe("CollateralVault", () => {
 
   // ── Margin-gated withdrawal ─────────────────────────────────────────────
 
+  describe("margin engine wiring", () => {
+    it("rejects an address holding no code", async () => {
+      const { vault,  bob } = await networkHelpers.loadFixture(deployVaultFixture);
+
+      await viem.assertions.revertWithCustomError(
+        vault.write.setMarginEngine([bob.account.address]),
+        vault,
+        "InvalidDependency",
+      );
+    });
+
+    it("rejects a contract lacking the margin-engine surface", async () => {
+      const { vault, usdc } = await networkHelpers.loadFixture(deployVaultFixture);
+
+      await viem.assertions.revertWithCustomError(
+        vault.write.setMarginEngine([usdc.address]),
+        vault,
+        "InvalidDependency",
+      );
+    });
+
+    it("rejects an engine aggregating a different vault", async () => {
+      const { vault } = await networkHelpers.loadFixture(deployVaultFixture);
+      const { vault: otherVault } = await deployCollateralVaultProxy(conn);
+      const strayEngine = await viem.deployContract("MarginEngineMock", []);
+      await strayEngine.write.setVault([otherVault.address]);
+
+      await viem.assertions.revertWithCustomError(
+        vault.write.setMarginEngine([strayEngine.address], ),
+        vault,
+        "VaultMismatch",
+      );
+    });
+
+    it("accepts an engine aggregating this vault", async () => {
+      const { vault } = await networkHelpers.loadFixture(deployVaultFixture);
+      const engine = await viem.deployContract("MarginEngineMock", []);
+      await engine.write.setVault([vault.address]);
+
+      await vault.write.setMarginEngine([engine.address], );
+      assert.equal(await vault.read.marginEngine(), getAddress(engine.address));
+    });
+
+    it("still allows clearing the engine to ungate withdrawals", async () => {
+      const { vault } = await networkHelpers.loadFixture(deployVaultFixture);
+      const engine = await viem.deployContract("MarginEngineMock", []);
+      await engine.write.setVault([vault.address]);
+      await vault.write.setMarginEngine([engine.address], );
+
+      await vault.write.setMarginEngine([zeroAddress], );
+      assert.equal(await vault.read.marginEngine(), zeroAddress);
+    });
+  });
+
   describe("margin-gated withdrawal", () => {
     it("blocks withdrawal that would breach margin", async () => {
-      const { vault, owner, alice } = await networkHelpers.loadFixture(deployVaultFixture);
+      const { vault, alice } = await networkHelpers.loadFixture(deployVaultFixture);
       const aliceDeposit = 10_000_000n;
       const requiredIm = 8_000_000n;
       const withdrawAmount = 2_000_000n;
@@ -146,8 +202,10 @@ describe("CollateralVault", () => {
       await vault.write.deposit([aliceDeposit], { account: alice.account });
 
       const mock = await viem.deployContract("MarginEngineMock", []);
+      // The vault only adopts an engine that aggregates it.
+      await mock.write.setVault([vault.address]);
       await viem.assertions.emitWithArgs(
-        vault.write.setMarginEngine([mock.address], { account: owner.account }),
+        vault.write.setMarginEngine([mock.address], ),
         vault,
         "MarginEngineSet",
         [getAddress(mock.address)],

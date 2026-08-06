@@ -9,6 +9,8 @@ tryLoadEnvFile(".env");
 export default defineConfig({
   plugins: [hardhatToolboxViem, hardhatViemAbi],
   codegen: {
+    // Keepers and the UI install `abi/` as this package name; do not rename casually.
+    packageJson: { name: "collateral-margin-abi" },
     contracts: [
       "CollateralVault",
       "ICollateralVault",

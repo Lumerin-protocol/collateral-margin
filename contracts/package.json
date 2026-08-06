@@ -27,7 +27,7 @@
     "@types/node": "^22.0.0",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
     "hardhat": "^3.9.1",
-    "hardhat-viem-abi": "https://github.com/lsheva/hardhat-viem-abi.git#v1.0.0-alpha.1&path:packages/hardhat-viem-abi",
+    "hardhat-viem-abi": "https://github.com/lsheva/hardhat-viem-abi.git#v1.0.0-alpha.2&path:packages/hardhat-viem-abi",
     "typescript": "^5.8.0"
   },
   "dependencies": {

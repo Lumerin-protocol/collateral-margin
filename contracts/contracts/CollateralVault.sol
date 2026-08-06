@@ -30,6 +30,11 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     error NotAuthorized();
     error ZeroAddress();
     error FunctionDisabled();
+    /// @notice The margin engine aggregates a different vault than this one.
+    error VaultMismatch();
+    /// @dev A dependency did not answer a call the vault depends on: no code at the address,
+    ///      or the call reverted. Which dependency is bad is implied by the setter that reverted.
+    error InvalidDependency();
 
     // ── Events ──────────────────────────────────────────────────────────────
 
@@ -47,7 +52,7 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     ///      Balance is normal vault receipt tokens; authorized callers credit it via
     ///      `transfer` / `credit` / `depositFor`. Owner withdraws via `withdrawInsuranceFund`.
     address public constant INSURANCE_FUND_ADDR = 0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa;
-    string public constant VERSION = "1.0.1";
+    string public constant VERSION = "1.1.0";
 
     IERC20 public collateralToken;
     mapping(address => bool) public authorizedCallers;
@@ -100,15 +105,51 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
 
     // ── Admin ───────────────────────────────────────────────────────────────
 
+    function _authorizeUpgrade(address) internal override onlyOwner {}
+
     function setAuthorizedCaller(address caller, bool authorized) external onlyOwner {
         if (caller == address(0)) revert ZeroAddress();
         authorizedCallers[caller] = authorized;
         emit AuthorizedCallerSet(caller, authorized);
     }
 
+    /// @notice Set the margin engine that gates withdrawals. Pass `address(0)` to ungate them.
+    /// @dev Clearing is left open deliberately: it is the escape hatch if a broken engine would
+    ///      otherwise trap every balance in the vault. A non-zero engine must aggregate *this*
+    ///      vault — `computePortfolioIM` sizes the gate, so an engine reading another ledger
+    ///      would report margin for positions this vault never collateralizes and wave the
+    ///      withdrawal through. That failure is silent, unlike a wrong address, which reverts.
     function setMarginEngine(address _marginEngine) external onlyOwner {
+        if (_marginEngine != address(0)) {
+          _validateMarginEngine(_marginEngine);
+        }
+
         marginEngine = _marginEngine;
         emit MarginEngineSet(_marginEngine);
+    }
+
+    /// @dev `catch` only fires on a revert raised by the callee, so this check ahead of it is
+    ///      load-bearing: a call to an address holding no code succeeds with empty return data
+    ///      and fails later in this contract's decoder, out of the catch block's reach.
+    function _requireContract(address target) private view {
+        if (target.code.length == 0) revert InvalidDependency();
+    }
+
+    function _validateMarginEngine(address _marginEngine) private view {
+      _requireContract(_marginEngine);
+
+      // Probe a plain storage read rather than `computePortfolioIM`: the margin path needs
+      // the engine's own oracle, and wiring the vault must not depend on that being set yet.
+      try IPortfolioMarginEngine(_marginEngine).imSpotShock() returns (uint256) { }
+      catch {
+          revert InvalidDependency();
+      }
+
+      try IPortfolioMarginEngine(_marginEngine).vault() returns (ICollateralVault pinned) {
+          if (address(pinned) != address(this)) revert VaultMismatch();
+      } catch {
+          revert InvalidDependency();
+      }
     }
 
     /// @notice Deposit collateral into the insurance fund from `source`, minting its receipt tokens.
@@ -212,8 +253,4 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     function decimals() public view override returns (uint8) {
         return _decimals;
     }
-
-    // ── Upgrade ─────────────────────────────────────────────────────────────
-
-    function _authorizeUpgrade(address) internal override onlyOwner {}
 }

@@ -110,16 +110,18 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: Lumerin-protocol/derivatives-marketplace
-          # reduceOrderSize + three-arg updateOrders (PR #80).
-          ref: 85ce3c88afe23d2c4b6e451f7de6447cac0eda6d
+          # createOrder with explicit TIF + getRiskView; implements this branch's
+          # engine interface (PR #90).
+          ref: 8df78601bbbad049cee962509f9c9e8b9d9b2503
           path: perps
 
       - name: Checkout futures-marketplace
         uses: actions/checkout@v5
         with:
           repository: Lumerin-protocol/futures-marketplace
-          # reduceOrderSize + three-arg updateOrders (PR #227).
-          ref: a2115badfbd78206c172b0bd5cb47d697985bca9
+          # createOrder with explicit TIF + getRiskView; implements this branch's
+          # engine interface (PR #247).
+          ref: 16d026960fa15d0fb73822e6750ae8e3f14a4c6d
           path: futures-marketplace
 
       - name: Install perps contracts dependencies

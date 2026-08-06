@@ -16,6 +16,7 @@ import { hashPowerPerpsDexAbi, priceOracleMockAbi } from "../src/abi.ts";
 import { hardhat } from "../src/client.ts";
 import { startHardhatNode, createMakerConfig, loadFixture, type HardhatNode } from "./helpers.ts";
 import { deployWithCollateralFixture } from "../../contracts/fixtures/viem.ts";
+import { TimeInForce } from "../src/core/adapter.ts";
 
 const silentLogger = pino({ level: "silent" });
 
@@ -239,9 +240,9 @@ describe("MM fill handling", () => {
 
     await (
       perps as unknown as {
-        write: { createOrder: (args: [bigint, bigint], opts: unknown) => Promise<void> };
+        write: { createOrder: (args: [bigint, bigint, number], opts: unknown) => Promise<void> };
       }
-    ).write.createOrder([bestAsk.price, takerQty], {
+    ).write.createOrder([bestAsk.price, takerQty, TimeInForce.GTC], {
       account: deployment.clients.buyerWallet.account,
     });
 
@@ -259,9 +260,9 @@ describe("MM fill handling", () => {
     const takerQty = parseUnits("1", deployment.config.quantityDecimals);
     await (
       perps as unknown as {
-        write: { createOrder: (args: [bigint, bigint], opts: unknown) => Promise<void> };
+        write: { createOrder: (args: [bigint, bigint, number], opts: unknown) => Promise<void> };
       }
-    ).write.createOrder([bestAsk.price, takerQty], {
+    ).write.createOrder([bestAsk.price, takerQty, TimeInForce.GTC], {
       account: deployment.clients.buyerWallet.account,
     });
 

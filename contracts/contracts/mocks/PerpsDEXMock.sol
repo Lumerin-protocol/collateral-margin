@@ -1,32 +1,36 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import { IHashPowerPerpsDEX } from "../interfaces/IHashPowerPerpsDEX.sol";
+import { ICollateralVault } from "../interfaces/ICollateralVault.sol";
+import { ILinearMarket } from "../interfaces/ILinearMarket.sol";
 
 /// @title PerpsDEXMock — Minimal mock of HashPowerPerpsDEX for options integration tests
-contract PerpsDEXMock is IHashPowerPerpsDEX {
+contract PerpsDEXMock is ILinearMarket {
+    struct Position {
+        int256 netQuantity;
+        uint256 aggregatedEntryPrice;
+    }
+
     uint8 public constant QUANTITY_DECIMALS = 6;
+
+    /// @dev Real products pin this immutably at construction; settable here so tests can
+    ///      deploy the mock before the vault exists. Must be set before the mock is
+    ///      registered with a PortfolioMarginEngine.
+    ICollateralVault public vault;
+
+    function setVault(ICollateralVault _vault) external {
+        vault = _vault;
+    }
 
     mapping(address => Position) private _positions;
     mapping(address => uint256) private _balances;
     mapping(address => int256) private _unrealizedPnl;
-    mapping(address => uint256) private _initialMargin;
     mapping(address => uint256) private _maintenanceMargin;
-    mapping(address => uint256) private _orderMargin;
     mapping(address => int256) private _pendingFunding;
-    uint256 private _marketPrice;
-
-    function decimals() external pure returns (uint8) {
-        return 6; // USDC
-    }
-
-    function setMarketPrice(uint256 price) external {
-        _marketPrice = price;
-    }
-
-    function getMarketPrice() external view returns (uint256) {
-        return _marketPrice;
-    }
+    mapping(address => uint256) private _buyOrderDelta;
+    mapping(address => uint256) private _sellOrderDelta;
+    mapping(address => uint256) private _buyOrderFillLoss;
+    mapping(address => uint256) private _sellOrderFillLoss;
 
     function setUserPosition(address user, int256 qty, uint256 entryPrice) external {
         _positions[user] = Position(qty, entryPrice);
@@ -40,8 +44,8 @@ contract PerpsDEXMock is IHashPowerPerpsDEX {
         _unrealizedPnl[user] = pnl;
     }
 
-    function setMargins(address user, uint256 im, uint256 mm) external {
-        _initialMargin[user] = im;
+    /// @dev Only MM is modelled: it is the threshold `isLiquidatable` compares balance against.
+    function setMaintenanceMargin(address user, uint256 mm) external {
         _maintenanceMargin[user] = mm;
     }
 
@@ -49,32 +53,46 @@ contract PerpsDEXMock is IHashPowerPerpsDEX {
         return _positions[user];
     }
 
+    /// @dev Mirrors HashPowerPerpsDEX.getNetPositionDelta: qty scaled by
+    ///      10^collateralDecimals / 10^QUANTITY_DECIMALS (both 6 here).
+    function getNetPositionDelta(address user) external view returns (int256) {
+        return _positions[user].netQuantity * 1e6 / int256(10 ** QUANTITY_DECIMALS);
+    }
+
+    function getRiskView(address user) external view returns (RiskView memory) {
+        return RiskView({
+            netPositionDelta: _positions[user].netQuantity * 1e6 / int256(10 ** QUANTITY_DECIMALS),
+            unrealizedPnl: _unrealizedPnl[user],
+            pendingFunding: _pendingFunding[user],
+            buyOrderDelta: _buyOrderDelta[user],
+            sellOrderDelta: _sellOrderDelta[user],
+            buyOrderFillLoss: _buyOrderFillLoss[user],
+            sellOrderFillLoss: _sellOrderFillLoss[user]
+        });
+    }
+
     function getUnrealizedPnl(address user) external view returns (int256) {
         return _unrealizedPnl[user];
-    }
-
-    function getInitialMargin(address user) external view returns (uint256) {
-        return _initialMargin[user];
-    }
-
-    function getMaintenanceMargin(address user) external view returns (uint256) {
-        return _maintenanceMargin[user];
-    }
-
-    function getOrderMargin(address user) external view returns (uint256) {
-        return _orderMargin[user];
     }
 
     function getPendingFunding(address user) external view returns (int256) {
         return _pendingFunding[user];
     }
 
-    function setOrderMargin(address user, uint256 om) external {
-        _orderMargin[user] = om;
-    }
-
     function setPendingFunding(address user, int256 pf) external {
         _pendingFunding[user] = pf;
+    }
+
+    /// @dev Per-side order delta uses the same 10^collateralDecimals scale as
+    ///      `netPositionDelta`; fill losses are token decimals.
+    function setOrderDeltas(address user, uint256 buyDelta, uint256 sellDelta) external {
+        _buyOrderDelta[user] = buyDelta;
+        _sellOrderDelta[user] = sellDelta;
+    }
+
+    function setOrderFillLosses(address user, uint256 buyLoss, uint256 sellLoss) external {
+        _buyOrderFillLoss[user] = buyLoss;
+        _sellOrderFillLoss[user] = sellLoss;
     }
 
     function isLiquidatable(address user) external view returns (bool) {

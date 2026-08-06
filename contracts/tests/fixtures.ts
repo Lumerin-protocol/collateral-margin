@@ -1,7 +1,7 @@
 import type { NetworkConnection } from "hardhat/types/network";
 import { encodeFunctionData, maxUint256 } from "viem";
 
-/** Spot price used in PerpsDEXMock across margin tests ($50k in token decimals). */
+/** Index price used by the PME oracle mock and as perps mock entry price ($50k, token decimals). */
 export const DEFAULT_MARKET_PRICE = 50_000_000_000n;
 
 const VAULT_TEST_TOP_UP = 100_000_000_000n; // 100k USDC for alice, bob, engine
@@ -37,24 +37,30 @@ export async function deployPortfolioMarginEngineStack(
 ) {
   const { viem } = conn;
   const perpsMock = await viem.deployContract("PerpsDEXMock", []);
-  await perpsMock.write.setMarketPrice([DEFAULT_MARKET_PRICE]);
   const optionsMock = await viem.deployContract("OptionsEngineMock", []);
   const futuresMock = await viem.deployContract("FuturesMock", []);
-  await futuresMock.write.setMarketPrice([DEFAULT_MARKET_PRICE]);
+  // PME's own index oracle — spot source for stress math (6 decimals, $50k).
+  const oracleMock = await viem.deployContract("PriceOracleMock", [DEFAULT_MARKET_PRICE, 6]);
   const pmeImpl = await viem.deployContract("PortfolioMarginEngine", []);
   const pmeProxy = await viem.deployContract("ERC1967Proxy", [
     pmeImpl.address as `0x${string}`,
     encodeFunctionData({
       abi: pmeImpl.abi,
       functionName: "initialize",
-      args: [vaultAddress],
+      args: [],
     }),
   ]);
   const pme = await viem.getContractAt("PortfolioMarginEngine", pmeProxy.address);
-  await pme.write.setPerps([perpsMock.address]);
+  // The PME pins each product to its own vault at registration.
+  await perpsMock.write.setVault([vaultAddress]);
+  await futuresMock.write.setVault([vaultAddress]);
+  await optionsMock.write.setVault([vaultAddress]);
+  await pme.write.setVault([vaultAddress]);
+  await pme.write.addLinearMarket([perpsMock.address]);
+  await pme.write.addLinearMarket([futuresMock.address]);
   await pme.write.setOptions([optionsMock.address]);
-  await pme.write.setFutures([futuresMock.address]);
-  return { perpsMock, optionsMock, futuresMock, pme };
+  await pme.write.setOracle([oracleMock.address]);
+  return { perpsMock, optionsMock, futuresMock, oracleMock, pme };
 }
 
 /** CollateralVault tests: fund alice, bob, engine; approvals for deposit flows. */

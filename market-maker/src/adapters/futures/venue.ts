@@ -95,6 +95,7 @@ export class FuturesVenueAdapter implements VenueAdapter {
   private engineAddressCache: `0x${string}` | null = null;
   private collateralTokenCache: `0x${string}` | null = null;
   private marginPercentCache: bigint | null = null;
+  private imSpotShockCache: bigint | null = null;
   private readonly rawOracle: RawOracleReader;
 
   constructor(opts: FuturesVenueOptions) {
@@ -346,8 +347,22 @@ export class FuturesVenueAdapter implements VenueAdapter {
   }
 
   /**
+   * The mark from the most recent `getRawMarketPrice()`, or `null` before the first
+   * read. Lets the synchronous `estimateOrderMargin` charge an order's instant fill
+   * loss against the same mark the quotes were built from.
+   */
+  cachedMarketPrice(): bigint | null {
+    return this.rawOracle.lastPrice();
+  }
+
+  /**
    * Cache marginPercent on the venue. It is static-ish (admin-changeable) so we
-   * read it once and reuse for the `estimateOrderMargin` formula.
+   * read it once and reuse it.
+   *
+   * No longer feeds `estimateOrderMargin`: the engine stresses a futures contract's
+   * delta with the portfolio-wide `imSpotShock`, not the venue's own
+   * `liquidationMarginPercent`. Kept because the liquidation-margin figure is still
+   * the right thing to report and reason about for positions.
    */
   async getMarginInputs(): Promise<{ marginPct: bigint }> {
     if (this.marginPercentCache !== null) {
@@ -358,11 +373,25 @@ export class FuturesVenueAdapter implements VenueAdapter {
       abi: FuturesAbi,
       functionName: "liquidationMarginPercent",
     });
-    // Note: `getMarginPercent` on chain adds a breach-penalty term we don't
-    // mirror here — we use `liquidationMarginPercent` as a slight over-estimate.
-    // The on-chain check is the real authority; this is just our pre-trade gate.
     this.marginPercentCache = BigInt(liqMarginPct);
     return { marginPct: this.marginPercentCache };
+  }
+
+  async fetchImSpotShock(): Promise<bigint> {
+    if (this.imSpotShockCache !== null) return this.imSpotShockCache;
+    const { engine } = await this.resolveAddresses();
+    const shock = await this.publicClient.readContract({
+      address: engine,
+      abi: PortfolioMarginEngineAbi,
+      functionName: "imSpotShock",
+    });
+    this.imSpotShockCache = shock;
+    return shock;
+  }
+
+  /** The cached IM spot shock, or `null` before the first fetch. */
+  cachedImSpotShock(): bigint | null {
+    return this.imSpotShockCache;
   }
 }
 
@@ -383,7 +412,8 @@ class FuturesCollateralAccount implements BatchableCollateralAccount {
    * Decompose the snapshot into shared (portfolio-wide) + venue-specific reads.
    * `shared` order matches the perps account so the aggregator can decode one
    * shared result slice for every venue:
-   *   [vaultBalance, portfolioIM, portfolioMM, walletTokenBalance, nativeBalance]
+   *   [vaultBalance, portfolioIM, portfolioMM, walletTokenBalance, nativeBalance,
+   *    portfolioOrderMargin]
    */
   async buildMarginReadPlan(): Promise<MarginReadPlan> {
     const owner = this.venue.wallet.account.address;
@@ -396,10 +426,10 @@ class FuturesCollateralAccount implements BatchableCollateralAccount {
       { address: engine, abi: PortfolioMarginEngineAbi, functionName: "computePortfolioMM", args: [owner] },
       { address: token, abi: erc20Abi, functionName: "balanceOf", args: [owner] },
       { address: mc3, abi: Multicall3Abi, functionName: "getEthBalance", args: [owner] },
+      { address: engine, abi: PortfolioMarginEngineAbi, functionName: "orderMarginOf", args: [owner] },
     ] as MarginReadPlan["shared"];
 
     const venue = [
-      { address: this.venue.address, abi: FuturesAbi, functionName: "getOrderMargin", args: [owner] },
       { address: this.venue.address, abi: FuturesAbi, functionName: "getUnrealizedPnl", args: [owner] },
     ] as MarginReadPlan["venue"];
 
@@ -410,7 +440,7 @@ class FuturesCollateralAccount implements BatchableCollateralAccount {
         vaultBalance,
         portfolioIM,
         portfolioMM,
-        venueOrderMargin: r[5],
+        portfolioOrderMargin: r[5],
         venueUnrealizedPnl: r[6],
         walletTokenBalance,
         nativeBalance,
@@ -430,11 +460,11 @@ class FuturesCollateralAccount implements BatchableCollateralAccount {
     return plan.decode(results);
   }
 
-  async imSpotShock(): Promise<bigint> {
-    // Futures uses pricePerDay × marginPct/100 (one unit, no duration multiplier),
-    // not a spot-shock model. Returns 0 to signal "not applicable" — adapters don't
-    // use this directly; estimateOrderMargin reads from getMarginInputs instead.
-    return 0n;
+  imSpotShock(): Promise<bigint> {
+    // The engine treats a futures contract as one unit of delta and stresses it with
+    // the same portfolio-wide shock it applies to perps, so this is no longer "not
+    // applicable" — it is the coefficient `estimateOrderMargin` needs.
+    return this.venue.fetchImSpotShock();
   }
 
   async deposit(amount: bigint): Promise<void> {

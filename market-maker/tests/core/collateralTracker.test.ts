@@ -15,7 +15,7 @@ function makeAccount(initial: Partial<CollateralSnapshot>): {
     vaultBalance: 0n,
     portfolioIM: 0n,
     portfolioMM: 0n,
-    venueOrderMargin: 0n,
+    portfolioOrderMargin: 0n,
     venueUnrealizedPnl: 0n,
     walletTokenBalance: 0n,
     nativeBalance: 0n,

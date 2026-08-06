@@ -96,7 +96,8 @@ export interface Venue {
    *      closeQtys[])`, perps `liquidatePosition(user, closeQty)`.
    *      Oversize partials revert `OverLiquidation` (re-size off-chain).
    *
-   * Reverts on-chain with `OrdersStillOpen` (orders must be cleared first) or
+   * Reverts on-chain with `OrdersStillOpen` (orders must be cleared first —
+   * across the whole portfolio, not just this venue's book) or
    * `NotLiquidatable` are translated into `{ skipped }` so the planner
    * re-plans without crashing.
    */

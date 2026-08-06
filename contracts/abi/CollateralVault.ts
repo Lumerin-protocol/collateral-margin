@@ -129,6 +129,11 @@ export const CollateralVaultAbi = [
   },
   {
     "inputs": [],
+    "name": "InvalidDependency",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "InvalidInitialization",
     "type": "error"
   },
@@ -194,6 +199,11 @@ export const CollateralVaultAbi = [
       }
     ],
     "name": "UUPSUnsupportedProxiableUUID",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "VaultMismatch",
     "type": "error"
   },
   {

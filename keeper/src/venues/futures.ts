@@ -5,8 +5,7 @@ import type { Config } from "../config.ts";
 import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
 import { sendLiquidate } from "../tx/liquidate.ts";
 import { readAccountSnapshot, readMMParams } from "../predict/snapshot.ts";
-import { solveFuturesClosesToTarget } from "../predict/solve.ts";
-import type { MMParams } from "../predict/types.ts";
+import { type MMParams, solveFuturesClosesToTarget } from "@hashpower/portfolio-margin";
 import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
 import type {
   LiquidateOrdersOutcome,

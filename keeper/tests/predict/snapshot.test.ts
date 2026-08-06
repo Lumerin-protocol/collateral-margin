@@ -4,12 +4,17 @@ import type { Address } from "viem";
 import { readAccountSnapshot, readMMParams } from "../../src/predict/snapshot.ts";
 import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
+import type { RestingOrders } from "@hashpower/portfolio-margin";
+
+/** An empty book on one venue. */
+const NO_ORDERS: RestingOrders = { buyDelta: 0n, sellDelta: 0n, buyValue: 0n, sellValue: 0n };
 
 const VAULT = "0x000000000000000000000000000000000000aa01" as Address;
 const PME = "0x000000000000000000000000000000000000aa02" as Address;
 const PERPS = "0x000000000000000000000000000000000000aa03" as Address;
 const FUTURES = "0x000000000000000000000000000000000000aa04" as Address;
 const USER = "0x1111111111111111111111111111111111111111" as Address;
+const USDC = "0x000000000000000000000000000000000000aa05" as Address;
 
 const EXPIRY_A = 1_756_416_000n;
 const EXPIRY_B = 1_759_008_000n;
@@ -26,11 +31,13 @@ function makeConfig(): Config {
 function makeChain(scripted: {
   activeExpirationAts?: readonly bigint[];
   futuresPositions?: Record<string, { netQuantity: bigint; netEntryValue: bigint }>;
+  /** Keyed by expiry; absent means the expiry has not settled. */
+  settlementPrices?: Record<string, bigint>;
   perpNetQty?: bigint;
   perpEntry?: bigint;
-  perpOrderMargin?: bigint;
   perpFunding?: bigint;
-  futuresOrderMargin?: bigint;
+  perpOrders?: RestingOrders;
+  futuresOrders?: RestingOrders;
   balance?: bigint;
   imShock?: bigint;
   mmShock?: bigint;
@@ -39,6 +46,10 @@ function makeChain(scripted: {
 }): Chain {
   return {
     publicClient: {
+      readContract: async ({ functionName }: { functionName: string }) => {
+        if (functionName === "collateralToken") return USDC;
+        throw new Error(`unexpected readContract: ${functionName}`);
+      },
       multicall: async ({
         contracts,
       }: {
@@ -61,12 +72,29 @@ function makeChain(scripted: {
                 aggregatedEntryPrice: scripted.perpEntry ?? 0n,
               };
             }
-            case "getOrderMargin":
-              return c.address === PERPS
-                ? scripted.perpOrderMargin ?? 0n
-                : scripted.futuresOrderMargin ?? 0n;
-            case "getPendingFunding":
-              return scripted.perpFunding ?? 0n;
+            case "settlementPrice": {
+              const expirationAt = c.args?.[0] as bigint;
+              return scripted.settlementPrices?.[expirationAt.toString()] ?? 0n;
+            }
+            case "getRiskView": {
+              const orders =
+                (c.address === PERPS ? scripted.perpOrders : scripted.futuresOrders) ?? NO_ORDERS;
+              return {
+                netPositionDelta: 0n,
+                unrealizedPnl: 0n,
+                // Only the perps venue accrues funding.
+                pendingFunding: c.address === PERPS ? scripted.perpFunding ?? 0n : 0n,
+                buyOrderDelta: orders.buyDelta,
+                sellOrderDelta: orders.sellDelta,
+                buyOrderFillLoss: 0n,
+                sellOrderFillLoss: 0n,
+              };
+            }
+            case "getOrderValues": {
+              const orders =
+                (c.address === PERPS ? scripted.perpOrders : scripted.futuresOrders) ?? NO_ORDERS;
+              return [orders.buyValue, orders.sellValue];
+            }
             case "getActiveExpirationDates":
               return scripted.activeExpirationAts ?? [];
             case "imSpotShock":
@@ -105,6 +133,30 @@ describe("predict/snapshot: readAccountSnapshot", () => {
     assert.equal(snap.perp.netQty, 0n);
     assert.equal(snap.perp.fundingOwed, 0n);
     assert.equal(snap.futures.positions.length, 0);
+    assert.deepEqual(snap.perp.orders, NO_ORDERS);
+    assert.deepEqual(snap.futures.orders, NO_ORDERS);
+  });
+
+  it("pairs each venue's getRiskView deltas with its getOrderValues totals", async () => {
+    const perpOrders: RestingOrders = {
+      buyDelta: 2_000_000n,
+      sellDelta: 500_000n,
+      buyValue: 190_000_000n,
+      sellValue: 55_000_000n,
+    };
+    const futuresOrders: RestingOrders = {
+      buyDelta: 1_000_000n,
+      sellDelta: 0n,
+      buyValue: 42_000_000n,
+      sellValue: 0n,
+    };
+    const chain = makeChain({ perpOrders, futuresOrders });
+    const snap = await readAccountSnapshot(chain, makeConfig(), USER);
+    // The snapshot carries limit-price totals rather than the venue's fill loss at the
+    // current mark, because the clamp makes that figure non-invertible once it reads
+    // zero and the predictor needs the loss at prices other than the current one.
+    assert.deepEqual(snap.perp.orders, perpOrders);
+    assert.deepEqual(snap.futures.orders, futuresOrders);
   });
 
   it("clamps pending funding to >= 0 (PME treats credits as not-owed)", async () => {
@@ -135,5 +187,28 @@ describe("predict/snapshot: readAccountSnapshot", () => {
     assert.equal(long?.netEntryValue, 50n);
     assert.equal(short?.netQuantity, -2n);
     assert.equal(short?.netEntryValue, -118n);
+  });
+
+  it("hydrates each expiry's settlement price, defaulting unsettled ones to zero", async () => {
+    const chain = makeChain({
+      activeExpirationAts: [EXPIRY_A, EXPIRY_B],
+      futuresPositions: {
+        [EXPIRY_A.toString()]: { netQuantity: 1n, netEntryValue: 50n },
+        [EXPIRY_B.toString()]: { netQuantity: -2n, netEntryValue: -118n },
+      },
+      settlementPrices: { [EXPIRY_B.toString()]: 61n },
+    });
+    const snap = await readAccountSnapshot(chain, makeConfig(), USER);
+
+    assert.equal(
+      snap.futures.positions.find((p) => p.expirationAt === EXPIRY_A)?.settlementPrice,
+      0n,
+      "still live",
+    );
+    assert.equal(
+      snap.futures.positions.find((p) => p.expirationAt === EXPIRY_B)?.settlementPrice,
+      61n,
+      "settled but not yet swept — the margin math must not reprice it",
+    );
   });
 });

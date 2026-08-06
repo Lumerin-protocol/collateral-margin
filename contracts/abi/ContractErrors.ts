@@ -102,7 +102,17 @@ export const contractErrors = [
   },
   {
     "inputs": [],
+    "name": "LinearMarketAlreadyRegistered",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "NotEnabled",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "LinearMarketNotRegistered",
     "type": "error"
   },
   {
@@ -124,6 +134,11 @@ export const contractErrors = [
       }
     ],
     "name": "ERC20InvalidSpender",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidOracle",
     "type": "error"
   },
   {
@@ -167,6 +182,16 @@ export const contractErrors = [
   {
     "inputs": [],
     "name": "FunctionDisabled",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "VaultMismatch",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "InvalidDependency",
     "type": "error"
   },
   {
@@ -266,6 +291,11 @@ export const contractErrors = [
   {
     "inputs": [],
     "name": "MintingFinalized",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "OracleNotSet",
     "type": "error"
   },
   {

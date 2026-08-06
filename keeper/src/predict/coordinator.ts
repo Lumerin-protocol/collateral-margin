@@ -9,9 +9,12 @@ import type { PriceFeed, PriceUpdate } from "../oracle/priceFeed.ts";
 import type { Notifier } from "../alert/notifier.ts";
 import { readAccountHealthBatch } from "../pme/health.ts";
 import { readAccountSnapshot, readMMParams } from "./snapshot.ts";
-import { solveAlertThresholds, solveLiquidationThresholds } from "./solve.ts";
+import {
+  type MMParams,
+  solveAlertThresholds,
+  solveLiquidationThresholds,
+} from "@hashpower/portfolio-margin";
 import { PredictiveIndex } from "./predictiveIndex.ts";
-import type { MMParams } from "./types.ts";
 
 /**
  * Wires the predictive layer into the existing keeper:

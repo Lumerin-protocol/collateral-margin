@@ -63,6 +63,9 @@ function buildHarness({ balance, perpEntry }: { balance: bigint; perpEntry: bigi
   const chain = {
     publicClient: {
       readContract: async ({ functionName }: { functionName: string }) => {
+        if (functionName === "collateralToken") {
+          return "0x000000000000000000000000000000000000aa05";
+        }
         if (functionName === "decimals") return 8;
         if (functionName === "latestRoundData") {
           return [1n, oracleAnswer, 1_000n, 1_000n, 1n] as const;
@@ -91,10 +94,18 @@ function buildHarness({ balance, perpEntry }: { balance: bigint; perpEntry: bigi
               return balance;
             case "getUserPosition":
               return { netQuantity: 1_000_000n, aggregatedEntryPrice: perpEntry };
-            case "getOrderMargin":
-              return 0n;
-            case "getPendingFunding":
-              return 0n;
+            case "getRiskView":
+              return {
+                netPositionDelta: 0n,
+                unrealizedPnl: 0n,
+                pendingFunding: 0n,
+                buyOrderDelta: 0n,
+                sellOrderDelta: 0n,
+                buyOrderFillLoss: 0n,
+                sellOrderFillLoss: 0n,
+              };
+            case "getOrderValues":
+              return [0n, 0n];
             case "getActiveExpirationDates":
               return [];
             case "computePortfolioIM":

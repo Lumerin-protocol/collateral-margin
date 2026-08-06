@@ -2,6 +2,9 @@ import { parseUnits, type Address } from "viem";
 import { hardhat } from "viem/chains";
 import { deployStack, type DeployedStack, type Wallet } from "./deployStack.ts";
 
+/** Mirrors the venues' on-chain `TimeInForce`; fixtures only ever rest liquidity. */
+const GTC = 0;
+
 /**
  * Fixture builders.
  *
@@ -1017,7 +1020,7 @@ async function placePerpsOrder(
     address: base.addresses.perps,
     abi: base.abis.perps,
     functionName: "createOrder",
-    args: [price, quantity],
+    args: [price, quantity, GTC],
     chain: hardhat,
     account: wallet.account,
   });
@@ -1031,25 +1034,25 @@ async function placeFuturesOrder(
   expirationAt: bigint,
   qty: number,
 ): Promise<void> {
-  // Futures 3.0: createOrder(price, expirationAt, signedQuantity) — whole contracts.
+  // Futures 3.0: createOrder(price, expirationAt, signedQuantity, tif) — whole contracts.
   const hash = await wallet.client.writeContract({
     address: base.addresses.futures,
     abi: base.abis.futures,
     functionName: "createOrder",
-    args: [price, expirationAt, BigInt(qty)],
+    args: [price, expirationAt, BigInt(qty), GTC],
     chain: hardhat,
     account: wallet.account,
   });
   await base.publicClient.waitForTransactionReceipt({ hash });
 }
 
-/** Owner-only: set the futures per-lot taker fee (token decimals). */
-async function setFuturesTakerFee(stack: DeployedStack, fee: bigint): Promise<void> {
+/** Owner-only: set the futures taker fee (bps of notional). */
+async function setFuturesTakerFee(stack: DeployedStack, feeBps: bigint): Promise<void> {
   const hash = await stack.accounts.owner.client.writeContract({
     address: stack.addresses.futures,
     abi: stack.abis.futures,
-    functionName: "setTakerFee",
-    args: [fee],
+    functionName: "setTakerFeeBps",
+    args: [Number(feeBps)],
     chain: hardhat,
     account: stack.accounts.owner.account,
   });

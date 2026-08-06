@@ -7,6 +7,7 @@ import type { Config } from "../../src/config.ts";
 
 const FUTURES = "0x000000000000000000000000000000000000F00d" as Address;
 const USER = "0x0000000000000000000000000000000000000b0b" as Address;
+const USDC = "0x000000000000000000000000000000000000aa05" as Address;
 const EXPIRY = 1_756_416_000n;
 
 const IM_SHOCK = 10n ** 17n;
@@ -15,6 +16,34 @@ const MM_SHOCK = 5n * 10n ** 16n;
 interface ReadCall {
   functionName: string;
   args?: readonly unknown[];
+}
+
+/** `ILinearMarket.RiskView` for an account with no position and an empty book. */
+const EMPTY_RISK_VIEW = {
+  netPositionDelta: 0n,
+  unrealizedPnl: 0n,
+  pendingFunding: 0n,
+  buyOrderDelta: 0n,
+  sellOrderDelta: 0n,
+  buyOrderFillLoss: 0n,
+  sellOrderFillLoss: 0n,
+} as const;
+
+/**
+ * The bulk read `readAccountSnapshot` issues, in order: balance, the perp position,
+ * then each venue's `getRiskView` / `getOrderValues` pair, then the active futures
+ * expiries. Only the expiry list varies between these cases.
+ */
+function snapshotMulticall(balance: bigint, expiries: readonly bigint[]) {
+  return [
+    balance,
+    { netQuantity: 0n, aggregatedEntryPrice: 0n },
+    EMPTY_RISK_VIEW,
+    [0n, 0n],
+    EMPTY_RISK_VIEW,
+    [0n, 0n],
+    expiries,
+  ];
 }
 
 const silentLogger = {
@@ -48,26 +77,23 @@ function makeChainStub(opts: {
     publicClient: {
       readContract: async (call: ReadCall) => {
         if (call.functionName === "getMarketPrice") return opts.marketPrice;
+        if (call.functionName === "collateralToken") return USDC;
         throw new Error(`unexpected readContract: ${call.functionName}`);
       },
       multicall: async ({ contracts }: { contracts: readonly ReadCall[] }) => {
         const fns = contracts.map((c) => c.functionName);
         if (fns[0] === "imSpotShock") return [IM_SHOCK, MM_SHOCK, 6, 6];
         if (fns[0] === "balanceOf") {
-          return [
-            opts.balance,
-            { netQuantity: 0n, aggregatedEntryPrice: 0n },
-            0n,
-            0n,
-            0n,
-            [EXPIRY],
-          ];
+          return snapshotMulticall(opts.balance, [EXPIRY]);
         }
         if (fns[0] === "getUserPosition") {
-          return contracts.map(() => ({
-            netQuantity: opts.netQuantity,
-            netEntryValue: opts.netEntryValue,
-          }));
+          // The per-expiry read batches `getUserPosition` and `settlementPrice`;
+          // an unsettled expiry prices at 0.
+          return contracts.map((c) =>
+            c.functionName === "settlementPrice"
+              ? 0n
+              : { netQuantity: opts.netQuantity, netEntryValue: opts.netEntryValue },
+          );
         }
         throw new Error(`unexpected multicall head: ${fns[0]}`);
       },
@@ -117,23 +143,18 @@ describe("futures venue: reduceToTarget", () => {
       publicClient: {
         readContract: async (call: ReadCall) => {
           if (call.functionName === "getMarketPrice") return 100_000n;
+          if (call.functionName === "collateralToken") return USDC;
           throw new Error(`unexpected readContract: ${call.functionName}`);
         },
         multicall: async ({ contracts }: { contracts: readonly ReadCall[] }) => {
           const fns = contracts.map((c) => c.functionName);
           if (fns[0] === "imSpotShock") return [IM_SHOCK, MM_SHOCK, 6, 6];
           if (fns[0] === "balanceOf") {
-            return [
-              1_000_000n,
-              { netQuantity: 0n, aggregatedEntryPrice: 0n },
-              0n,
-              0n,
-              0n,
-              [EXPIRY, EXPIRY_B, EXPIRY + 172_800n],
-            ];
+            return snapshotMulticall(1_000_000n, [EXPIRY, EXPIRY_B, EXPIRY + 172_800n]);
           }
           if (fns[0] === "getUserPosition") {
             return contracts.map((c) => {
+              if (c.functionName === "settlementPrice") return 0n;
               const expirationAt = c.args?.[1] as bigint;
               return {
                 netQuantity: 4n,

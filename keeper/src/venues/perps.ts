@@ -5,8 +5,7 @@ import type { Config } from "../config.ts";
 import { HashPowerPerpsDEXAbi } from "derivatives-marketplace-abi/HashPowerPerpsDEX.ts";
 import { sendLiquidate } from "../tx/liquidate.ts";
 import { readAccountSnapshot, readMMParams } from "../predict/snapshot.ts";
-import { solvePerpCloseToTarget } from "../predict/solve.ts";
-import type { MMParams } from "../predict/types.ts";
+import { type MMParams, solvePerpCloseToTarget } from "@hashpower/portfolio-margin";
 import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
 import type {
   LiquidateOrdersOutcome,
