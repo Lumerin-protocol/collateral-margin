@@ -41,7 +41,7 @@
     "fraction.js": "^5.2.2",
     "futures-contracts": "github:Lumerin-protocol/futures-marketplace#a2115badfbd78206c172b0bd5cb47d697985bca9&path:/contracts",
     "js-yaml": "^4.1.0",
-    "perps-contracts": "github:Lumerin-protocol/derivatives-marketplace#85ce3c88afe23d2c4b6e451f7de6447cac0eda6d&path:/contracts",
+    "perps-contracts": "github:Lumerin-protocol/derivatives-marketplace#f7e219f704646ab654a2a8d0286c0f477148e299&path:/contracts",
     "pino": "^10.3.1",
     "viem": "^2.45.3"
   },

@@ -216,7 +216,7 @@ export class PerpsVenueAdapter implements VenueAdapter {
         token: this.collateralTokenCache,
       };
     }
-    const [vault, engine, token] = await this.publicClient.multicall({
+    const [vault, engine] = await this.publicClient.multicall({
       allowFailure: false,
       contracts: [
         {
@@ -229,12 +229,14 @@ export class PerpsVenueAdapter implements VenueAdapter {
           abi: HashPowerPerpsDEXAbi,
           functionName: "portfolioMargin",
         },
-        {
-          address: this.address,
-          abi: HashPowerPerpsDEXAbi,
-          functionName: "collateralToken",
-        },
       ],
+    });
+    // The current perps implementation exposes the shared vault, while the
+    // collateral token is a getter on the vault itself.
+    const token = await this.publicClient.readContract({
+      address: vault,
+      abi: CollateralVaultAbi,
+      functionName: "collateralToken",
     });
     this.vaultAddressCache = vault;
     this.engineAddressCache = engine;
