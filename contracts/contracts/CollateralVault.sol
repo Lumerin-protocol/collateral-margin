@@ -52,7 +52,7 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     ///      Balance is normal vault receipt tokens; authorized callers credit it via
     ///      `transfer` / `credit` / `depositFor`. Owner withdraws via `withdrawInsuranceFund`.
     address public constant INSURANCE_FUND_ADDR = 0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa;
-    string public constant VERSION = "1.0.1";
+    string public constant VERSION = "1.1.0";
 
     IERC20 public collateralToken;
     mapping(address => bool) public authorizedCallers;
