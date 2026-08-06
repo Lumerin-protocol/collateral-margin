@@ -12,7 +12,7 @@ async function main() {
 
   const { viem } = await hre.network.getOrCreate();
 
-  const vaultAddress = requireAddress("VAULT_ADDRESS");
+  const VAULT_ADDRESS = requireAddress("VAULT_ADDRESS");
   const SAFE_OWNER_ADDRESS = readOptionalAddress("SAFE_OWNER_ADDRESS");
   const PERPS_ADDRESS = readOptionalAddress("PERPS_ADDRESS");
   const OPTIONS_ENGINE_ADDRESS = readOptionalAddress("OPTIONS_ENGINE_ADDRESS");
@@ -34,7 +34,7 @@ async function main() {
   logInfo("deployer", { Address: addrUrl(pc, deployer.account.address) });
 
   // ── Verify vault & whether deployer can wire it ─────────────────────────
-  const vault = await viem.getContractAt("CollateralVault", vaultAddress);
+  const vault = await viem.getContractAt("CollateralVault", VAULT_ADDRESS);
   const vaultOwner = await vault.read.owner();
   const deployerIsVaultOwner = getAddress(vaultOwner) === getAddress(deployer.account.address);
   logInfo("vault", {
@@ -83,17 +83,18 @@ async function main() {
   const pmeInitData = encodeFunctionData({
     abi: pmeImpl.abi,
     functionName: "initialize",
-    args: [vault.address],
+    args: [],
   });
   const pmeProxy = await viem.deployContract("ERC1967Proxy", [pmeImpl.address, pmeInitData], {
     confirmations: 5,
   });
+
   logStep("Deployed", addrUrl(pc, pmeProxy.address));
   await verifyContract(pmeProxy.address, [pmeImpl.address, pmeInitData]);
   logStep("Verified", addrUrl(pc, pmeProxy.address));
 
   const pme = await viem.getContractAt("PortfolioMarginEngine", pmeProxy.address);
-  logInfo("pme", {
+  const data = {
     Address: addrUrl(pc, pme.address),
     Version: await pme.read.VERSION(),
     Owner: await pme.read.owner(),
@@ -101,7 +102,11 @@ async function main() {
     mmSpotShock: await pme.read.mmSpotShock(),
     imVolShock: await pme.read.imVolShock(),
     mmVolShock: await pme.read.mmVolShock(),
-  });
+    vault: await pme.read.vault(),
+  }
+
+  logInfo("pme", data);
+
 
   // ── 3. Override stress shocks (optional) ────────────────────────────────
   if (overrideShocks) {
@@ -153,6 +158,14 @@ async function main() {
     logInfo("PME.setOracle", { oracle: PRICE_ORACLE_ADDRESS });
     await logPrompt("Proceed?");
     const sim = await pme.simulate.setOracle([PRICE_ORACLE_ADDRESS]);
+    const receipt = await writeAndWait(deployer, sim);
+    logStep("Done", txUrl(pc, receipt.transactionHash));
+  }
+
+  if (getAddress(data.vault) !== getAddress(VAULT_ADDRESS)) {
+    logInfo("PME.setVault", { vault: VAULT_ADDRESS });
+    await logPrompt("Proceed?");
+    const sim = await pme.simulate.setVault([VAULT_ADDRESS]);
     const receipt = await writeAndWait(deployer, sim);
     logStep("Done", txUrl(pc, receipt.transactionHash));
   }
