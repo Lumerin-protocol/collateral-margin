@@ -43,8 +43,8 @@ importers:
         specifier: ^3.9.1
         version: 3.9.1
       hardhat-viem-abi:
-        specifier: https://github.com/lsheva/hardhat-viem-abi.git#v1.0.0-alpha.1&path:packages/hardhat-viem-abi
-        version: https://codeload.github.com/lsheva/hardhat-viem-abi/tar.gz/194bf0c28cc1ef7a37e4d6aec024fbd191f5b8a9#path:packages/hardhat-viem-abi(hardhat@3.9.1)(viem@2.52.2(typescript@5.9.3)(zod@3.25.76))
+        specifier: https://github.com/lsheva/hardhat-viem-abi.git#v1.0.0-alpha.2&path:packages/hardhat-viem-abi
+        version: https://codeload.github.com/lsheva/hardhat-viem-abi/tar.gz/54198ea8c9ad9b05c0c23a057ae3b1c7ab82a93a#path:packages/hardhat-viem-abi(hardhat@3.9.1)(viem@2.52.2(typescript@5.9.3)(zod@3.25.76))
       typescript:
         specifier: ^5.8.0
         version: 5.9.3
@@ -754,9 +754,9 @@ packages:
   get-tsconfig@4.13.7:
     resolution: {integrity: sha512-7tN6rFgBlMgpBML5j8typ92BKFi2sFQvIdpAqLA2beia5avZDrMs0FLZiM5etShWq5irVyGcGMEA1jcDaK7A/Q==}
 
-  hardhat-viem-abi@https://codeload.github.com/lsheva/hardhat-viem-abi/tar.gz/194bf0c28cc1ef7a37e4d6aec024fbd191f5b8a9#path:packages/hardhat-viem-abi:
-    resolution: {path: packages/hardhat-viem-abi, tarball: https://codeload.github.com/lsheva/hardhat-viem-abi/tar.gz/194bf0c28cc1ef7a37e4d6aec024fbd191f5b8a9}
-    version: 1.0.0-alpha.1
+  hardhat-viem-abi@https://codeload.github.com/lsheva/hardhat-viem-abi/tar.gz/54198ea8c9ad9b05c0c23a057ae3b1c7ab82a93a#path:packages/hardhat-viem-abi:
+    resolution: {path: packages/hardhat-viem-abi, tarball: https://codeload.github.com/lsheva/hardhat-viem-abi/tar.gz/54198ea8c9ad9b05c0c23a057ae3b1c7ab82a93a}
+    version: 1.0.0-alpha.2
     engines: {node: '>=22'}
     peerDependencies:
       hardhat: ^3.0.0
@@ -1706,7 +1706,7 @@ snapshots:
     dependencies:
       resolve-pkg-maps: 1.0.0
 
-  hardhat-viem-abi@https://codeload.github.com/lsheva/hardhat-viem-abi/tar.gz/194bf0c28cc1ef7a37e4d6aec024fbd191f5b8a9#path:packages/hardhat-viem-abi(hardhat@3.9.1)(viem@2.52.2(typescript@5.9.3)(zod@3.25.76)):
+  hardhat-viem-abi@https://codeload.github.com/lsheva/hardhat-viem-abi/tar.gz/54198ea8c9ad9b05c0c23a057ae3b1c7ab82a93a#path:packages/hardhat-viem-abi(hardhat@3.9.1)(viem@2.52.2(typescript@5.9.3)(zod@3.25.76)):
     dependencies:
       hardhat: 3.9.1
       viem: 2.52.2(typescript@5.9.3)(zod@3.25.76)
