@@ -104,8 +104,8 @@ function buildHarness({ balance, perpEntry }: { balance: bigint; perpEntry: bigi
                 buyOrderFillLoss: 0n,
                 sellOrderFillLoss: 0n,
               };
-            case "getOrderValues":
-              return [0n, 0n];
+            case "getOrderAggregate":
+              return { buyQty: 0n, sellQty: 0n, buyValue: 0n, sellValue: 0n };
             case "getActiveExpirationDates":
               return [];
             case "computePortfolioIM":

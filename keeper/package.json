@@ -24,8 +24,8 @@
     "@hashpower/portfolio-margin": "github:Lumerin-protocol/collateral-margin#c34b4a360d6616d017b157a4a9e27e1a8e60079c&path:/portfolio-margin",
     "amaro": "^1.1.9",
     "collateral-margin-abi": "github:Lumerin-protocol/collateral-margin#c34b4a360d6616d017b157a4a9e27e1a8e60079c&path:/contracts/abi",
-    "derivatives-marketplace-abi": "github:Lumerin-protocol/derivatives-marketplace#f7e219f704646ab654a2a8d0286c0f477148e299&path:/contracts/abi",
-    "futures-marketplace-abi": "github:Lumerin-protocol/futures-marketplace#547ade13eb944b0e86bbef325749ed627cc886b4&path:/contracts/abi",
+    "derivatives-marketplace-abi": "github:Lumerin-protocol/derivatives-marketplace#8b7ed0f3572d0ea8039a11757b7c1b963be75535&path:/contracts/abi",
+    "futures-marketplace-abi": "github:Lumerin-protocol/futures-marketplace#05e97deb86a59e6be45fa0aa2ac10b8cb070c303&path:/contracts/abi",
     "pino": "^10.3.1",
     "viem": "^2.48.8"
   },

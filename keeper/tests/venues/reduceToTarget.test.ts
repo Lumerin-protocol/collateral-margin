@@ -31,7 +31,7 @@ const EMPTY_RISK_VIEW = {
 
 /**
  * The bulk read `readAccountSnapshot` issues, in order: balance, the perp position,
- * then each venue's `getRiskView` / `getOrderValues` pair, then the active futures
+ * then each venue's `getRiskView` / `getOrderAggregate` pair, then the active futures
  * expiries. Only the expiry list varies between these cases.
  */
 function snapshotMulticall(balance: bigint, expiries: readonly bigint[]) {

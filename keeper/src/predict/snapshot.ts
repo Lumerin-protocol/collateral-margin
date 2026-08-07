@@ -63,7 +63,7 @@ export async function readMMParams(
  * Read everything needed to evaluate `mmSurplus(P)` for a single user as a
  * function of price. Two RPC round-trips:
  *
- *   1. Bulk multicall: balance, both venues' `getRiskView` / `getOrderValues`,
+ *   1. Bulk multicall: balance, both venues' `getRiskView` / `getOrderAggregate`,
  *      the perp position, futures activeExpirationAts.
  *   2. Per-expiry multicall: hydrate each aggregate via `getUserPosition`, plus
  *      its `settlementPrice` — an expiry that has settled but not yet been swept
@@ -75,7 +75,7 @@ export async function readMMParams(
  *
  * `getRiskView` carries the per-side order delta but reports fill loss only at the
  * current mark, and the clamp makes that non-invertible once it reads zero — so the
- * per-side limit-price totals come from `getOrderValues` and the predictor derives
+ * per-side limit-price totals come from `getOrderAggregate` and the predictor derives
  * fill loss at whatever price it is evaluating. Pending funding also rides in
  * `getRiskView`, replacing the separate `getPendingFunding` read.
  */
@@ -88,9 +88,9 @@ export async function readAccountSnapshot(
     balance,
     perpPosition,
     perpRisk,
-    perpOrderValues,
+    perpOrderAggregate,
     futuresRisk,
-    futuresOrderValues,
+    futuresOrderAggregate,
     activeExpirationAts,
   ] = await chain.publicClient.multicall({
     contracts: [
@@ -115,7 +115,7 @@ export async function readAccountSnapshot(
       {
         address: config.perps.address,
         abi: HashPowerPerpsDEXAbi,
-        functionName: "getOrderValues" as const,
+        functionName: "getOrderAggregate" as const,
         args: [user] as const,
       },
       {
@@ -127,7 +127,7 @@ export async function readAccountSnapshot(
       {
         address: config.futures.address,
         abi: FuturesAbi,
-        functionName: "getOrderValues" as const,
+        functionName: "getOrderAggregate" as const,
         args: [user] as const,
       },
       {
@@ -182,26 +182,26 @@ export async function readAccountSnapshot(
     perp: {
       netQty: perpPosition.netQuantity,
       entryPrice: perpPosition.aggregatedEntryPrice,
-      orders: restingOrders(perpRisk, perpOrderValues),
+      orders: restingOrders(perpRisk, perpOrderAggregate),
       // PME uses `max(0, pendingFunding)` — only what the user owes.
       fundingOwed: funding > 0n ? funding : 0n,
     },
     futures: {
       positions: futuresPositions,
-      orders: restingOrders(futuresRisk, futuresOrderValues),
+      orders: restingOrders(futuresRisk, futuresOrderAggregate),
     },
   };
 }
 
-/** Pair a venue's `getRiskView` deltas with its `getOrderValues` limit-price totals. */
+/** Pair a venue's risk deltas with its cached order aggregate. */
 function restingOrders(
   risk: { buyOrderDelta: bigint; sellOrderDelta: bigint },
-  values: readonly [bigint, bigint],
+  aggregate: { buyValue: bigint; sellValue: bigint },
 ): AccountSnapshot["perp"]["orders"] {
   return {
     buyDelta: risk.buyOrderDelta,
     sellDelta: risk.sellOrderDelta,
-    buyValue: values[0],
-    sellValue: values[1],
+    buyValue: aggregate.buyValue,
+    sellValue: aggregate.sellValue,
   };
 }

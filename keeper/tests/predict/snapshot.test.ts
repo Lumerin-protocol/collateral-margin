@@ -90,10 +90,15 @@ function makeChain(scripted: {
                 sellOrderFillLoss: 0n,
               };
             }
-            case "getOrderValues": {
+            case "getOrderAggregate": {
               const orders =
                 (c.address === PERPS ? scripted.perpOrders : scripted.futuresOrders) ?? NO_ORDERS;
-              return [orders.buyValue, orders.sellValue];
+              return {
+                buyQty: 0n,
+                sellQty: 0n,
+                buyValue: orders.buyValue,
+                sellValue: orders.sellValue,
+              };
             }
             case "getActiveExpirationDates":
               return scripted.activeExpirationAts ?? [];
@@ -137,7 +142,7 @@ describe("predict/snapshot: readAccountSnapshot", () => {
     assert.deepEqual(snap.futures.orders, NO_ORDERS);
   });
 
-  it("pairs each venue's getRiskView deltas with its getOrderValues totals", async () => {
+  it("pairs each venue's risk deltas with its order aggregate totals", async () => {
     const perpOrders: RestingOrders = {
       buyDelta: 2_000_000n,
       sellDelta: 500_000n,
