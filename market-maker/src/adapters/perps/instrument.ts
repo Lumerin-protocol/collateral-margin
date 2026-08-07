@@ -271,7 +271,7 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
         address: this.venue.address,
         abi: HashPowerPerpsDEXAbi,
         functionName: "createOrder",
-        args: [1_000_000n, 1_000_000n],
+        args: [1_000_000n, 1_000_000n, 0],
         account,
       });
     } catch {
