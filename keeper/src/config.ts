@@ -166,25 +166,6 @@ export interface Config {
      */
     balanceCriticalWei: bigint;
   };
-  outdatedOrders: {
-    /**
-     * Cadence of the futures expired-order sweep in ms. Default 5 min —
-     * expired orders aren't time-critical (they just pin a slot under
-     * `MAX_ORDERS_PER_PARTICIPANT` and leave a dead level on the book),
-     * so we don't need the sub-minute cadence used by liquidations. Set
-     * to 0 to disable the sweep entirely (e.g. when another keeper is
-     * the designated cleaner).
-     */
-    sweepIntervalMs: number;
-    /**
-     * Maximum number of ids passed to one
-     * `Futures.removeOutdatedOrders(bytes32[])` tx. Each cleanup is roughly
-     * 50-80k gas (one `_closeOrder` traversal); 50 keeps us well under
-     * Base's 30M block-gas limit (~4M worst case). Larger user-side
-     * fan-outs split across multiple sequential txs.
-     */
-    maxBatchSize: number;
-  };
   delivery: {
     /**
      * Opt-in: when true, the keeper permissionlessly calls
@@ -411,10 +392,6 @@ export function loadConfig(): Config {
       // when running on a chain with materially different gas prices.
       balanceLowWei: BigInt(process.env.BALANCE_LOW_WEI ?? "10000000000000000"),
       balanceCriticalWei: BigInt(process.env.BALANCE_CRITICAL_WEI ?? "1000000000000000"),
-    },
-    outdatedOrders: {
-      sweepIntervalMs: Number(process.env.OUTDATED_ORDERS_SWEEP_INTERVAL_MS ?? "300000"),
-      maxBatchSize: Number(process.env.OUTDATED_ORDERS_MAX_BATCH_SIZE ?? "50"),
     },
     delivery: {
       enabled: process.env.DELIVERY_KEEPER_ENABLED === "true",

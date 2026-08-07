@@ -252,13 +252,6 @@ function buildConfig(
       balanceLowWei: 10_000_000_000_000_000n,
       balanceCriticalWei: 1_000_000_000_000_000n,
     },
-    outdatedOrders: {
-      // Disabled by default in integration tests — they cover liquidation
-      // and delivery flows; expired-order sweep has its own unit tests.
-      // Tests that want to exercise it can override via a future flag.
-      sweepIntervalMs: 0,
-      maxBatchSize: 50,
-    },
     delivery: {
       enabled: overrides.delivery === true,
       // Tighter than production so tests don't have to wait a minute for

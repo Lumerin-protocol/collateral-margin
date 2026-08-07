@@ -50,10 +50,6 @@ const STUB_CONFIG: Config = {
     balanceLowWei: 10_000_000_000_000_000n,
     balanceCriticalWei: 1_000_000_000_000_000n,
   },
-  outdatedOrders: {
-    sweepIntervalMs: 0,
-    maxBatchSize: 50,
-  },
   delivery: {
     enabled: false,
     sweepIntervalMs: 60_000,
