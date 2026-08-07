@@ -177,8 +177,8 @@ export interface Config {
      */
     sweepIntervalMs: number;
     /**
-     * Maximum number of `removeOutdatedOrder` calls bundled into a
-     * single `Futures.multicall(bytes[])` tx. Each call is roughly
+     * Maximum number of ids passed to one
+     * `Futures.removeOutdatedOrders(bytes32[])` tx. Each cleanup is roughly
      * 50-80k gas (one `_closeOrder` traversal); 50 keeps us well under
      * Base's 30M block-gas limit (~4M worst case). Larger user-side
      * fan-outs split across multiple sequential txs.
@@ -221,8 +221,8 @@ export interface Config {
      */
     bootstrapUsers: readonly Address[];
     /**
-     * Maximum number of `settlePosition` calls bundled into a single
-     * `Futures.multicall(bytes[])` transaction. Trades a single nonce per
+     * Maximum number of position pairs passed to a single
+     * `Futures.settlePositions(address[],uint256[])` transaction. Trades a single nonce per
      * sweep tick (no replacement-underpriced races) for one bigger tx.
      * Capped to keep gas usage well under the block limit — Base has 30M
      * block gas, each `settlePosition` is roughly 200-300k gas, so 50 is

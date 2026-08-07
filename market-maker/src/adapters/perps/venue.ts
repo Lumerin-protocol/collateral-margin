@@ -168,36 +168,6 @@ export class PerpsVenueAdapter implements VenueAdapter {
     }
   }
 
-  /** @deprecated Prefer {@link sendCall} with a single `updateOrders` encoding. */
-  async multicall(
-    calls: `0x${string}`[],
-    opts: { maxFeePerGas?: bigint; nonce?: number } = {},
-  ): Promise<`0x${string}`> {
-    try {
-      return await this.wallet.walletClient.writeContract({
-        address: this.address,
-        abi: HashPowerPerpsDEXAbi,
-        functionName: "multicall",
-        args: [calls],
-        account: this.wallet.account,
-        chain: this.chain,
-        maxFeePerGas: opts.maxFeePerGas,
-        nonce: opts.nonce,
-      });
-    } catch (err) {
-      throw attachTenderlyUrl(err, {
-        chainId: this.chain.id,
-        from: this.wallet.account.address,
-        to: this.address,
-        data: encodeFunctionData({
-          abi: HashPowerPerpsDEXAbi,
-          functionName: "multicall",
-          args: [calls],
-        }),
-      });
-    }
-  }
-
   // ── Internal helpers used by the collateral account & instrument ─────────
 
   async resolveAddresses(): Promise<{

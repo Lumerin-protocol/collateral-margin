@@ -86,7 +86,7 @@ export interface BuildKeeperOverrides {
    */
   deliveryBootstrapUsers?: readonly Address[];
   /**
-   * Maximum settlePosition calls bundled into one Futures.multicall tx by
+   * Maximum position pairs passed to one Futures.settlePositions tx by
    * the delivery coordinator. Defaults to 50 for parity with production.
    * Override to a small value to assert batching behaviour explicitly
    * (e.g. set to 1 to force per-id calls, or 2 to assert chunked sweeps).

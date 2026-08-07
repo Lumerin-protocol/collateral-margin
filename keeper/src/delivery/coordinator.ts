@@ -1,7 +1,6 @@
 import {
   BaseError,
   ContractFunctionRevertedError,
-  encodeFunctionData,
   getAddress,
   type Address,
   type Hex,
@@ -431,31 +430,14 @@ export class DeliveryCoordinator {
     if (this.config.keeper.dryRun) {
       this.logger.info(
         { batchSize: settleable.length },
-        "[dryRun] would call Futures.multicall(settlePosition × N)",
+        "[dryRun] would call Futures.settlePositions",
       );
       for (const pos of settleable) this.dropTracked(pos.user, pos.expirationAt);
       return;
     }
 
-    const calldatas: Hex[] = [];
-    const encodable: TrackedPosition[] = [];
-    for (const pos of settleable) {
-      try {
-        const data = encodeFunctionData({
-          abi: FuturesAbi,
-          functionName: "settlePosition",
-          args: [pos.user, pos.expirationAt],
-        });
-        calldatas.push(data);
-        encodable.push(pos);
-      } catch (err) {
-        this.logger.error(
-          { err, user: pos.user, expirationAt: pos.expirationAt.toString() },
-          "delivery: encodeFunctionData threw — dropping malformed entry from batch",
-        );
-      }
-    }
-    if (calldatas.length === 0) return;
+    const users = settleable.map((pos) => pos.user);
+    const expirationAts = settleable.map((pos) => pos.expirationAt);
 
     type WriteParams = Parameters<
       typeof this.chain.walletClient.writeContract
@@ -466,8 +448,8 @@ export class DeliveryCoordinator {
         this.chain.walletClient.writeContract({
           address: this.config.futures.address,
           abi: FuturesAbi,
-          functionName: "multicall",
-          args: [calldatas],
+          functionName: "settlePositions",
+          args: [users, expirationAts],
           account: this.chain.account,
           chain: this.chain.walletClient.chain ?? null,
         } as unknown as WriteParams),
@@ -481,10 +463,10 @@ export class DeliveryCoordinator {
         return;
       }
       this.logger.warn(
-        { err, batchSize: encodable.length },
+        { err, batchSize: settleable.length },
         "delivery batch: write reverted — falling back to per-position retries",
       );
-      for (const pos of encodable) {
+      for (const pos of settleable) {
         try {
           await this.attemptSettle(pos);
         } catch (innerErr) {
@@ -505,13 +487,13 @@ export class DeliveryCoordinator {
       {
         hash,
         blockNumber: receipt.blockNumber.toString(),
-        batchSize: encodable.length,
+        batchSize: settleable.length,
         ...formatGasCost(receipt, this.ethUsdFeed),
       },
-      "delivery batch: multicall confirmed",
+      "delivery batch: settlePositions confirmed",
     );
 
-    for (const pos of encodable) {
+    for (const pos of settleable) {
       this.dropTracked(pos.user, pos.expirationAt);
     }
   }

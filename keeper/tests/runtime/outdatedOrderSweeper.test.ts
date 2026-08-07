@@ -1,14 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import {
-  BaseError,
-  ContractFunctionRevertedError,
-  decodeFunctionData,
-  type Address,
-  type Hex,
-} from "viem";
+import { type Address, type Hex } from "viem";
 import pino from "pino";
-import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
 import { OutdatedOrderSweeper } from "../../src/runtime/outdatedOrderSweeper.ts";
 import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
@@ -60,22 +53,18 @@ interface FakeChainOpts {
   blockTimestamp: bigint;
   orderIdsByUser: Map<Address, Hex[]>;
   orders: Map<Hex, FakeOrder>;
-  /** Simulate failure: returns an `errorName` for the given orderId, else undefined. */
-  simulateRevert?: (orderId: Hex) => string | undefined;
 }
 
 interface Recorded {
   readContractCalls: number;
   multicallReadCalls: number;
-  simulateCalls: Hex[];
-  writeCalls: Array<{ functionName: string; calldatas: Hex[] }>;
+  writeCalls: Array<{ functionName: string; orderIds: Hex[] }>;
 }
 
 function makeChain(opts: FakeChainOpts): { chain: Chain; recorded: Recorded } {
   const recorded: Recorded = {
     readContractCalls: 0,
     multicallReadCalls: 0,
-    simulateCalls: [],
     writeCalls: [],
   };
 
@@ -121,24 +110,6 @@ function makeChain(opts: FakeChainOpts): { chain: Chain; recorded: Recorded } {
         };
       });
     },
-    simulateContract: async ({
-      functionName,
-      args,
-    }: {
-      functionName: string;
-      args: unknown[];
-    }) => {
-      if (functionName !== "removeOutdatedOrder") {
-        throw new Error(`unexpected simulate fn: ${functionName}`);
-      }
-      const orderId = args[0] as Hex;
-      recorded.simulateCalls.push(orderId);
-      const errorName = opts.simulateRevert?.(orderId);
-      if (errorName !== undefined) {
-        throw new MockRevertError(errorName);
-      }
-      return { request: { functionName, args } };
-    },
     waitForTransactionReceipt: async () => ({
       blockNumber: 1n,
       gasUsed: 200_000n,
@@ -155,10 +126,10 @@ function makeChain(opts: FakeChainOpts): { chain: Chain; recorded: Recorded } {
       functionName: string;
       args: unknown[];
     }) => {
-      if (functionName !== "multicall") {
+      if (functionName !== "removeOutdatedOrders") {
         throw new Error(`unexpected write fn: ${functionName}`);
       }
-      recorded.writeCalls.push({ functionName, calldatas: args[0] as Hex[] });
+      recorded.writeCalls.push({ functionName, orderIds: args[0] as Hex[] });
       return "0xabc" as Hex;
     },
   };
@@ -169,20 +140,6 @@ function makeChain(opts: FakeChainOpts): { chain: Chain; recorded: Recorded } {
     account: { address: SIGNER },
   } as unknown as Chain;
   return { chain, recorded };
-}
-
-/** Mimics a viem ContractFunctionRevertedError so `BaseError.walk` finds it. */
-class MockRevertError extends BaseError {
-  override name = "ContractFunctionExecutionError";
-  constructor(errorName: string) {
-    const inner = new ContractFunctionRevertedError({
-      abi: FuturesAbi,
-      data: undefined,
-      functionName: "removeOutdatedOrder",
-    });
-    (inner as unknown as { data: { errorName: string } }).data = { errorName };
-    super("simulated revert", { cause: inner });
-  }
 }
 
 function makeConfig(overrides: Partial<Config["outdatedOrders"]> = {}): Config {
@@ -260,11 +217,10 @@ describe("OutdatedOrderSweeper", () => {
     );
     const closed = await sweeper.runSweep();
     assert.equal(closed, 0);
-    assert.equal(recorded.simulateCalls.length, 0);
     assert.equal(recorded.writeCalls.length, 0);
   });
 
-  it("batches all expired orders for a user into a single multicall write", async () => {
+  it("batches all expired orders for a user into one typed write", async () => {
     const { logger, calls } = makeRecordingLogger();
     const id1 = ("0x" + "11".repeat(32)) as Hex;
     const id2 = ("0x" + "22".repeat(32)) as Hex;
@@ -289,21 +245,12 @@ describe("OutdatedOrderSweeper", () => {
 
     assert.equal(closed, 2);
     assert.equal(recorded.writeCalls.length, 1);
-    assert.deepEqual(recorded.simulateCalls, [id1, id2]);
-
-    // Decode each calldata to confirm both are `removeOutdatedOrder(<expectedId>)`.
-    const decoded = recorded.writeCalls[0]!.calldatas.map((cd) =>
-      decodeFunctionData({ abi: FuturesAbi, data: cd }),
-    );
-    assert.equal(decoded.length, 2);
-    assert.equal(decoded[0]?.functionName, "removeOutdatedOrder");
-    assert.equal(decoded[0]?.args?.[0], id1);
-    assert.equal(decoded[1]?.functionName, "removeOutdatedOrder");
-    assert.equal(decoded[1]?.args?.[0], id2);
+    assert.equal(recorded.writeCalls[0]!.functionName, "removeOutdatedOrders");
+    assert.deepEqual(recorded.writeCalls[0]!.orderIds, [id1, id2]);
 
     assert.ok(
       calls.some((c) => c.level === "info" && c.msg.includes("confirmed")),
-      "expected an INFO log when the multicall write confirms",
+      "expected an INFO log when the batch write confirms",
     );
   });
 
@@ -333,9 +280,9 @@ describe("OutdatedOrderSweeper", () => {
     assert.equal(
       recorded.writeCalls.length,
       1,
-      "one multicall write for cross-user batch",
+      "one typed write for cross-user batch",
     );
-    assert.equal(recorded.writeCalls[0]!.calldatas.length, 2);
+    assert.deepEqual(recorded.writeCalls[0]!.orderIds, [idA, idB]);
   });
 
   it("splits across multiple writes when batch size cap is exceeded", async () => {
@@ -363,54 +310,12 @@ describe("OutdatedOrderSweeper", () => {
     // 5 expired / batch of 2 → ceil(5/2) = 3 writes
     assert.equal(recorded.writeCalls.length, 3);
     assert.deepEqual(
-      recorded.writeCalls.map((c) => c.calldatas.length),
+      recorded.writeCalls.map((c) => c.orderIds.length),
       [2, 2, 1],
     );
   });
 
-  it("drops stale-state candidates flagged by simulate (OrderNotExists / OrderNotExpired)", async () => {
-    // Race scenario: between our `getOrder` read and our simulate, the
-    // user (or a concurrent keeper) closed orderId1, and orderId2 had its
-    // expirationAt bumped. The sweeper must skip them silently and still
-    // broadcast a write for the survivor (orderId3).
-    const { logger, calls } = makeRecordingLogger();
-    const id1 = ("0x" + "11".repeat(32)) as Hex;
-    const id2 = ("0x" + "22".repeat(32)) as Hex;
-    const id3 = ("0x" + "33".repeat(32)) as Hex;
-    const { chain, recorded } = makeChain({
-      blockTimestamp: 10_000n,
-      orderIdsByUser: new Map([[USER_A, [id1, id2, id3]]]),
-      orders: new Map([
-        [id1, { participant: USER_A, expirationAt: 5_000n }],
-        [id2, { participant: USER_A, expirationAt: 6_000n }],
-        [id3, { participant: USER_A, expirationAt: 7_000n }],
-      ]),
-      simulateRevert: (id) => {
-        if (id === id1) return "OrderNotExists";
-        if (id === id2) return "OrderNotExpired";
-        return undefined;
-      },
-    });
-    const sweeper = new OutdatedOrderSweeper(
-      chain,
-      makeConfig(),
-      makeTracker([USER_A]),
-      logger,
-    );
-    const closed = await sweeper.runSweep();
-    assert.equal(closed, 1);
-    assert.equal(recorded.writeCalls.length, 1);
-    assert.equal(recorded.writeCalls[0]!.calldatas.length, 1);
-    // Stale-state skips are debug — they're benign and shouldn't pollute INFO.
-    assert.equal(
-      calls.filter(
-        (c) => c.level === "warn" && c.msg.includes("non-recoverable"),
-      ).length,
-      0,
-    );
-  });
-
-  it("skips the write entirely on dry-run but still simulates", async () => {
+  it("skips the write entirely on dry-run", async () => {
     const { logger, calls } = makeRecordingLogger();
     const id1 = ("0x" + "11".repeat(32)) as Hex;
     const { chain, recorded } = makeChain({
@@ -429,11 +334,6 @@ describe("OutdatedOrderSweeper", () => {
     const closed = await sweeper.runSweep();
     assert.equal(closed, 0);
     assert.equal(recorded.writeCalls.length, 0);
-    assert.equal(
-      recorded.simulateCalls.length,
-      1,
-      "simulate runs so dry-run still surfaces reverts",
-    );
     assert.ok(calls.some((c) => c.msg.startsWith("[dryRun]")));
   });
 
@@ -451,7 +351,6 @@ describe("OutdatedOrderSweeper", () => {
     const recorded: Recorded = {
       readContractCalls: 0,
       multicallReadCalls: 0,
-      simulateCalls: [],
       writeCalls: [],
     };
     const publicClient = {
@@ -479,10 +378,6 @@ describe("OutdatedOrderSweeper", () => {
           };
         });
       },
-      simulateContract: async ({ args }: { args: unknown[] }) => {
-        recorded.simulateCalls.push(args[0] as Hex);
-        return { request: {} };
-      },
       waitForTransactionReceipt: async () => ({
         blockNumber: 1n,
         gasUsed: 0n,
@@ -493,8 +388,8 @@ describe("OutdatedOrderSweeper", () => {
       chain: null,
       writeContract: async ({ args }: { args: unknown[] }) => {
         recorded.writeCalls.push({
-          functionName: "multicall",
-          calldatas: args[0] as Hex[],
+          functionName: "removeOutdatedOrders",
+          orderIds: args[0] as Hex[],
         });
         return "0xabc" as Hex;
       },

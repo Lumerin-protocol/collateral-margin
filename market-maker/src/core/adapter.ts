@@ -385,7 +385,7 @@ export interface InstrumentAdapter {
 export type VenueKind = "perps" | "futures";
 
 /**
- * Per-venue interface. One per process; owns the wallet, the multicall route,
+ * Per-venue interface. One per process; owns the wallet, read-batching route,
  * the venue-events stream, and the collateral account. Single-instrument
  * venues (perps, futures) expose `getInstrument()` directly; a future
  * multi-instrument venue (options) would expose `listInstruments()` instead.
@@ -425,15 +425,6 @@ export interface VenueAdapter {
    */
   sendCall(
     data: `0x${string}`,
-    opts: { maxFeePerGas?: bigint; nonce?: number },
-  ): Promise<`0x${string}`>;
-
-  /**
-   * @deprecated Prefer {@link sendCall} with a single `updateOrders` encoding.
-   * Multicall wrapping is no longer used by the portfolio coordinator.
-   */
-  multicall(
-    calls: `0x${string}`[],
     opts: { maxFeePerGas?: bigint; nonce?: number },
   ): Promise<`0x${string}`>;
 }

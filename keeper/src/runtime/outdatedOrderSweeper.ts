@@ -1,10 +1,4 @@
-import {
-  BaseError,
-  ContractFunctionRevertedError,
-  encodeFunctionData,
-  type Address,
-  type Hex,
-} from "viem";
+import { type Address, type Hex } from "viem";
 import type pino from "pino";
 import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
 import { withUnstickRetry } from "../tx/unstick.ts";
@@ -39,20 +33,26 @@ import type { ParticipantTracker } from "../discovery/tracker.ts";
  *   tick → for each tracked user:
  *           1. readContract `getUserOrders(user)` — empty? skip
  *           2. multicall `getOrder(id)` for each id → filter expired
- *           3. one `Futures.multicall([removeOutdatedOrder(id1), ...])` write
+ *           3. one `Futures.removeOutdatedOrders([id1, ...])` write
  *              (capped at `outdatedOrders.maxBatchSize`; larger user-side
  *              fan-outs are split into N batches, each its own tx).
  *
- * Recoverable reverts during simulation (`OrderNotExists`, `OrderNotExpired`)
- * just drop the id from the batch — they happen when an id closed between
- * our read and our write (user cancel, match, prior keeper instance won the
- * race). We log them at debug because they're entirely benign.
+ * The typed batch skips stale and not-yet-expired ids on-chain, so a user
+ * cancellation or competing keeper cannot revert unrelated cleanup work.
  *
  * Non-futures venues (perps) don't have order expiry so this module is
  * Futures-only by design.
  */
 
-const RECOVERABLE_REVERTS = new Set(["OrderNotExists", "OrderNotExpired"]);
+const FUTURES_REMOVE_OUTDATED_ORDERS_ABI = [
+  {
+    type: "function",
+    name: "removeOutdatedOrders",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "_orderIds", type: "bytes32[]" }],
+    outputs: [{ name: "removed", type: "uint256" }],
+  },
+] as const;
 
 interface ExpiredOrder {
   user: Address;
@@ -251,72 +251,21 @@ export class OutdatedOrderSweeper {
   }
 
   /**
-   * Simulates each `removeOutdatedOrder(id)` to filter stale entries
-   * (`OrderNotExists` / `OrderNotExpired` — usually a race against a user
-   * cancel or a prior keeper run), then encodes the survivors into one
-   * `Futures.multicall(bytes[])` write.
-   *
-   * Returns the number of orders actually broadcast for closure (zero on
-   * dry-run or empty-batch-after-filter — both are normal). Throws only on
-   * unexpected reverts during the write phase; transient RPC failures are
-   * caught and logged so the next sweep retries.
+   * Sends one race-tolerant `removeOutdatedOrders(ids)` write. The contract
+   * skips stale/live ids and preserves every valid cleanup in the batch.
    */
   private async closeBatch(batch: readonly ExpiredOrder[]): Promise<number> {
-    type SimParams = Parameters<
-      typeof this.chain.publicClient.simulateContract
-    >[0];
-
-    const simResults = await Promise.allSettled(
-      batch.map((entry) =>
-        this.chain.publicClient.simulateContract({
-          address: this.config.futures.address,
-          abi: FuturesAbi,
-          functionName: "removeOutdatedOrder",
-          args: [entry.orderId],
-          account: this.chain.account,
-        } as unknown as SimParams),
-      ),
-    );
-
-    const survivors: ExpiredOrder[] = [];
-    for (let i = 0; i < batch.length; i++) {
-      const entry = batch[i] as ExpiredOrder;
-      const r = simResults[i] as PromiseSettledResult<unknown>;
-      if (r.status === "fulfilled") {
-        survivors.push(entry);
-        continue;
-      }
-      const decoded = decodeRecoverableRevert(r.reason);
-      if (decoded !== undefined) {
-        this.logger.debug(
-          { orderId: entry.orderId, user: entry.user, revert: decoded },
-          "skipping stale candidate (state moved between read and simulate)",
-        );
-        continue;
-      }
-      this.logger.warn(
-        { err: r.reason, orderId: entry.orderId, user: entry.user },
-        "simulate failed with non-recoverable error — dropping from batch",
-      );
-    }
-
-    if (survivors.length === 0) return 0;
+    if (batch.length === 0) return 0;
 
     if (this.config.keeper.dryRun) {
       this.logger.info(
-        { batchSize: survivors.length },
-        "[dryRun] would call Futures.multicall(removeOutdatedOrder × N)",
+        { batchSize: batch.length },
+        "[dryRun] would call Futures.removeOutdatedOrders",
       );
       return 0;
     }
 
-    const calldatas: Hex[] = survivors.map((entry) =>
-      encodeFunctionData({
-        abi: FuturesAbi,
-        functionName: "removeOutdatedOrder",
-        args: [entry.orderId],
-      }),
-    );
+    const orderIds = batch.map((entry) => entry.orderId);
 
     type WriteParams = Parameters<
       typeof this.chain.walletClient.writeContract
@@ -330,9 +279,9 @@ export class OutdatedOrderSweeper {
       hash = await withUnstickRetry(this.chain, this.logger, () =>
         this.chain.walletClient.writeContract({
           address: this.config.futures.address,
-          abi: FuturesAbi,
-          functionName: "multicall",
-          args: [calldatas],
+          abi: FUTURES_REMOVE_OUTDATED_ORDERS_ABI,
+          functionName: "removeOutdatedOrders",
+          args: [orderIds],
           account: this.chain.account,
           chain: this.chain.walletClient.chain ?? null,
         } as unknown as WriteParams),
@@ -342,7 +291,7 @@ export class OutdatedOrderSweeper {
       // want unhandled rejection on the setInterval-fired path to crash
       // the keeper, so always swallow and log.
       this.logger.warn(
-        { err, batchSize: survivors.length },
+        { err, batchSize: batch.length },
         "tx submission failed — sweep will retry",
       );
       return 0;
@@ -356,22 +305,11 @@ export class OutdatedOrderSweeper {
       {
         hash,
         blockNumber: receipt.blockNumber.toString(),
-        batchSize: survivors.length,
+        batchSize: batch.length,
         ...formatGasCost(receipt, this.ethUsdFeed),
       },
-      "multicall(removeOutdatedOrder × N) confirmed",
+      "removeOutdatedOrders confirmed",
     );
-    return survivors.length;
+    return batch.length;
   }
 }
-
-function decodeRecoverableRevert(err: unknown): string | undefined {
-  if (!(err instanceof BaseError)) return undefined;
-  const revert = err.walk((e) => e instanceof ContractFunctionRevertedError);
-  if (!(revert instanceof ContractFunctionRevertedError)) return undefined;
-  const name = revert.data?.errorName;
-  if (typeof name !== "string") return undefined;
-  return RECOVERABLE_REVERTS.has(name) ? name : undefined;
-}
-
-export const __testing = { decodeRecoverableRevert };

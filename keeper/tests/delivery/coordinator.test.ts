@@ -95,6 +95,7 @@ interface ChainStubOptions {
   activeDatesByUser?: Record<string, readonly bigint[]>;
   positionsByUserDate?: Record<string, { netQuantity: bigint; netEntryValue: bigint }>;
   readContractError?: (functionName: string) => Error | undefined;
+  writes?: Array<{ functionName: string; args: readonly unknown[] }>;
 }
 
 function posKey(user: Address, expirationAt: bigint): string {
@@ -176,7 +177,16 @@ function makeChain(opts: ChainStubOptions = {}): Chain {
     },
     walletClient: {
       chain: null,
-      writeContract: async () => writeHash,
+      writeContract: async ({
+        functionName,
+        args,
+      }: {
+        functionName: string;
+        args: readonly unknown[];
+      }) => {
+        opts.writes?.push({ functionName, args });
+        return writeHash;
+      },
     },
   } as unknown as Chain;
 }
@@ -285,6 +295,7 @@ describe("delivery/coordinator: bootstrap + settle", () => {
 
   it("settleBatch simulates settlePosition(user, expirationAt) and drops on success", async () => {
     const simulated: unknown[][] = [];
+    const writes: Array<{ functionName: string; args: readonly unknown[] }> = [];
     const chain = makeChain({
       // Far-future timestamp so bootstrap's trailing sweep is a no-op.
       blockTimestamp: 1n,
@@ -296,6 +307,7 @@ describe("delivery/coordinator: bootstrap + settle", () => {
       positionsByUserDate: {
         [posKey(USER_A, DELIVERY_A)]: { netQuantity: 1n, netEntryValue: 50n },
       },
+      writes,
     });
     const coord = new DeliveryCoordinator(chain, makeConfig({ settleDelayMs: 0 }), silentLogger);
     await coord.bootstrapFromUsers([USER_A]);
@@ -307,6 +319,13 @@ describe("delivery/coordinator: bootstrap + settle", () => {
       USER_A.toLowerCase(),
     );
     assert.equal(simulated[0]?.[1], DELIVERY_A);
+    assert.equal(writes.length, 1);
+    assert.equal(writes[0]?.functionName, "settlePositions");
+    assert.equal(
+      ((writes[0]?.args[0] as Address[])[0] as string).toLowerCase(),
+      USER_A.toLowerCase(),
+    );
+    assert.deepEqual(writes[0]?.args[1], [DELIVERY_A]);
     assert.equal(coord.has(USER_A, DELIVERY_A), false);
   });
 

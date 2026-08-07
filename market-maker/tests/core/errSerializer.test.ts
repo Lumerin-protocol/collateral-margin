@@ -71,12 +71,12 @@ describe("serializeError", () => {
     const err = Object.assign(new Error("contract reverted"), {
       shortMessage: "reverted",
       contractAddress: "0xabc",
-      functionName: "multicall",
+      functionName: "updateOrders",
       sender: "0xdef",
     });
     const out = serializeError(err);
     assert.equal(out.contractAddress, "0xabc");
-    assert.equal(out.functionName, "multicall");
+    assert.equal(out.functionName, "updateOrders");
     assert.equal(out.sender, "0xdef");
   });
 
