@@ -17,7 +17,7 @@ import { CollateralVaultAbi } from "collateral-margin-contracts/abi/CollateralVa
 import { PortfolioMarginEngineAbi } from "collateral-margin-contracts/abi/PortfolioMarginEngine.ts";
 import { Multicall3Abi } from "perps-contracts/abi/Multicall3.ts";
 import { depositToVault } from "../../core/vaultDeposit.ts";
-import { RawOracleReader } from "../../core/rawOracle.ts";
+import { RawOracleReader, chainlinkAggregatorAbi } from "../../core/rawOracle.ts";
 import { attachTenderlyUrl } from "../../core/tenderly.ts";
 import { FuturesInstrumentAdapter } from "./instrument.ts";
 import { FuturesVenueEvents } from "./events.ts";
@@ -119,29 +119,33 @@ export class FuturesVenueAdapter implements VenueAdapter {
     this.events = new FuturesVenueEvents(this.publicClient, this.address);
     this.account = new FuturesCollateralAccount(this);
 
-    // Discover (oracle, divisor) from the futures contract on first read.
-    // The divisor is precomputed on chain (`hashpriceScalingDivisor`), so we
-    // just fetch both fields together.
+    // Discover the Chainlink oracle and derive the decimal rebase on first read.
     this.rawOracle = new RawOracleReader({
       publicClient: this.publicClient,
       label: "futures",
       resolve: async () => {
-        const [oracle, divisor] = await this.publicClient.multicall({
+        const { token } = await this.resolveAddresses();
+        const oracle = await this.publicClient.readContract({
+          address: this.address,
+          abi: FuturesAbi,
+          functionName: "priceOracle",
+        });
+        const [oracleDecimals, tokenDecimals] = await this.publicClient.multicall({
           allowFailure: false,
           contracts: [
-            {
-              address: this.address,
-              abi: FuturesAbi,
-              functionName: "hashrateOracle",
-            },
-            {
-              address: this.address,
-              abi: FuturesAbi,
-              functionName: "hashpriceScalingDivisor",
-            },
+            { address: oracle, abi: chainlinkAggregatorAbi, functionName: "decimals" },
+            { address: token, abi: erc20Abi, functionName: "decimals" },
           ],
         });
-        return { oracle, divisor };
+        if (tokenDecimals > oracleDecimals) {
+          throw new Error(
+            `futures: tokenDecimals (${tokenDecimals}) > oracleDecimals (${oracleDecimals})`,
+          );
+        }
+        return {
+          oracle,
+          divisor: 10n ** BigInt(oracleDecimals - tokenDecimals),
+        };
       },
     });
   }
@@ -310,12 +314,12 @@ export class FuturesVenueAdapter implements VenueAdapter {
         {
           address: this.address,
           abi: FuturesAbi,
-          functionName: "collateralVault",
+          functionName: "vault",
         },
         {
           address: this.address,
           abi: FuturesAbi,
-          functionName: "marginEngine",
+          functionName: "portfolioMargin",
         },
       ],
     });

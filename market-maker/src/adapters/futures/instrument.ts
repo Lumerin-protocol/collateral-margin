@@ -299,8 +299,8 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
         address: this.venue.address,
         abi: FuturesAbi,
         functionName: "createOrder",
-        // Futures 3.0: createOrder(price, expirationAt, signedQuantity)
-        args: [1_000_000n, this.expirationAt, 1n],
+        // Futures 3.0: createOrder(price, expirationAt, signedQuantity, timeInForce)
+        args: [1_000_000n, this.expirationAt, 1n, 0],
         account,
       });
     } catch {
