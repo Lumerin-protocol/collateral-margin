@@ -252,6 +252,14 @@ contract PortfolioMarginEngine is
         return _computeMargin(user, false);
     }
 
+    /// @notice Compute IM and MM from one market/options snapshot and one oracle read.
+    function computePortfolioMargins(address user) external view returns (uint256 im, uint256 mm) {
+        MarginInputs memory inputs = _marginInputs(user, _linearAggregate(user));
+        uint256 spotPrice = _getSpotPriceWad();
+        im = _marginFromInputs(inputs, true, spotPrice);
+        mm = _marginFromInputs(inputs, false, spotPrice);
+    }
+
     /// @notice Margin charged against a delta-one resting order's notional (both token
     ///         decimals).
     /// @dev The IM spot shock is the single knob sizing unmatched linear exposure across
@@ -291,12 +299,14 @@ contract PortfolioMarginEngine is
     ///      wanting a per-order gate want `linearOrderMargin` instead.
     function orderMarginOf(address user) external view returns (uint256) {
         LinearAggregate memory agg = _linearAggregate(user);
-        uint256 withOrders = _marginFromAggregate(user, agg, true);
+        MarginInputs memory inputs = _marginInputs(user, agg);
+        uint256 spotPrice = _getSpotPriceWad();
+        uint256 withOrders = _marginFromInputs(inputs, true, spotPrice);
 
-        agg.buyOrderDelta = 0;
-        agg.sellOrderDelta = 0;
-        agg.fillLoss = 0;
-        uint256 withoutOrders = _marginFromAggregate(user, agg, true);
+        inputs.linear.buyOrderDelta = 0;
+        inputs.linear.sellOrderDelta = 0;
+        inputs.linear.fillLoss = 0;
+        uint256 withoutOrders = _marginFromInputs(inputs, true, spotPrice);
 
         return withOrders > withoutOrders ? withOrders - withoutOrders : 0;
     }
@@ -335,37 +345,58 @@ contract PortfolioMarginEngine is
         uint256 fundingOwed;
     }
 
+    struct MarginInputs {
+        LinearAggregate linear;
+        int256 netDelta;
+        uint256 netGamma;
+        uint256 netVega;
+        uint256 optionsReserved;
+    }
+
     function _computeMargin(address user, bool isIM) private view returns (uint256) {
         return _marginFromAggregate(user, _linearAggregate(user), isIM);
     }
 
-    /// @dev Folds options greeks into the linear aggregate and prices it. Split out from
-    ///      `_computeMargin` so `orderMarginOf` can re-price the same aggregate with the
-    ///      order fields zeroed without a second round of external reads.
+    /// @dev Fold options into an already-collected linear snapshot.
+    function _marginInputs(address user, LinearAggregate memory agg)
+        private
+        view
+        returns (MarginInputs memory inputs)
+    {
+        inputs.linear = agg;
+        inputs.netDelta = agg.netDelta;
+        if (address(optionsEngine) != address(0)) {
+            (int256 optDelta, uint256 optGamma, uint256 optVega) = optionsEngine.getNetGreeks(user);
+            inputs.netDelta += optDelta;
+            inputs.netGamma = optGamma;
+            inputs.netVega = optVega;
+            inputs.optionsReserved = M.fromWad(optionsEngine.getOptionsReservedMargin(user), collateralDecimals);
+        }
+    }
+
+    /// @dev Price one shared account snapshot at either IM or MM shocks.
     function _marginFromAggregate(address user, LinearAggregate memory agg, bool isIM)
         private
         view
         returns (uint256)
     {
-        // 1. Options Greeks — WAD-scaled signed delta, unsigned gamma/vega (optional)
-        int256 netDelta = agg.netDelta;
-        uint256 netGamma = 0;
-        uint256 netVega = 0;
-        uint256 optReservedTokens = 0;
-        if (address(optionsEngine) != address(0)) {
-            (int256 optDelta, uint256 optGamma, uint256 optVega) = optionsEngine.getNetGreeks(user);
-            netDelta += optDelta;
-            netGamma = optGamma;
-            netVega = optVega;
-            optReservedTokens = M.fromWad(optionsEngine.getOptionsReservedMargin(user), collateralDecimals);
-        }
+        return _marginFromInputs(_marginInputs(user, agg), isIM, _getSpotPriceWad());
+    }
 
+    function _marginFromInputs(MarginInputs memory inputs, bool isIM, uint256 spotPrice)
+        private
+        view
+        returns (uint256)
+    {
+        LinearAggregate memory agg = inputs.linear;
         // 2. Stress both fill legs (WAD-scaled) and keep the worse. Gamma and vega ride
         //    along unchanged in both — only delta moves with the orders.
-        uint256 worstLoss =
-            _worstStressLoss(netDelta + int256(agg.buyOrderDelta), netGamma, netVega, isIM);
-        uint256 sellLoss =
-            _worstStressLoss(netDelta - int256(agg.sellOrderDelta), netGamma, netVega, isIM);
+        uint256 worstLoss = _worstStressLoss(
+            inputs.netDelta + int256(agg.buyOrderDelta), inputs.netGamma, inputs.netVega, isIM, spotPrice
+        );
+        uint256 sellLoss = _worstStressLoss(
+            inputs.netDelta - int256(agg.sellOrderDelta), inputs.netGamma, inputs.netVega, isIM, spotPrice
+        );
         if (sellLoss > worstLoss) worstLoss = sellLoss;
 
         // Convert stress loss from WAD to token decimals
@@ -378,7 +409,7 @@ contract PortfolioMarginEngine is
             ? agg.unrealizedLossPerMarket
             : (agg.netUnrealizedPnl < 0 ? uint256(-agg.netUnrealizedPnl) : 0);
 
-        return stressTokens + agg.fillLoss + optReservedTokens + pnlTokens + agg.fundingOwed;
+        return stressTokens + agg.fillLoss + inputs.optionsReserved + pnlTokens + agg.fundingOwed;
     }
 
     /// @dev One batched getRiskView call per registered linear market: sums the WAD-lifted
@@ -408,7 +439,7 @@ contract PortfolioMarginEngine is
     /// @dev Evaluate 4 stress scenarios and return the worst-case loss (WAD).
     ///      Scenarios: (±Δs, ±Δσ) where Δs = spotShock * spotPrice (dollar move)
     ///      PnL ≈ delta·Δs + ½·gamma·Δs² + vega·Δσ
-    function _worstStressLoss(int256 netDelta, uint256 netGamma, uint256 netVega, bool isIM)
+    function _worstStressLoss(int256 netDelta, uint256 netGamma, uint256 netVega, bool isIM, uint256 spotPrice)
         private
         view
         returns (uint256 worst)
@@ -417,7 +448,6 @@ contract PortfolioMarginEngine is
         uint256 volShock = isIM ? imVolShock : mmVolShock;
 
         // Convert percentage shock → dollar move (WAD)
-        uint256 spotPrice = _getSpotPriceWad();
         uint256 deltaS = spotShockFrac * spotPrice / WAD;
 
         // Pre-compute gamma term: ½ · gamma · Δs²

@@ -398,8 +398,10 @@ describe("PortfolioMarginEngine", () => {
       await perpsMock.write.setUserPosition([user, ONE_LOT_QTY, DEFAULT_MARKET_PRICE]);
       const im = await pme.read.computePortfolioIM([user]);
       const mm = await pme.read.computePortfolioMM([user]);
+      const [combinedIm, combinedMm] = await pme.read.computePortfolioMargins([user]);
 
       assert.ok(im > mm, "IM > MM for same position");
+      assert.deepEqual([combinedIm, combinedMm], [im, mm], "combined read matches standalone margins");
     });
   });
 

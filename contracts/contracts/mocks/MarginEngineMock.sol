@@ -30,6 +30,10 @@ contract MarginEngineMock is IPortfolioMarginEngine {
         return 0;
     }
 
+    function computePortfolioMargins(address user) external view returns (uint256 im, uint256 mm) {
+        return (_im[user], 0);
+    }
+
     /// @dev Consistent with the zero shock below: this mock never charges order margin.
     function linearOrderMargin(uint256) external pure returns (uint256) {
         return 0;

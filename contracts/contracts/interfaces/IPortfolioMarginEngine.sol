@@ -19,6 +19,9 @@ interface IPortfolioMarginEngine {
     /// @notice Portfolio Maintenance Margin in token decimals.
     function computePortfolioMM(address user) external view returns (uint256);
 
+    /// @notice Portfolio Initial and Maintenance Margin from one shared market snapshot.
+    function computePortfolioMargins(address user) external view returns (uint256 im, uint256 mm);
+
     /// @notice Margin charged against a delta-one resting order's notional (both token
     ///         decimals).
     /// @dev Lets a market size order margin from the engine's risk knob without importing
