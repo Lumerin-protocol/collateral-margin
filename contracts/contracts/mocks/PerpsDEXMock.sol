@@ -31,6 +31,7 @@ contract PerpsDEXMock is ILinearMarket {
     mapping(address => uint256) private _sellOrderDelta;
     mapping(address => uint256) private _buyOrderFillLoss;
     mapping(address => uint256) private _sellOrderFillLoss;
+    bool private _riskViewDisabled;
 
     function setUserPosition(address user, int256 qty, uint256 entryPrice) external {
         _positions[user] = Position(qty, entryPrice);
@@ -60,6 +61,7 @@ contract PerpsDEXMock is ILinearMarket {
     }
 
     function getRiskView(address user) external view returns (RiskView memory) {
+        if (_riskViewDisabled) revert();
         return RiskView({
             netPositionDelta: _positions[user].netQuantity * 1e6 / int256(10 ** QUANTITY_DECIMALS),
             unrealizedPnl: _unrealizedPnl[user],
@@ -93,6 +95,14 @@ contract PerpsDEXMock is ILinearMarket {
     function setOrderFillLosses(address user, uint256 buyLoss, uint256 sellLoss) external {
         _buyOrderFillLoss[user] = buyLoss;
         _sellOrderFillLoss[user] = sellLoss;
+    }
+
+    function setRiskViewDisabled(bool disabled) external {
+        _riskViewDisabled = disabled;
+    }
+
+    function hasRestingOrderDelta(address user) external view returns (bool) {
+        return _buyOrderDelta[user] != 0 || _sellOrderDelta[user] != 0;
     }
 
     function isLiquidatable(address user) external view returns (bool) {

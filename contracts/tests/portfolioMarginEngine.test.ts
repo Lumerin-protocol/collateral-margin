@@ -279,6 +279,17 @@ describe("PortfolioMarginEngine", () => {
       assert.equal(await pme.read.hasRestingOrderDelta([user]), true);
     });
 
+    it("does not compute full market risk views", async () => {
+      const { pme, perpsMock, futuresMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
+
+      await perpsMock.write.setRiskViewDisabled([true]);
+      await futuresMock.write.setOrderDeltas([user, ONE_LOT_QTY, 0n]);
+
+      assert.equal(await pme.read.hasRestingOrderDelta([user]), true);
+    });
+
     it("catches either side", async () => {
       const { pme, perpsMock, user } = await networkHelpers.loadFixture(
         deployPortfolioMarginEngineFixture,

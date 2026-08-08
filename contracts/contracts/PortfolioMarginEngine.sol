@@ -310,13 +310,12 @@ contract PortfolioMarginEngine is
     ///
     ///      Keyed on delta, not order count, so an order carrying no risk cannot deadlock
     ///      liquidation — an expired futures order still occupies its participant index but
-    ///      contributes nothing here. Short-circuits on the first market with exposure, so
-    ///      the common case costs one `getRiskView`.
+    ///      contributes nothing here. Markets answer this from their order indexes or
+    ///      aggregate caches, without computing position PnL or reading an oracle.
     function hasRestingOrderDelta(address user) external view returns (bool) {
         uint256 len = linearMarkets.length();
         for (uint256 i = 0; i < len; i++) {
-            ILinearMarket.RiskView memory account = ILinearMarket(linearMarkets.at(i)).getRiskView(user);
-            if (account.buyOrderDelta != 0 || account.sellOrderDelta != 0) return true;
+            if (ILinearMarket(linearMarkets.at(i)).hasRestingOrderDelta(user)) return true;
         }
         return false;
     }

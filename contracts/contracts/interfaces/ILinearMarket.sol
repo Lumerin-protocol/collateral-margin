@@ -70,4 +70,9 @@ interface ILinearMarket {
     ///      silently take `pendingFunding` as the old `orderMargin` instead of
     ///      reverting. A fresh selector makes version skew fail loud.
     function getRiskView(address user) external view returns (RiskView memory);
+
+    /// @notice Whether this market reports any currently margin-relevant resting-order delta.
+    /// @dev This narrow read keeps portfolio-wide orders-first liquidation checks off the
+    ///      substantially more expensive position, oracle, and fill-loss path in `getRiskView`.
+    function hasRestingOrderDelta(address user) external view returns (bool);
 }
