@@ -349,8 +349,8 @@ contract PortfolioMarginEngine is
     struct MarginInputs {
         LinearAggregate linear;
         int256 netDelta;
-        uint256 netGamma;
-        uint256 netVega;
+        int256 netGamma;
+        int256 netVega;
         uint256 optionsReserved;
     }
 
@@ -367,7 +367,7 @@ contract PortfolioMarginEngine is
         inputs.linear = agg;
         inputs.netDelta = agg.netDelta;
         if (address(optionsEngine) != address(0)) {
-            (int256 optDelta, uint256 optGamma, uint256 optVega) = optionsEngine.getNetGreeks(user);
+            (int256 optDelta, int256 optGamma, int256 optVega) = optionsEngine.getNetGreeks(user);
             inputs.netDelta += optDelta;
             inputs.netGamma = optGamma;
             inputs.netVega = optVega;
@@ -440,7 +440,7 @@ contract PortfolioMarginEngine is
     /// @dev Evaluate 4 stress scenarios and return the worst-case loss (WAD).
     ///      Scenarios: (±Δs, ±Δσ) where Δs = spotShock * spotPrice (dollar move)
     ///      PnL ≈ delta·Δs + ½·gamma·Δs² + vega·Δσ
-    function _worstStressLoss(int256 netDelta, uint256 netGamma, uint256 netVega, bool isIM, uint256 spotPrice)
+    function _worstStressLoss(int256 netDelta, int256 netGamma, int256 netVega, bool isIM, uint256 spotPrice)
         private
         view
         returns (uint256 worst)
@@ -452,7 +452,7 @@ contract PortfolioMarginEngine is
         uint256 deltaS = spotShockFrac * spotPrice / WAD;
 
         // Pre-compute gamma term: ½ · gamma · Δs²
-        uint256 gammaTerm = netGamma * deltaS / WAD * deltaS / (2 * WAD);
+        int256 gammaTerm = netGamma * int256(deltaS) / int256(WAD) * int256(deltaS) / int256(2 * WAD);
 
         // Scenario 1: spot +, vol +
         worst = _scenarioLoss(netDelta, gammaTerm, netVega, int256(deltaS), int256(volShock));
@@ -474,16 +474,15 @@ contract PortfolioMarginEngine is
     ///      PnL = delta·Δs/WAD + gammaTerm + vega·Δσ/WAD
     ///      Note: gammaTerm is pre-computed and always the same magnitude across ±spotShock
     ///      (quadratic in |Δs|), so we always ADD it regardless of direction.
-    function _scenarioLoss(int256 netDelta, uint256 gammaTerm, uint256 netVega, int256 deltaS, int256 deltaVol)
+    function _scenarioLoss(int256 netDelta, int256 gammaTerm, int256 netVega, int256 deltaS, int256 deltaVol)
         private
         pure
         returns (uint256)
     {
         int256 deltaPnl = netDelta * deltaS / int256(WAD);
-        int256 vegaPnl = int256(netVega) * deltaVol / int256(WAD);
-        // Gamma term is ½γ(Δs)² — always non-negative, always adds to P&L
-        // (positive gamma profits from moves, negative gamma loses)
-        int256 pnl = deltaPnl + int256(gammaTerm) + vegaPnl;
+        int256 vegaPnl = netVega * deltaVol / int256(WAD);
+        // Gamma term is ½γ(Δs)²: positive gamma profits from moves, negative gamma loses.
+        int256 pnl = deltaPnl + gammaTerm + vegaPnl;
         return pnl < 0 ? uint256(-pnl) : 0;
     }
 
@@ -577,7 +576,7 @@ contract PortfolioMarginEngine is
 
     function _validateOptionsContract(address _optionsEngine)private view{
       try IOptionsEnginePortfolioView(_optionsEngine).getNetGreeks(address(this)) returns (
-          int256, uint256, uint256
+          int256, int256, int256
       ) { } catch {
           revert InvalidDependency();
       }

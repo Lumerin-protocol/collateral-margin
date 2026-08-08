@@ -676,14 +676,13 @@ describe("PortfolioMarginEngine", () => {
     });
 
     it("short gamma increases stress loss", async () => {
-      const { pme, perpsMock, optionsMock, user } = await networkHelpers.loadFixture(
+      const { pme, optionsMock, user } = await networkHelpers.loadFixture(
         deployPortfolioMarginEngineFixture,
       );
 
-      await perpsMock.write.setUserPosition([user, 0n, 0n]);
-      await optionsMock.write.setNetGreeks([user, 0n, 0n, 0n]);
+      await optionsMock.write.setNetGreeks([user, 0n, -WAD, 0n]);
       const im = await pme.read.computePortfolioIM([user]);
-      assert.equal(im, 0n, "delta-neutral, no gamma/vega → 0 margin");
+      assert.ok(im > 0n, "negative gamma loses under either spot move");
     });
 
     it("vega exposure adds to margin", async () => {
@@ -696,6 +695,17 @@ describe("PortfolioMarginEngine", () => {
 
       assert.ok(im > 0n, "pure vega position has positive stress margin");
       assert.equal(im, 100_000n, "vega stress = vega * volShock in token decimals");
+    });
+
+    it("short vega is stressed in the opposite volatility scenario", async () => {
+      const { pme, optionsMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
+
+      await optionsMock.write.setNetGreeks([user, 0n, 0n, -WAD]);
+      const im = await pme.read.computePortfolioIM([user]);
+
+      assert.equal(im, 100_000n, "negative vega loses under the positive vol shock");
     });
   });
 });

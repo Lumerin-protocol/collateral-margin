@@ -14,7 +14,12 @@ describe("Gas: PortfolioMarginEngine", () => {
 
     await perpsMock.write.setUserPosition([user, 1_000_000n, DEFAULT_MARKET_PRICE]);
     await perpsMock.write.setOrderDeltas([user, 500_000n, 250_000n]);
-    await optionsMock.write.setNetGreeks([user, 100_000_000_000_000_000n, 0n, 0n]);
+    await optionsMock.write.setNetGreeks([
+      user,
+      100_000_000_000_000_000n,
+      1_000_000_000_000_000_000n,
+      1_000_000_000_000_000_000n,
+    ]);
 
     const publicClient = await viem.getPublicClient();
     const gas = await publicClient.estimateGas({
