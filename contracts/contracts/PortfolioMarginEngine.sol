@@ -438,8 +438,8 @@ contract PortfolioMarginEngine is
         }
     }
 
-    /// @dev Evaluate 4 stress scenarios and return the worst-case loss (WAD).
-    ///      Scenarios: (±Δs, ±Δσ) where Δs = spotShock * spotPrice (dollar move)
+    /// @dev Return the worst loss over (±Δs, ±Δσ), where each linear term is minimized
+    ///      independently and the gamma term is unchanged across spot directions.
     ///      PnL ≈ delta·Δs + ½·gamma·Δs² + vega·Δσ
     function _worstStressLoss(int256 netDelta, int256 netGamma, int256 netVega, bool isIM, uint256 spotPrice)
         private
@@ -455,36 +455,12 @@ contract PortfolioMarginEngine is
         // Pre-compute gamma term: ½ · gamma · Δs²
         int256 gammaTerm = netGamma * int256(deltaS) / int256(WAD) * int256(deltaS) / int256(2 * WAD);
 
-        // Scenario 1: spot +, vol +
-        worst = _scenarioLoss(netDelta, gammaTerm, netVega, int256(deltaS), int256(volShock));
-
-        // Scenario 2: spot +, vol -
-        uint256 loss = _scenarioLoss(netDelta, gammaTerm, netVega, int256(deltaS), -int256(volShock));
-        if (loss > worst) worst = loss;
-
-        // Scenario 3: spot -, vol +
-        loss = _scenarioLoss(netDelta, gammaTerm, netVega, -int256(deltaS), int256(volShock));
-        if (loss > worst) worst = loss;
-
-        // Scenario 4: spot -, vol -
-        loss = _scenarioLoss(netDelta, gammaTerm, netVega, -int256(deltaS), -int256(volShock));
-        if (loss > worst) worst = loss;
-    }
-
-    /// @dev Compute loss for a single scenario. Returns max(0, -PnL) in WAD.
-    ///      PnL = delta·Δs/WAD + gammaTerm + vega·Δσ/WAD
-    ///      Note: gammaTerm is pre-computed and always the same magnitude across ±spotShock
-    ///      (quadratic in |Δs|), so we always ADD it regardless of direction.
-    function _scenarioLoss(int256 netDelta, int256 gammaTerm, int256 netVega, int256 deltaS, int256 deltaVol)
-        private
-        pure
-        returns (uint256)
-    {
-        int256 deltaPnl = netDelta * deltaS / int256(WAD);
-        int256 vegaPnl = netVega * deltaVol / int256(WAD);
-        // Gamma term is ½γ(Δs)²: positive gamma profits from moves, negative gamma loses.
-        int256 pnl = deltaPnl + gammaTerm + vegaPnl;
-        return pnl < 0 ? uint256(-pnl) : 0;
+        int256 deltaPnl = netDelta * int256(deltaS) / int256(WAD);
+        int256 vegaPnl = netVega * int256(volShock) / int256(WAD);
+        uint256 deltaLoss = deltaPnl < 0 ? uint256(-deltaPnl) : uint256(deltaPnl);
+        uint256 vegaLoss = vegaPnl < 0 ? uint256(-vegaPnl) : uint256(vegaPnl);
+        int256 worstPnl = gammaTerm - int256(deltaLoss) - int256(vegaLoss);
+        worst = worstPnl < 0 ? uint256(-worstPnl) : 0;
     }
 
 
