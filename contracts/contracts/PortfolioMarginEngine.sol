@@ -300,6 +300,7 @@ contract PortfolioMarginEngine is
     ///      wanting a per-order gate want `linearOrderMargin` instead.
     function orderMarginOf(address user) external view returns (uint256) {
         LinearAggregate memory agg = _linearAggregate(user);
+        if (agg.buyOrderDelta == 0 && agg.sellOrderDelta == 0 && agg.fillLoss == 0) return 0;
         MarginInputs memory inputs = _marginInputs(user, agg);
         uint256 spotPrice = _getSpotPriceWad();
         uint256 withOrders = _marginFromInputs(inputs, true, spotPrice);

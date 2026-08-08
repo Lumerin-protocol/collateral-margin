@@ -34,4 +34,31 @@ describe("Gas: PortfolioMarginEngine", () => {
     console.log(`  computePortfolioIM representative: ${gas.toLocaleString()} gas`);
     assert.ok(gas > 0n);
   });
+
+  it("orderMarginOf no resting orders", async () => {
+    const { pme, perpsMock, optionsMock, user } = await networkHelpers.loadFixture(
+      deployPortfolioMarginEngineFixture,
+    );
+
+    await perpsMock.write.setUserPosition([user, 1_000_000n, DEFAULT_MARKET_PRICE]);
+    await optionsMock.write.setNetGreeks([
+      user,
+      100_000_000_000_000_000n,
+      1_000_000_000_000_000_000n,
+      1_000_000_000_000_000_000n,
+    ]);
+
+    const publicClient = await viem.getPublicClient();
+    const gas = await publicClient.estimateGas({
+      account: user,
+      to: pme.address,
+      data: encodeFunctionData({
+        abi: pme.abi,
+        functionName: "orderMarginOf",
+        args: [user],
+      }),
+    });
+    console.log(`  orderMarginOf no orders: ${gas.toLocaleString()} gas`);
+    assert.equal(await pme.read.orderMarginOf([user]), 0n);
+  });
 });
