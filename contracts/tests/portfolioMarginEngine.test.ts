@@ -632,6 +632,37 @@ describe("PortfolioMarginEngine", () => {
 
   });
 
+  describe("oracle freshness", () => {
+    it("reverts margin reads when the oracle is stale", async () => {
+      const { pme, oracleMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
+
+      await oracleMock.write.freezeTimestamp();
+      await networkHelpers.time.increase(3601);
+
+      await viem.assertions.revertWithCustomError(
+        pme.read.computePortfolioIM([user]),
+        pme,
+        "OracleStale",
+      );
+    });
+
+    it("reverts margin reads when the oracle answer is non-positive", async () => {
+      const { pme, oracleMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
+
+      await oracleMock.write.setPrice([0n, 6]);
+
+      await viem.assertions.revertWithCustomError(
+        pme.read.computePortfolioIM([user]),
+        pme,
+        "InvalidOracle",
+      );
+    });
+  });
+
   describe("gamma and vega", () => {
     it("gamma reduces stress loss for long gamma position", async () => {
       const { pme, optionsMock, user } = await networkHelpers.loadFixture(

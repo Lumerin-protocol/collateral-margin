@@ -98,7 +98,7 @@ export async function deployPortfolioMarginEngineFixture(conn: NetworkConnection
   const { viem } = conn;
   const [owner] = await viem.getWalletClients();
   const { usdc, vault } = await deployCollateralVaultProxy(conn);
-  const { perpsMock, optionsMock, futuresMock, pme } = await deployPortfolioMarginEngineStack(
+  const { perpsMock, optionsMock, futuresMock, oracleMock, pme } = await deployPortfolioMarginEngineStack(
     conn,
     vault.address,
   );
@@ -108,7 +108,7 @@ export async function deployPortfolioMarginEngineFixture(conn: NetworkConnection
   await vault.write.deposit([PME_OWNER_DEPOSIT], { account: owner.account });
   await vault.write.setMarginEngine([pme.address], { account: owner.account });
 
-  return { vault, perpsMock, optionsMock, futuresMock, pme, usdc, user, owner };
+  return { vault, perpsMock, optionsMock, futuresMock, oracleMock, pme, usdc, user, owner };
 }
 
 /** End-to-end: vault + PME + product mocks, Alice funded and deposited. */

@@ -119,6 +119,7 @@ contract PortfolioMarginEngine is
     error LinearMarketNotRegistered();
     error OracleNotSet();
     error InvalidOracle();
+    error OracleStale();
     error VaultMismatch();
     /// @dev A dependency did not answer a call the engine depends on: no code at the
     ///      address, or the call reverted. Covers every dependency; which one is bad is
@@ -524,14 +525,13 @@ contract PortfolioMarginEngine is
         }
     }
 
-    /// @dev Read the index oracle and scale to WAD. Reverts when no oracle is
-    ///      configured — an unset oracle must not silently zero out the delta/gamma
-    ///      stress loss. Returns 0 on a stale/non-positive answer (zero stress, same
-    ///      degradation semantics as the products' own oracle reads).
+    /// @dev Read the index oracle and scale to WAD. Missing, invalid, or stale
+    ///      prices must fail closed: returning zero would erase delta/gamma stress.
     function _getSpotPriceWad() private view returns (uint256) {
         if (address(priceOracle) == address(0)) revert OracleNotSet();
         (, int256 answer,, uint256 updatedAt,) = priceOracle.latestRoundData();
-        if (answer <= 0 || block.timestamp - updatedAt > MAX_ORACLE_STALENESS) return 0;
+        if (answer <= 0 || updatedAt == 0 || updatedAt > block.timestamp) revert InvalidOracle();
+        if (block.timestamp - updatedAt > MAX_ORACLE_STALENESS) revert OracleStale();
         return M.toWad(uint256(answer), oracleDecimals);
     }
 
