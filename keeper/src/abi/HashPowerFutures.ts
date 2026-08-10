@@ -1775,19 +1775,6 @@ export const HashPowerFuturesAbi = [
         "type": "address[]"
       }
     ],
-    "name": "resetParticipantState",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address[]",
-        "name": "_participants",
-        "type": "address[]"
-      }
-    ],
     "name": "resetState",
     "outputs": [],
     "stateMutability": "nonpayable",
