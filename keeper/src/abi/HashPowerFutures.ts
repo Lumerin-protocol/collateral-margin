@@ -1004,44 +1004,6 @@ export const HashPowerFuturesAbi = [
     "type": "function"
   },
   {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "_expirationAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "getBestAskPrice",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "uint256",
-        "name": "_expirationAt",
-        "type": "uint256"
-      }
-    ],
-    "name": "getBestBidPrice",
-    "outputs": [
-      {
-        "internalType": "uint256",
-        "name": "",
-        "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
     "inputs": [],
     "name": "getExpirationDates",
     "outputs": [
@@ -1062,25 +1024,6 @@ export const HashPowerFuturesAbi = [
         "internalType": "uint256",
         "name": "",
         "type": "uint256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "_participant",
-        "type": "address"
-      }
-    ],
-    "name": "getNetPositionDelta",
-    "outputs": [
-      {
-        "internalType": "int256",
-        "name": "",
-        "type": "int256"
       }
     ],
     "stateMutability": "view",
@@ -1121,47 +1064,6 @@ export const HashPowerFuturesAbi = [
         ],
         "internalType": "struct HashPowerFuturesBase.Order",
         "name": "",
-        "type": "tuple"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "_user",
-        "type": "address"
-      }
-    ],
-    "name": "getOrderAggregate",
-    "outputs": [
-      {
-        "components": [
-          {
-            "internalType": "uint256",
-            "name": "buyQty",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint256",
-            "name": "sellQty",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint256",
-            "name": "buyValue",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint256",
-            "name": "sellValue",
-            "type": "uint256"
-          }
-        ],
-        "internalType": "struct HashPowerFuturesBase.OrderAggregate",
-        "name": "aggregate_",
         "type": "tuple"
       }
     ],
@@ -1342,25 +1244,6 @@ export const HashPowerFuturesAbi = [
         "internalType": "int256",
         "name": "",
         "type": "int256"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "_user",
-        "type": "address"
-      }
-    ],
-    "name": "getUserOrders",
-    "outputs": [
-      {
-        "internalType": "bytes32[]",
-        "name": "orderIds",
-        "type": "bytes32[]"
       }
     ],
     "stateMutability": "view",

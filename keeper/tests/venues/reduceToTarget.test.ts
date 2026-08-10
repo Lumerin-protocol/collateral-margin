@@ -30,9 +30,9 @@ const EMPTY_RISK_VIEW = {
 } as const;
 
 /**
- * The bulk read `readAccountSnapshot` issues, in order: balance, the perp position,
- * then each venue's `getRiskView` / `getOrderAggregate` pair, then the active futures
- * expiries. Only the expiry list varies between these cases.
+ * The bulk read `readAccountSnapshot` issues, in order: balance, perp position,
+ * perps risk/aggregate, futures risk, active position expiries, tradable window.
+ * Only the expiry lists vary between these cases.
  */
 function snapshotMulticall(balance: bigint, expiries: readonly bigint[]) {
   return [
@@ -41,7 +41,7 @@ function snapshotMulticall(balance: bigint, expiries: readonly bigint[]) {
     EMPTY_RISK_VIEW,
     [0n, 0n],
     EMPTY_RISK_VIEW,
-    [0n, 0n],
+    expiries,
     expiries,
   ];
 }
@@ -87,13 +87,14 @@ function makeChainStub(opts: {
           return snapshotMulticall(opts.balance, [EXPIRY]);
         }
         if (fns[0] === "getUserPosition") {
-          // The per-expiry read batches `getUserPosition` and `settlementPrice`;
-          // an unsettled expiry prices at 0.
-          return contracts.map((c) =>
-            c.functionName === "settlementPrice"
-              ? 0n
-              : { netQuantity: opts.netQuantity, netEntryValue: opts.netEntryValue },
-          );
+          // Per-expiry batch: positions, settlement prices, order aggregates.
+          return contracts.map((c) => {
+            if (c.functionName === "settlementPrice") return 0n;
+            if (c.functionName === "getOrderAggregateAtExpiration") {
+              return { buyQty: 0n, sellQty: 0n, buyValue: 0n, sellValue: 0n };
+            }
+            return { netQuantity: opts.netQuantity, netEntryValue: opts.netEntryValue };
+          });
         }
         throw new Error(`unexpected multicall head: ${fns[0]}`);
       },
@@ -155,6 +156,9 @@ describe("futures venue: reduceToTarget", () => {
           if (fns[0] === "getUserPosition") {
             return contracts.map((c) => {
               if (c.functionName === "settlementPrice") return 0n;
+              if (c.functionName === "getOrderAggregateAtExpiration") {
+                return { buyQty: 0n, sellQty: 0n, buyValue: 0n, sellValue: 0n };
+              }
               const expirationAt = c.args?.[1] as bigint;
               return {
                 netQuantity: 4n,

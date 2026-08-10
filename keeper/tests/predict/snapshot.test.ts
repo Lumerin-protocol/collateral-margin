@@ -30,6 +30,8 @@ function makeConfig(): Config {
 
 function makeChain(scripted: {
   activeExpirationAts?: readonly bigint[];
+  /** Tradable window for futures order aggregates; defaults to activeExpirationAts. */
+  tradableExpirationAts?: readonly bigint[];
   futuresPositions?: Record<string, { netQuantity: bigint; netEntryValue: bigint }>;
   /** Keyed by expiry; absent means the expiry has not settled. */
   settlementPrices?: Record<string, bigint>;
@@ -91,8 +93,8 @@ function makeChain(scripted: {
               };
             }
             case "getOrderAggregate": {
-              const orders =
-                (c.address === PERPS ? scripted.perpOrders : scripted.futuresOrders) ?? NO_ORDERS;
+              // Perps-only cross-user aggregate.
+              const orders = scripted.perpOrders ?? NO_ORDERS;
               return {
                 buyQty: 0n,
                 sellQty: 0n,
@@ -100,8 +102,34 @@ function makeChain(scripted: {
                 sellValue: orders.sellValue,
               };
             }
+            case "getOrderAggregateAtExpiration": {
+              const orders = scripted.futuresOrders ?? NO_ORDERS;
+              const dates =
+                scripted.tradableExpirationAts ?? scripted.activeExpirationAts ?? [];
+              // Put the full venue totals on the first expiry so a single-window
+              // sum matches the scripted RestingOrders values.
+              const expirationAt = c.args?.[1] as bigint;
+              const isFirst = dates.length === 0 || expirationAt === dates[0];
+              return {
+                buyQty: 0n,
+                sellQty: 0n,
+                buyValue: isFirst ? orders.buyValue : 0n,
+                sellValue: isFirst ? orders.sellValue : 0n,
+              };
+            }
             case "getActiveExpirationDates":
               return scripted.activeExpirationAts ?? [];
+            case "getExpirationDates": {
+              if (scripted.tradableExpirationAts !== undefined) {
+                return scripted.tradableExpirationAts;
+              }
+              if (scripted.activeExpirationAts !== undefined) {
+                return scripted.activeExpirationAts;
+              }
+              // Flat accounts still need one window slot when futures order
+              // totals are scripted without explicit expiries.
+              return scripted.futuresOrders === undefined ? [] : [0n];
+            }
             case "imSpotShock":
               return scripted.imShock ?? 10n ** 17n;
             case "mmSpotShock":

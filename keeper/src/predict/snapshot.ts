@@ -64,19 +64,20 @@ export async function readMMParams(
  * Read everything needed to evaluate `mmSurplus(P)` for a single user as a
  * function of price. Two RPC round-trips:
  *
- *   1. Bulk multicall: balance, both venues' `getRiskView` / `getOrderAggregate`,
- *      the perp position, futures activeExpirationAts.
- *   2. Per-expiry multicall: hydrate each aggregate via `getUserPosition`, plus
- *      its `settlementPrice` — an expiry that has settled but not yet been swept
- *      out of the active set is marked at that pinned price and carries no delta,
- *      so the predictor cannot treat it like a live leg.
+ *   1. Bulk multicall: balance, perps risk/aggregate/position, futures risk,
+ *      futures active position expiries, and the tradable delivery window.
+ *   2. Per-expiry multicall: hydrate each futures position via `getUserPosition`
+ *      + `settlementPrice`, and sum `getOrderAggregateAtExpiration` over the
+ *      tradable window for unclamped limit-price totals.
  *
- * Round-trip 2 collapses to zero calls when the user has no futures
- * positions (the common case for perps-only users).
+ * Round-trip 2 collapses to zero position/settlement calls when the user has
+ * no futures positions (the common case for perps-only users). Order-aggregate
+ * calls still run when the tradable window is non-empty.
  *
  * `getRiskView` carries the per-side order delta but reports fill loss only at the
  * current mark, and the clamp makes that non-invertible once it reads zero — so the
- * per-side limit-price totals come from `getOrderAggregate` and the predictor derives
+ * per-side limit-price totals come from the order-aggregate cache (perps:
+ * `getOrderAggregate`; futures: summed AtExpiration) and the predictor derives
  * fill loss at whatever price it is evaluating. Pending funding also rides in
  * `getRiskView`, replacing the separate `getPendingFunding` read.
  */
@@ -91,8 +92,8 @@ export async function readAccountSnapshot(
     perpRisk,
     perpOrderAggregate,
     futuresRisk,
-    futuresOrderAggregate,
     activeExpirationAts,
+    tradableExpirationAts,
   ] = await chain.publicClient.multicall({
     contracts: [
       {
@@ -128,22 +129,36 @@ export async function readAccountSnapshot(
       {
         address: config.futures.address,
         abi: HashPowerFuturesAbi,
-        functionName: "getOrderAggregate" as const,
+        functionName: "getActiveExpirationDates" as const,
         args: [user] as const,
       },
       {
         address: config.futures.address,
         abi: HashPowerFuturesAbi,
-        functionName: "getActiveExpirationDates" as const,
-        args: [user] as const,
+        functionName: "getExpirationDates" as const,
       },
     ] as const,
     allowFailure: false,
   });
 
   const expirationAts = activeExpirationAts as readonly bigint[];
+  const orderExpirationAts = tradableExpirationAts as readonly bigint[];
   const futuresPositions: AccountSnapshot["futures"]["positions"] = [];
-  if (expirationAts.length > 0) {
+
+  type OrderAggregate = {
+    buyQty: bigint;
+    sellQty: bigint;
+    buyValue: bigint;
+    sellValue: bigint;
+  };
+  let futuresOrderAggregate: OrderAggregate = {
+    buyQty: 0n,
+    sellQty: 0n,
+    buyValue: 0n,
+    sellValue: 0n,
+  };
+
+  if (expirationAts.length > 0 || orderExpirationAts.length > 0) {
     const perExpiry = await chain.publicClient.multicall({
       contracts: [
         ...expirationAts.map((expirationAt) => ({
@@ -158,9 +173,16 @@ export async function readAccountSnapshot(
           functionName: "settlementPrice" as const,
           args: [expirationAt] as const,
         })),
+        ...orderExpirationAts.map((expirationAt) => ({
+          address: config.futures.address,
+          abi: HashPowerFuturesAbi,
+          functionName: "getOrderAggregateAtExpiration" as const,
+          args: [user, expirationAt] as const,
+        })),
       ],
       allowFailure: false,
     });
+
     for (let i = 0; i < expirationAts.length; i++) {
       const pos = perExpiry[i] as { netQuantity: bigint; netEntryValue: bigint } | undefined;
       const settlementPrice = perExpiry[expirationAts.length + i] as bigint | undefined;
@@ -173,6 +195,18 @@ export async function readAccountSnapshot(
         netEntryValue: pos.netEntryValue,
         settlementPrice: settlementPrice ?? 0n,
       });
+    }
+
+    const orderOffset = expirationAts.length * 2;
+    for (let i = 0; i < orderExpirationAts.length; i++) {
+      const aggregate = perExpiry[orderOffset + i] as OrderAggregate | undefined;
+      if (aggregate === undefined) continue;
+      futuresOrderAggregate = {
+        buyQty: futuresOrderAggregate.buyQty + aggregate.buyQty,
+        sellQty: futuresOrderAggregate.sellQty + aggregate.sellQty,
+        buyValue: futuresOrderAggregate.buyValue + aggregate.buyValue,
+        sellValue: futuresOrderAggregate.sellValue + aggregate.sellValue,
+      };
     }
   }
 

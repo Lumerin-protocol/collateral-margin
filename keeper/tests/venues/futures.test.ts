@@ -47,11 +47,20 @@ const silentLogger = {
 
 const DELIVERY_AT = 1_756_416_000n;
 
-function makeReadHandler(marketPrice: bigint, listResult: readonly unknown[]) {
+function makeReadHandler(
+  marketPrice: bigint,
+  listResult: readonly unknown[],
+  opts: { orderIdsByExpiry?: Record<string, readonly Hex[]> } = {},
+) {
   return (call: ReadCall): unknown => {
     if (call.functionName === "getMarketPrice") return marketPrice;
-    if (call.functionName === "getUserOrders" || call.functionName === "getActiveExpirationDates") {
+    if (call.functionName === "getActiveExpirationDates") {
       return listResult;
+    }
+    if (call.functionName === "getExpirationDates") {
+      return opts.orderIdsByExpiry === undefined
+        ? []
+        : Object.keys(opts.orderIdsByExpiry).map((k) => BigInt(k));
     }
     throw new Error(`unexpected readContract call: ${call.functionName}`);
   };
@@ -66,7 +75,7 @@ describe("futures venue: marketLabel", () => {
 });
 
 describe("futures venue: readOpenOrders", () => {
-  it("returns empty when getUserOrders is empty (no extra multicall)", async () => {
+  it("returns empty when the tradable window has no dates (no multicall)", async () => {
     let multicallCount = 0;
     const chain = makeChainStub({
       readContract: makeReadHandler(100n, []),
@@ -78,7 +87,7 @@ describe("futures venue: readOpenOrders", () => {
     const venue = new FuturesVenue(chain, makeConfigStub(), silentLogger);
     const orders = await venue.readOpenOrders(BUYER);
     assert.equal(orders.length, 0);
-    assert.equal(multicallCount, 0, "no multicall when no orders");
+    assert.equal(multicallCount, 0, "no multicall when no tradable dates");
   });
 
   it("hydrates each order's expirationAt as its marketId", async () => {
@@ -86,14 +95,27 @@ describe("futures venue: readOpenOrders", () => {
       "0x000000000000000000000000000000000000000000000000000000000000000a",
       "0x000000000000000000000000000000000000000000000000000000000000000b",
     ];
+    const expiryB = DELIVERY_AT + 86_400n;
+    let multicallStep = 0;
     const chain = makeChainStub({
-      readContract: makeReadHandler(100n, orderIds),
+      readContract: makeReadHandler(100n, [], {
+        orderIdsByExpiry: {
+          [DELIVERY_AT.toString()]: [orderIds[0]!],
+          [expiryB.toString()]: [orderIds[1]!],
+        },
+      }),
       multicall: (calls) => {
+        multicallStep++;
+        if (multicallStep === 1) {
+          assert.equal(calls.length, 2);
+          for (const c of calls) assert.equal(c.functionName, "getUserOrdersAtExpiration");
+          return [[orderIds[0]!], [orderIds[1]!]];
+        }
         assert.equal(calls.length, 2);
         for (const c of calls) assert.equal(c.functionName, "getOrder");
         return [
           { participant: BUYER, expirationAt: DELIVERY_AT, price: 50n, quantity: 1n },
-          { participant: BUYER, expirationAt: DELIVERY_AT + 86_400n, price: 60n, quantity: -1n },
+          { participant: BUYER, expirationAt: expiryB, price: 60n, quantity: -1n },
         ];
       },
     });
@@ -102,7 +124,7 @@ describe("futures venue: readOpenOrders", () => {
     assert.equal(orders.length, 2);
     assert.equal(orders[0]?.id, orderIds[0]);
     assert.equal(orders[0]?.marketId, expirationAtMarketId(DELIVERY_AT));
-    assert.equal(orders[1]?.marketId, expirationAtMarketId(DELIVERY_AT + 86_400n));
+    assert.equal(orders[1]?.marketId, expirationAtMarketId(expiryB));
   });
 });
 

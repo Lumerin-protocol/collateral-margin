@@ -106,7 +106,11 @@ function buildHarness({ balance, perpEntry }: { balance: bigint; perpEntry: bigi
               };
             case "getOrderAggregate":
               return { buyQty: 0n, sellQty: 0n, buyValue: 0n, sellValue: 0n };
+            case "getOrderAggregateAtExpiration":
+              return { buyQty: 0n, sellQty: 0n, buyValue: 0n, sellValue: 0n };
             case "getActiveExpirationDates":
+              return [];
+            case "getExpirationDates":
               return [];
             case "computePortfolioIM":
               return imAtPriceTokens(currentPrice);

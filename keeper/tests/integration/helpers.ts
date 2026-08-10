@@ -139,12 +139,28 @@ export async function readFuturesOrderIds(
   stack: DeployedStack,
   user: Address,
 ): Promise<readonly Hex[]> {
-  return (await stack.publicClient.readContract({
+  const expirationAts = (await stack.publicClient.readContract({
     address: stack.addresses.futures,
     abi: stack.abis.futures,
-    functionName: "getUserOrders",
-    args: [user],
-  })) as readonly Hex[];
+    functionName: "getExpirationDates",
+  })) as readonly bigint[];
+  if (expirationAts.length === 0) return [];
+
+  const perExpiry = await stack.publicClient.multicall({
+    contracts: expirationAts.map((expirationAt) => ({
+      address: stack.addresses.futures,
+      abi: stack.abis.futures,
+      functionName: "getUserOrdersAtExpiration" as const,
+      args: [user, expirationAt] as const,
+    })),
+    allowFailure: false,
+  });
+
+  const orderIds: Hex[] = [];
+  for (const ids of perExpiry as readonly (readonly Hex[])[]) {
+    for (const id of ids) orderIds.push(id);
+  }
+  return orderIds;
 }
 
 /** Resolves to true once `user` is flat on perps. */

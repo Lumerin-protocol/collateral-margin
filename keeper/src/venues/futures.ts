@@ -80,13 +80,7 @@ export class FuturesVenue implements Venue {
   }
 
   async readOpenOrders(user: Address): Promise<VenueOrder[]> {
-    const orderIds = (await this.chain.publicClient.readContract({
-      address: this.config.futures.address,
-      abi: HashPowerFuturesAbi,
-      functionName: "getUserOrders",
-      args: [user],
-    })) as readonly Hex[];
-
+    const orderIds = await this.readActiveOrderIds(user);
     if (orderIds.length === 0) return [];
 
     const orders = await this.chain.publicClient.multicall({
@@ -160,12 +154,7 @@ export class FuturesVenue implements Venue {
   ): Promise<LiquidateOrdersOutcome> {
     let targetIds = ids;
     if (targetIds === undefined) {
-      targetIds = (await this.chain.publicClient.readContract({
-        address: this.config.futures.address,
-        abi: HashPowerFuturesAbi,
-        functionName: "getUserOrders",
-        args: [user],
-      })) as readonly Hex[];
+      targetIds = await this.readActiveOrderIds(user);
     }
     if (targetIds.length === 0) {
       return { skipped: "notLiquidatable" };
@@ -243,6 +232,36 @@ export class FuturesVenue implements Venue {
     return "skipped" in result
       ? { skipped: result.skipped }
       : { feeEarned: result.feeEarned, positionsClosed: Number(contractsClosed) };
+  }
+
+  /**
+   * Active-window resting order ids: `getExpirationDates()` then
+   * `getUserOrdersAtExpiration` per delivery (no cross-expiry on-chain getter).
+   */
+  private async readActiveOrderIds(user: Address): Promise<readonly Hex[]> {
+    const expirationAts = (await this.chain.publicClient.readContract({
+      address: this.config.futures.address,
+      abi: HashPowerFuturesAbi,
+      functionName: "getExpirationDates",
+    })) as readonly bigint[];
+
+    if (expirationAts.length === 0) return [];
+
+    const perExpiry = await this.chain.publicClient.multicall({
+      contracts: expirationAts.map((expirationAt) => ({
+        address: this.config.futures.address,
+        abi: HashPowerFuturesAbi,
+        functionName: "getUserOrdersAtExpiration" as const,
+        args: [user, expirationAt] as const,
+      })),
+      allowFailure: false,
+    });
+
+    const orderIds: Hex[] = [];
+    for (const ids of perExpiry as readonly (readonly Hex[])[]) {
+      for (const id of ids) orderIds.push(id);
+    }
+    return orderIds;
   }
 
   private async getMMParams(): Promise<MMParams> {

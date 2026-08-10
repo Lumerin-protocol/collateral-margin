@@ -79,7 +79,8 @@ export interface Venue {
   /**
    * Calls `liquidateOrders(user, ids[])` on the venue. Keeper-chosen ids;
    * on-chain stop-on-failure keeps prior cancels and stops when healthy.
-   * When `ids` is omitted the venue reads `getUserOrders` first.
+   * When `ids` is omitted the venue discovers resting ids first (perps:
+   * `getUserOrders`; futures: `getExpirationDates` + per-expiry order ids).
    */
   liquidateOrders(user: Address, ids?: readonly Hex[]): Promise<LiquidateOrdersOutcome>;
 
