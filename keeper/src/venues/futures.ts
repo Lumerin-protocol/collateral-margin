@@ -2,7 +2,7 @@ import { pad, toHex, type Abi, type Address, type Hex } from "viem";
 import type pino from "pino";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
-import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
+import { HashPowerFuturesAbi } from "../abi/HashPowerFutures.ts";
 import { sendLiquidate } from "../tx/liquidate.ts";
 import { readAccountSnapshot, readMMParams } from "../predict/snapshot.ts";
 import { type MMParams, solveFuturesClosesToTarget } from "@hashpower/portfolio-margin";
@@ -31,7 +31,7 @@ const LIQUIDATE_ORDERS_ABI = [
 ] as const;
 
 const FUTURES_LIQUIDATE_ORDERS_ABI = [
-  ...FuturesAbi.filter(
+  ...HashPowerFuturesAbi.filter(
     (item) =>
       !(
         typeof item === "object" &&
@@ -82,7 +82,7 @@ export class FuturesVenue implements Venue {
   async readOpenOrders(user: Address): Promise<VenueOrder[]> {
     const orderIds = (await this.chain.publicClient.readContract({
       address: this.config.futures.address,
-      abi: FuturesAbi,
+      abi: HashPowerFuturesAbi,
       functionName: "getUserOrders",
       args: [user],
     })) as readonly Hex[];
@@ -92,7 +92,7 @@ export class FuturesVenue implements Venue {
     const orders = await this.chain.publicClient.multicall({
       contracts: orderIds.map((id) => ({
         address: this.config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "getOrder" as const,
         args: [id] as const,
       })),
@@ -109,13 +109,13 @@ export class FuturesVenue implements Venue {
     const [expirationAts, marketPrice] = await Promise.all([
       this.chain.publicClient.readContract({
         address: this.config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "getActiveExpirationDates",
         args: [user],
       }) as Promise<readonly bigint[]>,
       this.chain.publicClient.readContract({
         address: this.config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "getMarketPrice",
       }) as Promise<bigint>,
     ]);
@@ -125,7 +125,7 @@ export class FuturesVenue implements Venue {
     const positions = await this.chain.publicClient.multicall({
       contracts: expirationAts.map((expirationAt) => ({
         address: this.config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "getUserPosition" as const,
         args: [user, expirationAt] as const,
       })),
@@ -162,7 +162,7 @@ export class FuturesVenue implements Venue {
     if (targetIds === undefined) {
       targetIds = (await this.chain.publicClient.readContract({
         address: this.config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "getUserOrders",
         args: [user],
       })) as readonly Hex[];
@@ -194,7 +194,7 @@ export class FuturesVenue implements Venue {
       this.getMMParams(),
       this.chain.publicClient.readContract({
         address: this.config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "getMarketPrice",
       }) as Promise<bigint>,
     ]);
@@ -229,7 +229,7 @@ export class FuturesVenue implements Venue {
       config: this.config,
       logger: this.logger,
       address: this.config.futures.address,
-      abi: FuturesAbi,
+      abi: HashPowerFuturesAbi,
       functionName: "liquidatePositions",
       args: [user, expirationAts, closeQtys],
       feeEventName: "PositionLiquidated",

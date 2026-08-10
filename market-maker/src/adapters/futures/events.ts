@@ -4,7 +4,7 @@ import type {
   VenueEvent,
   VenueEvents,
 } from "../../core/adapter.ts";
-import { FuturesAbi } from "futures-contracts/abi/Futures";
+import { HashPowerFuturesAbi } from "../../abi/HashPowerFutures.ts";
 
 /** Instrument id for a futures expiry, e.g. `futures:1893456000`. */
 export function futuresInstrumentId(expirationAt: bigint): string {
@@ -17,7 +17,7 @@ type FuturesLog = Log<
   false,
   undefined,
   false,
-  typeof FuturesAbi
+  typeof HashPowerFuturesAbi
 >;
 
 /** Multiplexes one viem watcher across many subscribers. Decode-only. */
@@ -45,7 +45,7 @@ export class FuturesVenueEvents implements VenueEvents {
   private attachWatcher(): void {
     this.unwatch = this.publicClient.watchContractEvent({
       address: this.address,
-      abi: FuturesAbi,
+      abi: HashPowerFuturesAbi,
       onLogs: (logs) => {
         for (const log of logs) {
           const evt = decodeEvent(log as FuturesLog);

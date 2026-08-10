@@ -20,9 +20,6 @@ importers:
       derivatives-marketplace-abi:
         specifier: github:Lumerin-protocol/derivatives-marketplace#8b7ed0f3572d0ea8039a11757b7c1b963be75535&path:/contracts/abi
         version: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/8b7ed0f3572d0ea8039a11757b7c1b963be75535#path:/contracts/abi
-      futures-marketplace-abi:
-        specifier: github:Lumerin-protocol/futures-marketplace#05e97deb86a59e6be45fa0aa2ac10b8cb070c303&path:/contracts/abi
-        version: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/05e97deb86a59e6be45fa0aa2ac10b8cb070c303#path:/contracts/abi
       pino:
         specifier: ^10.3.1
         version: 10.3.1
@@ -228,10 +225,6 @@ packages:
 
   fast-safe-stringify@2.1.1:
     resolution: {integrity: sha512-W+KJc2dmILlPplD/H4K9l9LcAHAfPtP6BY84uVLXQ6Evcz9Lcg33Y2z1IVblT6xdY54PXYVHEv+0Wpq8Io6zkA==}
-
-  futures-marketplace-abi@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/05e97deb86a59e6be45fa0aa2ac10b8cb070c303#path:/contracts/abi:
-    resolution: {gitHosted: true, path: /contracts/abi, tarball: https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/05e97deb86a59e6be45fa0aa2ac10b8cb070c303}
-    version: 0.0.0
 
   help-me@5.0.0:
     resolution: {integrity: sha512-7xgomUX6ADmcYzFik0HzAxh/73YlKR9bmFzf51CZwR+b6YtzU2m0u49hQCqV6SvlqIqsaxovfwdvbnsw3b/zpg==}
@@ -463,8 +456,6 @@ snapshots:
   fast-copy@4.0.3: {}
 
   fast-safe-stringify@2.1.1: {}
-
-  futures-marketplace-abi@https://codeload.github.com/Lumerin-protocol/futures-marketplace/tar.gz/05e97deb86a59e6be45fa0aa2ac10b8cb070c303#path:/contracts/abi: {}
 
   help-me@5.0.0: {}
 

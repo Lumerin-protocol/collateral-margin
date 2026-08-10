@@ -7,7 +7,7 @@
  */
 import { createPublicClient, http, type Address, type Hex } from "viem";
 import { baseSepolia } from "viem/chains";
-import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
+import { HashPowerFuturesAbi } from "../src/abi/HashPowerFutures.ts";
 
 const ENDPOINT =
   "https://api.goldsky.com/api/public/project_cmmz59uoa7b5201wthnkxbuqy/subgraphs/hpow-futures/dev-latest/gn";
@@ -76,7 +76,7 @@ async function fetchTrades(): Promise<Trade[]> {
 async function getChainPositionCount(blockNumber: number): Promise<number> {
   const ids = await client.readContract({
     address: FUT,
-    abi: FuturesAbi,
+    abi: HashPowerFuturesAbi,
     functionName: "getActiveExpirationDates",
     args: [USER as Address],
     blockNumber: BigInt(blockNumber),

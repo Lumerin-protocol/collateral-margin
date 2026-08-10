@@ -39,7 +39,6 @@
     "amaro": "^1.1.9",
     "collateral-margin-contracts": "github:Lumerin-protocol/collateral-margin#dev&path:/contracts",
     "fraction.js": "^5.2.2",
-    "futures-contracts": "github:Lumerin-protocol/futures-marketplace#547ade13eb944b0e86bbef325749ed627cc886b4&path:/contracts",
     "js-yaml": "^4.1.0",
     "perps-contracts": "github:Lumerin-protocol/derivatives-marketplace#f7e219f704646ab654a2a8d0286c0f477148e299&path:/contracts",
     "pino": "^10.3.1",

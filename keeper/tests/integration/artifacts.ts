@@ -126,7 +126,12 @@ export const artifacts = {
   multicall3:      () => readArtifact("perps", "contracts/Multicall3",               "Multicall3"),
 
   // ── futures (sibling repo) ────────────────────────────────────────────
-  futures: () => readArtifact("futures", "contracts/Futures", "Futures"),
+  futures: () =>
+    readArtifact(
+      "futures",
+      "contracts/HashPowerFutures",
+      "HashPowerFutures",
+    ),
 } as const;
 
 /** Resolved repo paths — exported for diagnostic logs. */

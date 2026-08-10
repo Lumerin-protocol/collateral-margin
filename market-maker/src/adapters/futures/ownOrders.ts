@@ -5,7 +5,7 @@ import type {
   OwnOrderSource,
   Unsubscribe,
 } from "../../core/adapter.ts";
-import { FuturesAbi } from "futures-contracts/abi/Futures";
+import { HashPowerFuturesAbi } from "../../abi/HashPowerFutures.ts";
 import type { FuturesVenueAdapter } from "./venue.ts";
 import { futuresInstrumentId } from "./events.ts";
 
@@ -96,7 +96,7 @@ export class FuturesOwnOrders implements OwnOrderSource {
 
     const allCalls = orderIds.map((id) => ({
       address: this.venue.address,
-      abi: FuturesAbi,
+      abi: HashPowerFuturesAbi,
       functionName: "getOrder" as const,
       args: [id] as const,
     }));

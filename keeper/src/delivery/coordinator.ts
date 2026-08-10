@@ -8,7 +8,7 @@ import {
 } from "viem";
 import { withUnstickRetry } from "../tx/unstick.ts";
 import type pino from "pino";
-import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
+import { HashPowerFuturesAbi } from "../abi/HashPowerFutures.ts";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
 import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
@@ -75,13 +75,13 @@ export class DeliveryCoordinator {
     this.unwatchers.push(
       this.chain.publicClient.watchContractEvent({
         address: this.config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         eventName: "OrderMatched",
         onLogs: (logs) => this.onOrderMatched(logs),
       }),
       this.chain.publicClient.watchContractEvent({
         address: this.config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         eventName: "PositionSettled",
         onLogs: (logs) => this.onPositionSettled(logs),
       }),
@@ -151,14 +151,14 @@ export class DeliveryCoordinator {
         const [matched, settled] = await Promise.all([
           this.chain.publicClient.getContractEvents({
             address: this.config.futures.address,
-            abi: FuturesAbi,
+            abi: HashPowerFuturesAbi,
             eventName: "OrderMatched",
             fromBlock: start,
             toBlock: end,
           }),
           this.chain.publicClient.getContractEvents({
             address: this.config.futures.address,
-            abi: FuturesAbi,
+            abi: HashPowerFuturesAbi,
             eventName: "PositionSettled",
             fromBlock: start,
             toBlock: end,
@@ -258,7 +258,7 @@ export class DeliveryCoordinator {
     try {
       expirationAts = (await this.chain.publicClient.readContract({
         address: this.config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "getActiveExpirationDates",
         args: [user],
       })) as readonly bigint[];
@@ -271,7 +271,7 @@ export class DeliveryCoordinator {
     const positions = (await this.chain.publicClient.multicall({
       contracts: expirationAts.map((expirationAt) => ({
         address: this.config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "getUserPosition" as const,
         args: [user, expirationAt] as const,
       })),
@@ -389,7 +389,7 @@ export class DeliveryCoordinator {
       positions.map((pos) =>
         this.chain.publicClient.simulateContract({
           address: this.config.futures.address,
-          abi: FuturesAbi,
+          abi: HashPowerFuturesAbi,
           functionName: "settlePosition",
           args: [pos.user, pos.expirationAt],
           account: this.chain.account,
@@ -447,7 +447,7 @@ export class DeliveryCoordinator {
       hash = await withUnstickRetry(this.chain, this.logger, () =>
         this.chain.walletClient.writeContract({
           address: this.config.futures.address,
-          abi: FuturesAbi,
+          abi: HashPowerFuturesAbi,
           functionName: "settlePositions",
           args: [users, expirationAts],
           account: this.chain.account,
@@ -511,7 +511,7 @@ export class DeliveryCoordinator {
     try {
       const sim = (await this.chain.publicClient.simulateContract({
         address: this.config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "settlePosition",
         args,
         account: this.chain.account,

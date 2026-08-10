@@ -10,7 +10,7 @@ import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
 import { CollateralVaultAbi as collateralVaultAbi } from "collateral-margin-abi/CollateralVault.ts";
 import { HashPowerPerpsDEXAbi as perpsAbi } from "derivatives-marketplace-abi/HashPowerPerpsDEX.ts";
-import { FuturesAbi as futuresAbi } from "futures-marketplace-abi/Futures.ts";
+import { HashPowerFuturesAbi as futuresAbi } from "../abi/HashPowerFutures.ts";
 
 /**
  * Set of user addresses with collateral or open positions/orders that the

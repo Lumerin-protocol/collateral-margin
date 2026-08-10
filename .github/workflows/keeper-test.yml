@@ -51,44 +51,22 @@ jobs:
         working-directory: ./keeper
         run: pnpm install --frozen-lockfile
 
-      # pnpm git path deps must keep `path: /contracts/abi` in the lockfile
-      # resolution. If that field is dropped (integrity-only), a cold CI store
-      # unpacks the whole futures-marketplace repo and TypeCheck fails with
-      # TS2307 on futures-marketplace-abi/Futures.ts.
-      - name: Verify futures ABI package layout
+      # Keep the generated HashPowerFutures artifact vendored with the keeper
+      # until the upstream ABI package publishes the renamed module.
+      - name: Verify vendored HashPowerFutures ABI
         working-directory: ./keeper
         run: |
           set -euo pipefail
-          pkg="node_modules/futures-marketplace-abi"
-          if [[ ! -e "$pkg" ]]; then
-            echo "::error::$pkg is missing after pnpm install"
-            ls -la node_modules | head -40
+          abi="src/abi/HashPowerFutures.ts"
+          if [[ ! -f "$abi" ]]; then
+            echo "::error::$abi is missing"
             exit 1
           fi
-          if [[ ! -f "$pkg/Futures.ts" ]]; then
-            echo "::error::$pkg/Futures.ts missing; lockfile likely dropped path:/contracts/abi (full repo unpacked)"
-            ls -la "$pkg" | head -40
-            if [[ -f "$pkg/contracts/abi/Futures.ts" ]]; then
-              echo "::error::Found Futures.ts under $pkg/contracts/abi — restore path: /contracts/abi in pnpm-lock.yaml resolution"
-            fi
+          if ! grep -q 'export const HashPowerFuturesAbi' "$abi"; then
+            echo "::error::$abi does not export HashPowerFuturesAbi"
             exit 1
           fi
-          if [[ ! -f "$pkg/package.json" ]]; then
-            echo "::error::$pkg/package.json missing"
-            ls -la "$pkg" | head -40
-            exit 1
-          fi
-          if grep -q '_pnpmPlaceholder' "$pkg/package.json"; then
-            echo "::error::$pkg/package.json is a pnpm placeholder; lockfile likely lost path:/contracts/abi"
-            exit 1
-          fi
-          if ! grep -q '"name": "futures-marketplace-abi"' "$pkg/package.json"; then
-            echo "::error::$pkg/package.json is not the abi package manifest"
-            cat "$pkg/package.json"
-            exit 1
-          fi
-          echo "futures-marketplace-abi layout ok:"
-          ls -la "$pkg" | head -20
+          echo "Vendored HashPowerFutures ABI present"
 
       - name: Lint
         working-directory: ./keeper

@@ -7,7 +7,7 @@
  */
 import { createPublicClient, http, type Address } from "viem";
 import { baseSepolia, base, hardhat } from "viem/chains";
-import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
+import { HashPowerFuturesAbi } from "../src/abi/HashPowerFutures.ts";
 
 const FUTURES = process.env.FUTURES_ADDRESS as Address;
 const NETWORK = process.env.NETWORK ?? "base-sepolia";
@@ -32,7 +32,7 @@ console.log("\n--- Stage 1: getActiveExpirationDates via multicall ---");
 const dateLists = await client.multicall({
   contracts: USERS.map((u) => ({
     address: FUTURES,
-    abi: FuturesAbi,
+    abi: HashPowerFuturesAbi,
     functionName: "getActiveExpirationDates" as const,
     args: [u] as const,
   })),
@@ -60,7 +60,7 @@ console.log(`\n--- Stage 2: getUserPosition for ${pairs.length} aggregates ---`)
 const positions = await client.multicall({
   contracts: pairs.map((p) => ({
     address: FUTURES,
-    abi: FuturesAbi,
+    abi: HashPowerFuturesAbi,
     functionName: "getUserPosition" as const,
     args: [p.user, p.expirationAt] as const,
   })),

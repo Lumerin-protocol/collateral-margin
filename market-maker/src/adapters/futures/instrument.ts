@@ -14,7 +14,7 @@ import type {
   ReduceIntent,
 } from "../../core/adapter.ts";
 import { TimeInForce } from "../../core/adapter.ts";
-import { FuturesAbi } from "futures-contracts/abi/Futures";
+import { HashPowerFuturesAbi } from "../../abi/HashPowerFutures.ts";
 import { fillLossFromNotionals } from "../../core/math.ts";
 import type { FuturesVenueAdapter } from "./venue.ts";
 import { FuturesOwnOrders } from "./ownOrders.ts";
@@ -63,7 +63,7 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
   async getPosition(): Promise<Position> {
     const pos = await this.venue.publicClient.readContract({
       address: this.venue.address,
-      abi: FuturesAbi,
+      abi: HashPowerFuturesAbi,
       functionName: "getUserPosition",
       args: [this.venue.wallet.account.address, this.expirationAt],
     });
@@ -181,7 +181,7 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
 
   encodeCancel(intent: CancelIntent): `0x${string}` {
     return encodeFunctionData({
-      abi: FuturesAbi,
+      abi: HashPowerFuturesAbi,
       functionName: "cancelOrder",
       args: [intent.orderId],
     });
@@ -297,7 +297,7 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
     try {
       return await this.venue.publicClient.estimateContractGas({
         address: this.venue.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "createOrder",
         // Futures 3.0: createOrder(price, expirationAt, signedQuantity, timeInForce)
         args: [1_000_000n, this.expirationAt, 1n, 0],
@@ -312,7 +312,7 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
     if (this.tickCache !== null) return this.tickCache;
     const tick = await this.venue.publicClient.readContract({
       address: this.venue.address,
-      abi: FuturesAbi,
+      abi: HashPowerFuturesAbi,
       functionName: "minimumPriceIncrement",
     });
     this.tickCache = tick;
@@ -341,7 +341,7 @@ class FuturesBook implements BookSource {
     // Same shape as perps `getOrderBookPrices(depth)`, with expirationAt first.
     const [bidPrices, askPrices] = await v.publicClient.readContract({
       address: v.address,
-      abi: FuturesAbi,
+      abi: HashPowerFuturesAbi,
       functionName: "getOrderBookPrices",
       args: [expirationAt, depth],
     });
@@ -351,13 +351,13 @@ class FuturesBook implements BookSource {
     const allCalls = [
       ...bidPrices.map((p) => ({
         address: v.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "getQuantityAtPrice" as const,
         args: [expirationAt, p, true] as const,
       })),
       ...askPrices.map((p) => ({
         address: v.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "getQuantityAtPrice" as const,
         args: [expirationAt, p, false] as const,
       })),

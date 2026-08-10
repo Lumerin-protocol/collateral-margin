@@ -4,7 +4,7 @@ import type { Config } from "../config.ts";
 import { CollateralVaultAbi } from "collateral-margin-abi/CollateralVault.ts";
 import { PortfolioMarginEngineAbi } from "collateral-margin-abi/PortfolioMarginEngine.ts";
 import { HashPowerPerpsDEXAbi } from "derivatives-marketplace-abi/HashPowerPerpsDEX.ts";
-import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
+import { HashPowerFuturesAbi } from "../abi/HashPowerFutures.ts";
 import type { AccountSnapshot, MMParams } from "@hashpower/portfolio-margin";
 import { PerpsPositionAbi } from "../venues/perpsPositionAbi.ts";
 
@@ -121,19 +121,19 @@ export async function readAccountSnapshot(
       },
       {
         address: config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "getRiskView" as const,
         args: [user] as const,
       },
       {
         address: config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "getOrderAggregate" as const,
         args: [user] as const,
       },
       {
         address: config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "getActiveExpirationDates" as const,
         args: [user] as const,
       },
@@ -148,13 +148,13 @@ export async function readAccountSnapshot(
       contracts: [
         ...expirationAts.map((expirationAt) => ({
           address: config.futures.address,
-          abi: FuturesAbi,
+          abi: HashPowerFuturesAbi,
           functionName: "getUserPosition" as const,
           args: [user, expirationAt] as const,
         })),
         ...expirationAts.map((expirationAt) => ({
           address: config.futures.address,
-          abi: FuturesAbi,
+          abi: HashPowerFuturesAbi,
           functionName: "settlementPrice" as const,
           args: [expirationAt] as const,
         })),
