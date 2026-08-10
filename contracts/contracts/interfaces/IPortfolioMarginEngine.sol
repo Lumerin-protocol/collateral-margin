@@ -22,6 +22,15 @@ interface IPortfolioMarginEngine {
     /// @notice Portfolio Initial and Maintenance Margin from one shared market snapshot.
     function computePortfolioMargins(address user) external view returns (uint256 im, uint256 mm);
 
+    /// @notice Whether the account is liquidatable: vault balance below portfolio MM.
+    /// @dev The canonical cross-venue health predicate — liquidatability is a property of
+    ///      the portfolio, not of any single venue, so it lives here. No venue-local state
+    ///      check is needed: an account with no state anywhere has MM = 0, and a balance
+    ///      below zero is impossible. Whether a specific venue holds anything actionable
+    ///      is a separate question, answered by that venue's `hasRestingOrderDelta` and
+    ///      position views.
+    function isLiquidatable(address user) external view returns (bool);
+
     /// @notice Margin charged against a delta-one resting order's notional (both token
     ///         decimals).
     /// @dev Lets a market size order margin from the engine's risk knob without importing

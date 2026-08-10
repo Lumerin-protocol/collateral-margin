@@ -68,7 +68,7 @@ contract PortfolioMarginEngine is
     using EnumerableSet for EnumerableSet.AddressSet;
 
     uint256 private constant MAX_ORACLE_STALENESS = 1 hours;
-    string public constant VERSION = "2.0.0";
+    string public constant VERSION = "2.1.0";
 
     // ── Storage ─────────────────────────────────────────────────────────────
 
@@ -279,6 +279,15 @@ contract PortfolioMarginEngine is
     /// @notice Check if user is healthy (balance >= MM).
     function isHealthy(address user) external view returns (bool) {
         return vault.balanceOf(user) >= _computeMargin(user, false);
+    }
+
+    /// @notice Whether the account is liquidatable: vault balance below portfolio MM.
+    ///         The exact predicate the venues' liquidation entry points enforce.
+    /// @dev See {IPortfolioMarginEngine-isLiquidatable}. Deliberately the strict inverse
+    ///      of {isHealthy}; kept as its own entry point because it is the question keepers
+    ///      and venue UIs ask, and `isHealthy` is not part of the venue-facing interface.
+    function isLiquidatable(address user) external view returns (bool) {
+        return vault.balanceOf(user) < _computeMargin(user, false);
     }
 
     /// @notice Check if user can place an order requiring additionalIM (in token decimals).
