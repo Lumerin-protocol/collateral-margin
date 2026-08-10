@@ -49,6 +49,11 @@ contract MarginEngineMock is IPortfolioMarginEngine {
         return false;
     }
 
+    /// @dev MM is always zero here, and a balance below zero is impossible.
+    function isLiquidatable(address) external pure returns (bool) {
+        return false;
+    }
+
     function imSpotShock() external pure returns (uint256) {
         return 0;
     }

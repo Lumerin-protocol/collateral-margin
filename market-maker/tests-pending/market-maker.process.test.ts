@@ -615,8 +615,8 @@ describe("MM process — post-fill on-chain state", () => {
 
   it("should not be liquidatable with sufficient collateral", async () => {
     const isLiquidatable = (await publicClient.readContract({
-      address: deployment.contracts.perpsAddress,
-      abi: hashPowerPerpsDexAbi,
+      address: deployment.contracts.pmeAddress,
+      abi: PortfolioMarginEngineAbi,
       functionName: "isLiquidatable",
       args: [MM_ACCOUNT.address],
     })) as boolean;

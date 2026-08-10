@@ -72,6 +72,11 @@ export const PortfolioMarginEngineAbi = [
     "type": "error"
   },
   {
+    "inputs": [],
+    "name": "OracleStale",
+    "type": "error"
+  },
+  {
     "inputs": [
       {
         "internalType": "address",
@@ -466,6 +471,25 @@ export const PortfolioMarginEngineAbi = [
       }
     ],
     "name": "isHealthy",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "user",
+        "type": "address"
+      }
+    ],
+    "name": "isLiquidatable",
     "outputs": [
       {
         "internalType": "bool",

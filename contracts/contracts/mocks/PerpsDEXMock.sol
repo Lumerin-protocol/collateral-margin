@@ -23,9 +23,7 @@ contract PerpsDEXMock is ILinearMarket {
     }
 
     mapping(address => Position) private _positions;
-    mapping(address => uint256) private _balances;
     mapping(address => int256) private _unrealizedPnl;
-    mapping(address => uint256) private _maintenanceMargin;
     mapping(address => int256) private _pendingFunding;
     mapping(address => uint256) private _buyOrderDelta;
     mapping(address => uint256) private _sellOrderDelta;
@@ -38,17 +36,8 @@ contract PerpsDEXMock is ILinearMarket {
         _positions[user] = Position(qty, netEntryValue);
     }
 
-    function setBalance(address user, uint256 bal) external {
-        _balances[user] = bal;
-    }
-
     function setUnrealizedPnl(address user, int256 pnl) external {
         _unrealizedPnl[user] = pnl;
-    }
-
-    /// @dev Only MM is modelled: it is the threshold `isLiquidatable` compares balance against.
-    function setMaintenanceMargin(address user, uint256 mm) external {
-        _maintenanceMargin[user] = mm;
     }
 
     function getUserPosition(address user) external view returns (Position memory) {
@@ -104,10 +93,5 @@ contract PerpsDEXMock is ILinearMarket {
 
     function hasRestingOrderDelta(address user) external view returns (bool) {
         return _buyOrderDelta[user] != 0 || _sellOrderDelta[user] != 0;
-    }
-
-    function isLiquidatable(address user) external view returns (bool) {
-        if (_positions[user].netQuantity == 0) return false;
-        return _balances[user] < _maintenanceMargin[user];
     }
 }
