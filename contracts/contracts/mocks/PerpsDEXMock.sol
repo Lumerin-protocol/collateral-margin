@@ -8,7 +8,7 @@ import { ILinearMarket } from "../interfaces/ILinearMarket.sol";
 contract PerpsDEXMock is ILinearMarket {
     struct Position {
         int256 netQuantity;
-        uint256 aggregatedEntryPrice;
+        int256 netEntryValue;
     }
 
     uint8 public constant QUANTITY_DECIMALS = 6;
@@ -34,7 +34,8 @@ contract PerpsDEXMock is ILinearMarket {
     bool private _riskViewDisabled;
 
     function setUserPosition(address user, int256 qty, uint256 entryPrice) external {
-        _positions[user] = Position(qty, entryPrice);
+        int256 netEntryValue = qty * int256(entryPrice) / int256(10 ** QUANTITY_DECIMALS);
+        _positions[user] = Position(qty, netEntryValue);
     }
 
     function setBalance(address user, uint256 bal) external {

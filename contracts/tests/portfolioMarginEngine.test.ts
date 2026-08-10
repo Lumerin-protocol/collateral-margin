@@ -33,6 +33,19 @@ describe("PortfolioMarginEngine", () => {
   });
 
   describe("perps-only position", () => {
+    it("exposes signed net entry value", async () => {
+      const { perpsMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
+
+      await perpsMock.write.setUserPosition([user, -ONE_LOT_QTY, DEFAULT_MARKET_PRICE]);
+
+      assert.deepEqual(await perpsMock.read.getUserPosition([user]), {
+        netQuantity: -ONE_LOT_QTY,
+        netEntryValue: -DEFAULT_MARKET_PRICE,
+      });
+    });
+
     it("computes margin from perps delta stress", async () => {
       const { pme, perpsMock, user } = await networkHelpers.loadFixture(
         deployPortfolioMarginEngineFixture,
