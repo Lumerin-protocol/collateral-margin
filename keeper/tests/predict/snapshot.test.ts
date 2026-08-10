@@ -34,7 +34,7 @@ function makeChain(scripted: {
   /** Keyed by expiry; absent means the expiry has not settled. */
   settlementPrices?: Record<string, bigint>;
   perpNetQty?: bigint;
-  perpEntry?: bigint;
+  perpNetEntryValue?: bigint;
   perpFunding?: bigint;
   perpOrders?: RestingOrders;
   futuresOrders?: RestingOrders;
@@ -69,7 +69,7 @@ function makeChain(scripted: {
               }
               return {
                 netQuantity: scripted.perpNetQty ?? 0n,
-                aggregatedEntryPrice: scripted.perpEntry ?? 0n,
+                netEntryValue: scripted.perpNetEntryValue ?? 0n,
               };
             }
             case "settlementPrice": {
@@ -136,6 +136,7 @@ describe("predict/snapshot: readAccountSnapshot", () => {
     assert.equal(snap.user, USER);
     assert.equal(snap.balance, 0n);
     assert.equal(snap.perp.netQty, 0n);
+    assert.equal(snap.perp.entryPrice, 0n);
     assert.equal(snap.perp.fundingOwed, 0n);
     assert.equal(snap.futures.positions.length, 0);
     assert.deepEqual(snap.perp.orders, NO_ORDERS);
@@ -174,6 +175,16 @@ describe("predict/snapshot: readAccountSnapshot", () => {
     const chain = makeChain({ perpFunding: 1_000n });
     const snap = await readAccountSnapshot(chain, makeConfig(), USER);
     assert.equal(snap.perp.fundingOwed, 1_000n);
+  });
+
+  it("derives the perps average entry price from signed entry value", async () => {
+    const chain = makeChain({
+      perpNetQty: -2_000_000n,
+      perpNetEntryValue: -240_000_000n,
+    });
+    const snap = await readAccountSnapshot(chain, makeConfig(), USER);
+
+    assert.equal(snap.perp.entryPrice, 120_000_000n);
   });
 
   it("hydrates futures aggregates from active delivery dates", async () => {

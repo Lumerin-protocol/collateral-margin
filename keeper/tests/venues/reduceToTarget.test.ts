@@ -37,7 +37,7 @@ const EMPTY_RISK_VIEW = {
 function snapshotMulticall(balance: bigint, expiries: readonly bigint[]) {
   return [
     balance,
-    { netQuantity: 0n, aggregatedEntryPrice: 0n },
+    { netQuantity: 0n, netEntryValue: 0n },
     EMPTY_RISK_VIEW,
     [0n, 0n],
     EMPTY_RISK_VIEW,

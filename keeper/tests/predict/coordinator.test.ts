@@ -118,7 +118,10 @@ function buildHarness({
             case "balanceOf":
               return balance;
             case "getUserPosition":
-              return { netQuantity: perpNetQty, aggregatedEntryPrice: perpEntry };
+              return {
+                netQuantity: perpNetQty,
+                netEntryValue: (perpNetQty * perpEntry) / 1_000_000n,
+              };
             case "getRiskView":
               return {
                 netPositionDelta: 0n,

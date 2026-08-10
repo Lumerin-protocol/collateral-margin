@@ -95,7 +95,7 @@ describe("perps venue: readPositions", () => {
   it("returns no position when netQuantity is 0", async () => {
     const chain = makeChainStub({
       multicall: () => [
-        { netQuantity: 0n, aggregatedEntryPrice: 50n },
+        { netQuantity: 0n, netEntryValue: 0n },
         100n, // marketPrice
       ],
     });
@@ -110,7 +110,7 @@ describe("perps venue: readPositions", () => {
     const marketPrice = 150n; // up → long is in profit, no loss
     const chain = makeChainStub({
       multicall: () => [
-        { netQuantity: qty, aggregatedEntryPrice: entryPrice },
+        { netQuantity: qty, netEntryValue: (qty * entryPrice) / QTY_SCALE },
         marketPrice,
       ],
     });
@@ -127,7 +127,7 @@ describe("perps venue: readPositions", () => {
     const marketPrice = 150n; // -50 per contract × 3 contracts = 150 loss
     const chain = makeChainStub({
       multicall: () => [
-        { netQuantity: qty, aggregatedEntryPrice: entryPrice },
+        { netQuantity: qty, netEntryValue: (qty * entryPrice) / QTY_SCALE },
         marketPrice,
       ],
     });
@@ -144,7 +144,7 @@ describe("perps venue: readPositions", () => {
     const marketPrice = 130n; // +30 against the short × 4 = 120 loss
     const chain = makeChainStub({
       multicall: () => [
-        { netQuantity: qty, aggregatedEntryPrice: entryPrice },
+        { netQuantity: qty, netEntryValue: (qty * entryPrice) / QTY_SCALE },
         marketPrice,
       ],
     });
@@ -155,10 +155,25 @@ describe("perps venue: readPositions", () => {
     assert.equal(pos.notional, marketPrice * 4n);
   });
 
+  it("computes PnL directly from net entry value without average-price rounding", async () => {
+    const qty = 1_500_000n;
+    const chain = makeChainStub({
+      multicall: () => [
+        { netQuantity: qty, netEntryValue: 151n },
+        100n,
+      ],
+    });
+    const venue = new PerpsVenue(chain, makeConfigStub(), silentLogger);
+    const [pos] = await venue.readPositions(USER);
+
+    assert.ok(pos);
+    assert.equal(pos.unrealizedLoss, 1n);
+  });
+
   it("synthesises a deterministic positionId from the user address (bytes32(user))", async () => {
     const chain = makeChainStub({
       multicall: () => [
-        { netQuantity: 1n * QTY_SCALE, aggregatedEntryPrice: 100n },
+        { netQuantity: 1n * QTY_SCALE, netEntryValue: 100n },
         100n,
       ],
     });

@@ -6,6 +6,7 @@ import { PortfolioMarginEngineAbi } from "collateral-margin-abi/PortfolioMarginE
 import { HashPowerPerpsDEXAbi } from "derivatives-marketplace-abi/HashPowerPerpsDEX.ts";
 import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
 import type { AccountSnapshot, MMParams } from "@hashpower/portfolio-margin";
+import { PerpsPositionAbi } from "../venues/perpsPositionAbi.ts";
 
 /**
  * Read the engine-wide constants once. They only change on PME admin
@@ -102,7 +103,7 @@ export async function readAccountSnapshot(
       },
       {
         address: config.perps.address,
-        abi: HashPowerPerpsDEXAbi,
+        abi: PerpsPositionAbi,
         functionName: "getUserPosition" as const,
         args: [user] as const,
       },
@@ -181,7 +182,10 @@ export async function readAccountSnapshot(
     balance: balance as bigint,
     perp: {
       netQty: perpPosition.netQuantity,
-      entryPrice: perpPosition.aggregatedEntryPrice,
+      entryPrice:
+        perpPosition.netQuantity === 0n
+          ? 0n
+          : (abs(perpPosition.netEntryValue) * 1_000_000n) / abs(perpPosition.netQuantity),
       orders: restingOrders(perpRisk, perpOrderAggregate),
       // PME uses `max(0, pendingFunding)` — only what the user owes.
       fundingOwed: funding > 0n ? funding : 0n,
@@ -204,4 +208,8 @@ function restingOrders(
     buyValue: aggregate.buyValue,
     sellValue: aggregate.sellValue,
   };
+}
+
+function abs(value: bigint): bigint {
+  return value < 0n ? -value : value;
 }
