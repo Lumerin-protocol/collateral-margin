@@ -248,8 +248,8 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
   // hashpower settles per-day, so only the expiry spacing schedules the book).
   const firstExpirationAt =
     latestBlock.timestamp + BigInt(FUTURES_EXPIRATION_INTERVAL_DAYS * 24 * 3600);
-  // initialize(hashrateOracle, liquidationMarginPercent, minimumPriceIncrement,
-  //            expirationIntervalDays, futureExpirationDatesCount, firstFutureExpirationDate)
+  // initialize(hashrateOracle, liquidationMarginPercent,
+  //            futureExpirationDatesCount, firstFutureExpirationDate)
   const futures = await deployProxy(
     publicClient,
     owner.client,
@@ -259,8 +259,6 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     [
       hashpriceOracle,
       FUTURES_LIQUIDATION_MARGIN_PCT,
-      MIN_PRICE_INCREMENT,
-      FUTURES_EXPIRATION_INTERVAL_DAYS,
       FUTURES_FUTURE_DELIVERY_DATES_COUNT,
       firstExpirationAt,
     ],

@@ -3,10 +3,10 @@ import { resolve } from "node:path";
 import { createPublicClient, http } from "viem";
 
 /**
- * Spawn `pnpm exec hardhat node` from `collateral-margin/contracts/`, the only
- * package in this repo that already has Hardhat 3 + viem wired up. The node
- * is shared across every integration test — scenarios use `evm_snapshot` /
- * `evm_revert` to isolate themselves (see `loadFixture.ts`).
+ * Spawn a Hardhat node from `collateral-margin/contracts/`, the only package
+ * in this repo that already has Hardhat 3 + viem wired up. The keeper-specific
+ * config disables the contract-size limit for sibling implementation artifacts
+ * without changing any production network configuration.
  *
  * We deliberately do NOT spin up Hardhat in `keeper/` itself: the sibling
  * perps and futures repos each have a deep Solidity dep tree (OZ, OZ
@@ -29,8 +29,8 @@ const POLL_INTERVAL_MS = 200;
 
 export interface StartHardhatNodeOptions {
   /**
-   * Absolute path to the directory whose `hardhat.config.ts` we should run
-   * `pnpm exec hardhat node` from. Defaults to the workspace's
+   * Absolute path to the directory whose Hardhat installation should run
+   * the integration config. Defaults to the workspace's
    * `collateral-margin/contracts/` (`../../contracts` relative to this file).
    */
   hardhatProjectDir?: string;
@@ -53,18 +53,27 @@ export async function startHardhatNode(
   options: StartHardhatNodeOptions = {},
 ): Promise<HardhatNode> {
   const cwd = options.hardhatProjectDir ?? resolve(import.meta.dirname, "../../../contracts");
+  const config = resolve(import.meta.dirname, "hardhat.config.ts");
   const rpcUrl = options.rpcUrl ?? DEFAULT_RPC_URL;
   const readyTimeoutMs = options.readyTimeoutMs ?? READY_TIMEOUT_MS;
 
-  const proc = spawn("pnpm", ["exec", "hardhat", "node"], {
-    cwd,
-    // `detached: true` puts the child in its own process group so we can
-    // kill the whole tree on shutdown — Hardhat spawns helpers (the EDR
-    // worker, the JSON-RPC server) that would otherwise outlive SIGTERM.
-    detached: true,
-    env: { ...process.env, FORCE_COLOR: "0" },
-    stdio: ["ignore", options.verbose ? "inherit" : "ignore", options.verbose ? "inherit" : "pipe"],
-  });
+  const proc = spawn(
+    "pnpm",
+    ["exec", "hardhat", "--config", config, "--network", "hardhat", "node"],
+    {
+      cwd,
+      // `detached: true` puts the child in its own process group so we can
+      // kill the whole tree on shutdown — Hardhat spawns helpers (the EDR
+      // worker, the JSON-RPC server) that would otherwise outlive SIGTERM.
+      detached: true,
+      env: { ...process.env, FORCE_COLOR: "0" },
+      stdio: [
+        "ignore",
+        options.verbose ? "inherit" : "ignore",
+        options.verbose ? "inherit" : "pipe",
+      ],
+    },
+  );
 
   // Even when stderr is piped silently we still want to surface crashes:
   // attach a one-shot handler that captures the first ~256 chars so the
