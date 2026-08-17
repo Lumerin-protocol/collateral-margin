@@ -88,18 +88,18 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: Lumerin-protocol/derivatives-marketplace
-          # createOrder with explicit TIF + getRiskView; implements this branch's
-          # engine interface (PR #90).
-          ref: 8df78601bbbad049cee962509f9c9e8b9d9b2503
+          # Signed netEntryValue on the position tuple; implements this branch's
+          # engine interface (PR #97).
+          ref: 316be14c529071df4d2ff71321ab4a6fbedcfaaf
           path: perps
 
       - name: Checkout futures-marketplace
         uses: actions/checkout@v5
         with:
           repository: Lumerin-protocol/futures-marketplace
-          # createOrder with explicit TIF + getRiskView; implements this branch's
-          # engine interface (PR #247).
-          ref: 16d026960fa15d0fb73822e6750ae8e3f14a4c6d
+          # HashPowerFutures rename and per-delivery order reads; implements this
+          # branch's engine interface (PR #258).
+          ref: 5a543ae0c59c651790bc99a8550da9a2ffd30c2b
           path: futures-marketplace
 
       - name: Install perps contracts dependencies
