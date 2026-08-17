@@ -1212,12 +1212,12 @@ packages:
     resolution: {integrity: sha512-OcRE68cOsVMXp1Yvonl/fzkQOyjLSu/8bhPDfQt0e0/Eb283TKP20Fs2MqoPsr9SwA595rRCA+QMzYc9nBP+JQ==}
 
   collateral-margin-contracts@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/c34b4a360d6616d017b157a4a9e27e1a8e60079c#path:/contracts:
-    resolution: {path: /contracts, tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/c34b4a360d6616d017b157a4a9e27e1a8e60079c}
+    resolution: {gitHosted: true, path: /contracts, tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/c34b4a360d6616d017b157a4a9e27e1a8e60079c}
     version: 1.0.0
     engines: {node: 24.x}
 
   collateral-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/9372f537a57682bb126aede41aac51be004828a6:
-    resolution: {tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/9372f537a57682bb126aede41aac51be004828a6}
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/9372f537a57682bb126aede41aac51be004828a6}
     version: 1.0.0
 
   color-convert@2.0.1:
@@ -1304,7 +1304,7 @@ packages:
     engines: {node: '>= 0.8'}
 
   derivatives-contracts@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/f7e219f704646ab654a2a8d0286c0f477148e299#path:/contracts:
-    resolution: {path: /contracts, tarball: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/f7e219f704646ab654a2a8d0286c0f477148e299}
+    resolution: {gitHosted: true, path: /contracts, tarball: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/f7e219f704646ab654a2a8d0286c0f477148e299}
     version: 1.0.0
     engines: {node: 24.x}
 
@@ -1346,7 +1346,7 @@ packages:
     engines: {node: '>=6'}
 
   era-contracts@https://codeload.github.com/matter-labs/era-contracts/tar.gz/446d391d34bdb48255d5f8fef8a8248925fc98b9:
-    resolution: {tarball: https://codeload.github.com/matter-labs/era-contracts/tar.gz/446d391d34bdb48255d5f8fef8a8248925fc98b9}
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/matter-labs/era-contracts/tar.gz/446d391d34bdb48255d5f8fef8a8248925fc98b9}
     version: 0.1.0
 
   es-define-property@1.0.1:
@@ -1595,7 +1595,7 @@ packages:
     resolution: {integrity: sha512-taOaskGt4z4SOANNseOviYDvjEJinIkRgmp7LbKP2YTTmVxWBl87s/uzK9r+44BclBSp2X7K1hqeNfz9JbBeXA==}
 
   hashprice-oracle@https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/b65adbfeb7e6c4417747bfd3d94b6e89e162ed50:
-    resolution: {tarball: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/b65adbfeb7e6c4417747bfd3d94b6e89e162ed50}
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/Lumerin-protocol/hashprice-oracle/tar.gz/b65adbfeb7e6c4417747bfd3d94b6e89e162ed50}
     version: 1.0.0
 
   hasown@2.0.3:
@@ -1876,7 +1876,7 @@ packages:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
 
   multicall3@https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012:
-    resolution: {tarball: https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012}
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/mds1/multicall3/tar.gz/b667d67ecfa5361a81e8f110234ce242613b0012}
     version: 0.0.0
 
   nice-try@1.0.5:

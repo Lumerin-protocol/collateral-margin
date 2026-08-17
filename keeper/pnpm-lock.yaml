@@ -67,24 +67,28 @@ packages:
     engines: {node: '>=14.21.3'}
     cpu: [arm64]
     os: [linux]
+    libc: [musl]
 
   '@biomejs/cli-linux-arm64@2.4.13':
     resolution: {integrity: sha512-NzkUDSqfvMBrPplKgVr3aXLHZ2NEELvvF4vZxXulEylKWIGqlvNEcwUcj9OLrn75TD3lJ/GIqCVlBwd1MZCuYQ==}
     engines: {node: '>=14.21.3'}
     cpu: [arm64]
     os: [linux]
+    libc: [glibc]
 
   '@biomejs/cli-linux-x64-musl@2.4.13':
     resolution: {integrity: sha512-Z601MienRgTBDza/+u2CH3RSrWoXo9rtr8NK6A4KJzqGgfxx+H3VlyLgTJ4sRo40T3pIsqpTmiOQEvYzQvBRvQ==}
     engines: {node: '>=14.21.3'}
     cpu: [x64]
     os: [linux]
+    libc: [musl]
 
   '@biomejs/cli-linux-x64@2.4.13':
     resolution: {integrity: sha512-Az3ZZedYRBo9EQzNnD9SxFcR1G5QsGo6VEc2hIyVPZ1rdKwee/7E9oeBBZFpE8Z44ekxsDQBqbiWGW5ShOhUSQ==}
     engines: {node: '>=14.21.3'}
     cpu: [x64]
     os: [linux]
+    libc: [glibc]
 
   '@biomejs/cli-win32-arm64@2.4.13':
     resolution: {integrity: sha512-Px9PS2B5/Q183bUwy/5VHqp3J2lzdOCeVGzMpphYfl8oSa7VDCqenBdqWpy6DCy/en4Rbf/Y1RieZF6dJPcc9A==}
@@ -99,7 +103,7 @@ packages:
     os: [win32]
 
   '@hashpower/portfolio-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/c34b4a360d6616d017b157a4a9e27e1a8e60079c#path:/portfolio-margin':
-    resolution: {path: /portfolio-margin, tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/c34b4a360d6616d017b157a4a9e27e1a8e60079c}
+    resolution: {gitHosted: true, integrity: sha512-mxgdMq81THnD1ytwHTwSxHhAVsYdGw6YjcwHAxzUQG0mMrfjdeSx/Yipcg117u3QUSSnU9L8YJ4J09xmujZOOQ==, path: /portfolio-margin, tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/c34b4a360d6616d017b157a4a9e27e1a8e60079c}
     version: 0.1.0
     engines: {node: '>=22'}
 
@@ -197,7 +201,7 @@ packages:
     engines: {node: '>=8.0.0'}
 
   collateral-margin-abi@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/c34b4a360d6616d017b157a4a9e27e1a8e60079c#path:/contracts/abi:
-    resolution: {path: /contracts/abi, tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/c34b4a360d6616d017b157a4a9e27e1a8e60079c}
+    resolution: {gitHosted: true, integrity: sha512-mxgdMq81THnD1ytwHTwSxHhAVsYdGw6YjcwHAxzUQG0mMrfjdeSx/Yipcg117u3QUSSnU9L8YJ4J09xmujZOOQ==, path: /contracts/abi, tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/c34b4a360d6616d017b157a4a9e27e1a8e60079c}
     version: 0.0.0
 
   colorette@2.0.20:
@@ -207,7 +211,7 @@ packages:
     resolution: {integrity: sha512-2P0p0pFGzHS5EMnhdxQi7aJN+iMheud0UhG4dlE1DLAlvL8JHjJJTX/CSm4JXwV0Ka5nGk3zC5mcb5bUQUxxMA==}
 
   derivatives-marketplace-abi@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/8b7ed0f3572d0ea8039a11757b7c1b963be75535#path:/contracts/abi:
-    resolution: {path: /contracts/abi, tarball: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/8b7ed0f3572d0ea8039a11757b7c1b963be75535}
+    resolution: {gitHosted: true, integrity: sha512-JkJW4F+2DgaUOFLgP0OO9QuvJl4bh4m5gle+CVlKH8o+WBRqY2+c3OoFl7ml9lzdwGGwWjOFdchqY4KP/a6OnQ==, path: /contracts/abi, tarball: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/8b7ed0f3572d0ea8039a11757b7c1b963be75535}
     version: 0.0.0
 
   end-of-stream@1.4.5:

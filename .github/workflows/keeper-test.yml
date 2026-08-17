@@ -44,6 +44,8 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: keeper/pnpm-lock.yaml
 
       - name: Install keeper dependencies
         working-directory: ./keeper
