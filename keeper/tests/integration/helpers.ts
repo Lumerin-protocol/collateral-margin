@@ -146,18 +146,20 @@ export async function readFuturesOrderIds(
   })) as readonly bigint[];
   if (expirationAts.length === 0) return [];
 
-  const perExpiry = await stack.publicClient.multicall({
-    contracts: expirationAts.map((expirationAt) => ({
-      address: stack.addresses.futures,
-      abi: stack.abis.futures,
-      functionName: "getUserOrdersAtExpiration" as const,
-      args: [user, expirationAt] as const,
-    })),
-    allowFailure: false,
-  });
+  const perExpiry = await Promise.all(
+    expirationAts.map(
+      (expirationAt) =>
+        stack.publicClient.readContract({
+          address: stack.addresses.futures,
+          abi: stack.abis.futures,
+          functionName: "getUserOrdersAtExpiration",
+          args: [user, expirationAt],
+        }) as Promise<readonly Hex[]>,
+    ),
+  );
 
   const orderIds: Hex[] = [];
-  for (const ids of perExpiry as readonly (readonly Hex[])[]) {
+  for (const ids of perExpiry) {
     for (const id of ids) orderIds.push(id);
   }
   return orderIds;
