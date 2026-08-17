@@ -118,7 +118,10 @@ function buildHarness({
             case "balanceOf":
               return balance;
             case "getUserPosition":
-              return { netQuantity: perpNetQty, aggregatedEntryPrice: perpEntry };
+              return {
+                netQuantity: perpNetQty,
+                netEntryValue: (perpNetQty * perpEntry) / 1_000_000n,
+              };
             case "getRiskView":
               return {
                 netPositionDelta: 0n,
@@ -129,9 +132,13 @@ function buildHarness({
                 buyOrderFillLoss: 0n,
                 sellOrderFillLoss: 0n,
               };
-            case "getOrderValues":
-              return [0n, 0n];
+            case "getOrderAggregate":
+              return { buyQty: 0n, sellQty: 0n, buyValue: 0n, sellValue: 0n };
+            case "getOrderAggregateAtExpiration":
+              return { buyQty: 0n, sellQty: 0n, buyValue: 0n, sellValue: 0n };
             case "getActiveExpirationDates":
+              return [];
+            case "getExpirationDates":
               return [];
             case "computePortfolioIM":
               return balance / 2n;

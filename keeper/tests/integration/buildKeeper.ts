@@ -86,7 +86,7 @@ export interface BuildKeeperOverrides {
    */
   deliveryBootstrapUsers?: readonly Address[];
   /**
-   * Maximum settlePosition calls bundled into one Futures.multicall tx by
+   * Maximum position pairs passed to one Futures.settlePositions tx by
    * the delivery coordinator. Defaults to 50 for parity with production.
    * Override to a small value to assert batching behaviour explicitly
    * (e.g. set to 1 to force per-id calls, or 2 to assert chunked sweeps).
@@ -251,13 +251,6 @@ function buildConfig(
       balanceCheckIntervalMs: 60 * 60 * 1000,
       balanceLowWei: 10_000_000_000_000_000n,
       balanceCriticalWei: 1_000_000_000_000_000n,
-    },
-    outdatedOrders: {
-      // Disabled by default in integration tests — they cover liquidation
-      // and delivery flows; expired-order sweep has its own unit tests.
-      // Tests that want to exercise it can override via a future flag.
-      sweepIntervalMs: 0,
-      maxBatchSize: 50,
     },
     delivery: {
       enabled: overrides.delivery === true,

@@ -1,7 +1,6 @@
 import {
   BaseError,
   ContractFunctionRevertedError,
-  encodeFunctionData,
   getAddress,
   type Address,
   type Hex,
@@ -9,7 +8,7 @@ import {
 } from "viem";
 import { withUnstickRetry } from "../tx/unstick.ts";
 import type pino from "pino";
-import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
+import { HashPowerFuturesAbi } from "../abi/HashPowerFutures.ts";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
 import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
@@ -76,13 +75,13 @@ export class DeliveryCoordinator {
     this.unwatchers.push(
       this.chain.publicClient.watchContractEvent({
         address: this.config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         eventName: "OrderMatched",
         onLogs: (logs) => this.onOrderMatched(logs),
       }),
       this.chain.publicClient.watchContractEvent({
         address: this.config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         eventName: "PositionSettled",
         onLogs: (logs) => this.onPositionSettled(logs),
       }),
@@ -152,14 +151,14 @@ export class DeliveryCoordinator {
         const [matched, settled] = await Promise.all([
           this.chain.publicClient.getContractEvents({
             address: this.config.futures.address,
-            abi: FuturesAbi,
+            abi: HashPowerFuturesAbi,
             eventName: "OrderMatched",
             fromBlock: start,
             toBlock: end,
           }),
           this.chain.publicClient.getContractEvents({
             address: this.config.futures.address,
-            abi: FuturesAbi,
+            abi: HashPowerFuturesAbi,
             eventName: "PositionSettled",
             fromBlock: start,
             toBlock: end,
@@ -259,7 +258,7 @@ export class DeliveryCoordinator {
     try {
       expirationAts = (await this.chain.publicClient.readContract({
         address: this.config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "getActiveExpirationDates",
         args: [user],
       })) as readonly bigint[];
@@ -272,7 +271,7 @@ export class DeliveryCoordinator {
     const positions = (await this.chain.publicClient.multicall({
       contracts: expirationAts.map((expirationAt) => ({
         address: this.config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "getUserPosition" as const,
         args: [user, expirationAt] as const,
       })),
@@ -390,7 +389,7 @@ export class DeliveryCoordinator {
       positions.map((pos) =>
         this.chain.publicClient.simulateContract({
           address: this.config.futures.address,
-          abi: FuturesAbi,
+          abi: HashPowerFuturesAbi,
           functionName: "settlePosition",
           args: [pos.user, pos.expirationAt],
           account: this.chain.account,
@@ -431,31 +430,14 @@ export class DeliveryCoordinator {
     if (this.config.keeper.dryRun) {
       this.logger.info(
         { batchSize: settleable.length },
-        "[dryRun] would call Futures.multicall(settlePosition × N)",
+        "[dryRun] would call Futures.settlePositions",
       );
       for (const pos of settleable) this.dropTracked(pos.user, pos.expirationAt);
       return;
     }
 
-    const calldatas: Hex[] = [];
-    const encodable: TrackedPosition[] = [];
-    for (const pos of settleable) {
-      try {
-        const data = encodeFunctionData({
-          abi: FuturesAbi,
-          functionName: "settlePosition",
-          args: [pos.user, pos.expirationAt],
-        });
-        calldatas.push(data);
-        encodable.push(pos);
-      } catch (err) {
-        this.logger.error(
-          { err, user: pos.user, expirationAt: pos.expirationAt.toString() },
-          "delivery: encodeFunctionData threw — dropping malformed entry from batch",
-        );
-      }
-    }
-    if (calldatas.length === 0) return;
+    const users = settleable.map((pos) => pos.user);
+    const expirationAts = settleable.map((pos) => pos.expirationAt);
 
     type WriteParams = Parameters<
       typeof this.chain.walletClient.writeContract
@@ -465,9 +447,9 @@ export class DeliveryCoordinator {
       hash = await withUnstickRetry(this.chain, this.logger, () =>
         this.chain.walletClient.writeContract({
           address: this.config.futures.address,
-          abi: FuturesAbi,
-          functionName: "multicall",
-          args: [calldatas],
+          abi: HashPowerFuturesAbi,
+          functionName: "settlePositions",
+          args: [users, expirationAts],
           account: this.chain.account,
           chain: this.chain.walletClient.chain ?? null,
         } as unknown as WriteParams),
@@ -481,10 +463,10 @@ export class DeliveryCoordinator {
         return;
       }
       this.logger.warn(
-        { err, batchSize: encodable.length },
+        { err, batchSize: settleable.length },
         "delivery batch: write reverted — falling back to per-position retries",
       );
-      for (const pos of encodable) {
+      for (const pos of settleable) {
         try {
           await this.attemptSettle(pos);
         } catch (innerErr) {
@@ -505,13 +487,13 @@ export class DeliveryCoordinator {
       {
         hash,
         blockNumber: receipt.blockNumber.toString(),
-        batchSize: encodable.length,
+        batchSize: settleable.length,
         ...formatGasCost(receipt, this.ethUsdFeed),
       },
-      "delivery batch: multicall confirmed",
+      "delivery batch: settlePositions confirmed",
     );
 
-    for (const pos of encodable) {
+    for (const pos of settleable) {
       this.dropTracked(pos.user, pos.expirationAt);
     }
   }
@@ -529,7 +511,7 @@ export class DeliveryCoordinator {
     try {
       const sim = (await this.chain.publicClient.simulateContract({
         address: this.config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "settlePosition",
         args,
         account: this.chain.account,

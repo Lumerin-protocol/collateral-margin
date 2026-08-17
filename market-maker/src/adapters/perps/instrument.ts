@@ -21,6 +21,7 @@ import { TimeInForce } from "../../core/adapter.ts";
 import { HashPowerPerpsDEXAbi } from "perps-contracts/abi/HashPowerPerpsDEX.ts";
 import { calculateNotional, fillLossFromNotionals } from "../../core/math.ts";
 import type { PerpsVenueAdapter } from "./venue.ts";
+import { PerpsPositionAbi } from "./positionAbi.ts";
 
 const PERPS_INSTRUMENT_ID = "perps";
 
@@ -51,13 +52,16 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
     const owner = this.venue.wallet.account.address;
     const pos = await this.venue.publicClient.readContract({
       address: this.venue.address,
-      abi: HashPowerPerpsDEXAbi,
+      abi: PerpsPositionAbi,
       functionName: "getUserPosition",
       args: [owner],
     });
+    const absQuantity = pos.netQuantity < 0n ? -pos.netQuantity : pos.netQuantity;
+    const absEntryValue = pos.netEntryValue < 0n ? -pos.netEntryValue : pos.netEntryValue;
     return {
       netQuantity: pos.netQuantity,
-      entryPrice: pos.aggregatedEntryPrice,
+      entryPrice:
+        absQuantity === 0n ? 0n : (absEntryValue * 1_000_000n) / absQuantity,
     };
   }
 

@@ -8,7 +8,7 @@ import { ILinearMarket } from "../interfaces/ILinearMarket.sol";
 contract PerpsDEXMock is ILinearMarket {
     struct Position {
         int256 netQuantity;
-        uint256 aggregatedEntryPrice;
+        int256 netEntryValue;
     }
 
     uint8 public constant QUANTITY_DECIMALS = 6;
@@ -23,30 +23,21 @@ contract PerpsDEXMock is ILinearMarket {
     }
 
     mapping(address => Position) private _positions;
-    mapping(address => uint256) private _balances;
     mapping(address => int256) private _unrealizedPnl;
-    mapping(address => uint256) private _maintenanceMargin;
     mapping(address => int256) private _pendingFunding;
     mapping(address => uint256) private _buyOrderDelta;
     mapping(address => uint256) private _sellOrderDelta;
     mapping(address => uint256) private _buyOrderFillLoss;
     mapping(address => uint256) private _sellOrderFillLoss;
+    bool private _riskViewDisabled;
 
     function setUserPosition(address user, int256 qty, uint256 entryPrice) external {
-        _positions[user] = Position(qty, entryPrice);
-    }
-
-    function setBalance(address user, uint256 bal) external {
-        _balances[user] = bal;
+        int256 netEntryValue = qty * int256(entryPrice) / int256(10 ** QUANTITY_DECIMALS);
+        _positions[user] = Position(qty, netEntryValue);
     }
 
     function setUnrealizedPnl(address user, int256 pnl) external {
         _unrealizedPnl[user] = pnl;
-    }
-
-    /// @dev Only MM is modelled: it is the threshold `isLiquidatable` compares balance against.
-    function setMaintenanceMargin(address user, uint256 mm) external {
-        _maintenanceMargin[user] = mm;
     }
 
     function getUserPosition(address user) external view returns (Position memory) {
@@ -60,6 +51,7 @@ contract PerpsDEXMock is ILinearMarket {
     }
 
     function getRiskView(address user) external view returns (RiskView memory) {
+        if (_riskViewDisabled) revert();
         return RiskView({
             netPositionDelta: _positions[user].netQuantity * 1e6 / int256(10 ** QUANTITY_DECIMALS),
             unrealizedPnl: _unrealizedPnl[user],
@@ -95,8 +87,11 @@ contract PerpsDEXMock is ILinearMarket {
         _sellOrderFillLoss[user] = sellLoss;
     }
 
-    function isLiquidatable(address user) external view returns (bool) {
-        if (_positions[user].netQuantity == 0) return false;
-        return _balances[user] < _maintenanceMargin[user];
+    function setRiskViewDisabled(bool disabled) external {
+        _riskViewDisabled = disabled;
+    }
+
+    function hasRestingOrderDelta(address user) external view returns (bool) {
+        return _buyOrderDelta[user] != 0 || _sellOrderDelta[user] != 0;
     }
 }

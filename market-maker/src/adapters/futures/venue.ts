@@ -12,7 +12,7 @@ import type {
   WalletContext,
 } from "../../core/adapter.ts";
 import type { NetworkClients } from "../../core/client.ts";
-import { FuturesAbi } from "futures-contracts/abi/Futures";
+import { HashPowerFuturesAbi } from "../../abi/HashPowerFutures.ts";
 import { CollateralVaultAbi } from "collateral-margin-contracts/abi/CollateralVault.ts";
 import { PortfolioMarginEngineAbi } from "collateral-margin-contracts/abi/PortfolioMarginEngine.ts";
 import { Multicall3Abi } from "perps-contracts/abi/Multicall3.ts";
@@ -127,7 +127,7 @@ export class FuturesVenueAdapter implements VenueAdapter {
         const { token } = await this.resolveAddresses();
         const oracle = await this.publicClient.readContract({
           address: this.address,
-          abi: FuturesAbi,
+          abi: HashPowerFuturesAbi,
           functionName: "priceOracle",
         });
         const [oracleDecimals, tokenDecimals] = await this.publicClient.multicall({
@@ -219,7 +219,7 @@ export class FuturesVenueAdapter implements VenueAdapter {
   private async readExpirationAts(): Promise<bigint[]> {
     const dates = await this.publicClient.readContract({
       address: this.address,
-      abi: FuturesAbi,
+      abi: HashPowerFuturesAbi,
       functionName: "getExpirationDates",
     });
     return [...dates];
@@ -260,36 +260,6 @@ export class FuturesVenueAdapter implements VenueAdapter {
     }
   }
 
-  /** @deprecated Prefer {@link sendCall} with a single `updateOrders` encoding. */
-  async multicall(
-    calls: `0x${string}`[],
-    opts: { maxFeePerGas?: bigint; nonce?: number } = {},
-  ): Promise<`0x${string}`> {
-    try {
-      return await this.wallet.walletClient.writeContract({
-        address: this.address,
-        abi: FuturesAbi,
-        functionName: "multicall",
-        args: [calls],
-        account: this.wallet.account,
-        chain: this.chain,
-        maxFeePerGas: opts.maxFeePerGas,
-        nonce: opts.nonce,
-      });
-    } catch (err) {
-      throw attachTenderlyUrl(err, {
-        chainId: this.chain.id,
-        from: this.wallet.account.address,
-        to: this.address,
-        data: encodeFunctionData({
-          abi: FuturesAbi,
-          functionName: "multicall",
-          args: [calls],
-        }),
-      });
-    }
-  }
-
   // ── Internal helpers ────────────────────────────────────────────────────
 
   async resolveAddresses(): Promise<{
@@ -313,12 +283,12 @@ export class FuturesVenueAdapter implements VenueAdapter {
       contracts: [
         {
           address: this.address,
-          abi: FuturesAbi,
+          abi: HashPowerFuturesAbi,
           functionName: "vault",
         },
         {
           address: this.address,
-          abi: FuturesAbi,
+          abi: HashPowerFuturesAbi,
           functionName: "portfolioMargin",
         },
       ],
@@ -374,7 +344,7 @@ export class FuturesVenueAdapter implements VenueAdapter {
     }
     const liqMarginPct = await this.publicClient.readContract({
       address: this.address,
-      abi: FuturesAbi,
+      abi: HashPowerFuturesAbi,
       functionName: "liquidationMarginPercent",
     });
     this.marginPercentCache = BigInt(liqMarginPct);
@@ -434,7 +404,12 @@ class FuturesCollateralAccount implements BatchableCollateralAccount {
     ] as MarginReadPlan["shared"];
 
     const venue = [
-      { address: this.venue.address, abi: FuturesAbi, functionName: "getUnrealizedPnl", args: [owner] },
+      {
+        address: this.venue.address,
+        abi: HashPowerFuturesAbi,
+        functionName: "getUnrealizedPnl",
+        args: [owner],
+      },
     ] as MarginReadPlan["venue"];
 
     const decode = (results: readonly unknown[]): CollateralSnapshot => {

@@ -5,21 +5,31 @@ import type {
   OwnOrderSource,
   Unsubscribe,
 } from "../../core/adapter.ts";
-import { FuturesAbi } from "futures-contracts/abi/Futures";
+import { HashPowerFuturesAbi } from "../../abi/HashPowerFutures.ts";
 import type { FuturesVenueAdapter } from "./venue.ts";
 import { futuresInstrumentId } from "./events.ts";
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const FUTURES_USER_ORDERS_AT_EXPIRATION_ABI = [
+  {
+    type: "function",
+    name: "getUserOrdersAtExpiration",
+    stateMutability: "view",
+    inputs: [
+      { name: "_user", type: "address" },
+      { name: "_expirationAt", type: "uint256" },
+    ],
+    outputs: [{ name: "orderIds", type: "bytes32[]" }],
+  },
+] as const;
 
 /**
  * Cache-backed own-order source for a single futures expiry.
  *
- * The contract has no per-participant order view scoped by delivery date, so
- * we read all of the wallet's orders and keep only those matching this
- * instrument's `expirationAt`:
+ * The contract exposes a participant-order view scoped by delivery date:
  *
- *   1. `bootstrap()` reads `getUserOrders(wallet)` + `getOrder(id)` and
- *      caches the orders whose `expirationAt === expirationAt`.
+ *   1. `bootstrap()` reads `getUserOrdersAtExpiration(wallet, expirationAt)`
+ *      plus `getOrder(id)`.
  *   2. `subscribe()` listens to venue events. `order-created` is filtered by
  *      participant AND instrumentId (which encodes the expiry). `order-cancelled`
  *      carries no expiry, so we apply it only if the id is in *this* cache —
@@ -73,9 +83,9 @@ export class FuturesOwnOrders implements OwnOrderSource {
 
     const orderIds = await this.venue.publicClient.readContract({
       address: this.venue.address,
-      abi: FuturesAbi,
-      functionName: "getUserOrders",
-      args: [owner],
+      abi: FUTURES_USER_ORDERS_AT_EXPIRATION_ABI,
+      functionName: "getUserOrdersAtExpiration",
+      args: [owner, this.expirationAt],
     });
 
     if (orderIds.length === 0) {
@@ -86,7 +96,7 @@ export class FuturesOwnOrders implements OwnOrderSource {
 
     const allCalls = orderIds.map((id) => ({
       address: this.venue.address,
-      abi: FuturesAbi,
+      abi: HashPowerFuturesAbi,
       functionName: "getOrder" as const,
       args: [id] as const,
     }));
@@ -110,7 +120,7 @@ export class FuturesOwnOrders implements OwnOrderSource {
         expirationAt: bigint;
       };
       if (!o.participant || o.participant === ZERO_ADDRESS) continue;
-      // Keep only orders belonging to this expiry.
+      // Defensive against an inconsistent RPC response.
       if (o.expirationAt !== this.expirationAt) continue;
       if (o.quantity === 0n) continue;
       const absQty = o.quantity < 0n ? -o.quantity : o.quantity;

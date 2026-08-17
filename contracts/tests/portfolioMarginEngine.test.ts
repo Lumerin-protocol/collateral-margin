@@ -33,6 +33,19 @@ describe("PortfolioMarginEngine", () => {
   });
 
   describe("perps-only position", () => {
+    it("exposes signed net entry value", async () => {
+      const { perpsMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
+
+      await perpsMock.write.setUserPosition([user, -ONE_LOT_QTY, DEFAULT_MARKET_PRICE]);
+
+      assert.deepEqual(await perpsMock.read.getUserPosition([user]), {
+        netQuantity: -ONE_LOT_QTY,
+        netEntryValue: -DEFAULT_MARKET_PRICE,
+      });
+    });
+
     it("computes margin from perps delta stress", async () => {
       const { pme, perpsMock, user } = await networkHelpers.loadFixture(
         deployPortfolioMarginEngineFixture,
@@ -279,6 +292,17 @@ describe("PortfolioMarginEngine", () => {
       assert.equal(await pme.read.hasRestingOrderDelta([user]), true);
     });
 
+    it("does not compute full market risk views", async () => {
+      const { pme, perpsMock, futuresMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
+
+      await perpsMock.write.setRiskViewDisabled([true]);
+      await futuresMock.write.setOrderDeltas([user, ONE_LOT_QTY, 0n]);
+
+      assert.equal(await pme.read.hasRestingOrderDelta([user]), true);
+    });
+
     it("catches either side", async () => {
       const { pme, perpsMock, user } = await networkHelpers.loadFixture(
         deployPortfolioMarginEngineFixture,
@@ -387,8 +411,10 @@ describe("PortfolioMarginEngine", () => {
       await perpsMock.write.setUserPosition([user, ONE_LOT_QTY, DEFAULT_MARKET_PRICE]);
       const im = await pme.read.computePortfolioIM([user]);
       const mm = await pme.read.computePortfolioMM([user]);
+      const [combinedIm, combinedMm] = await pme.read.computePortfolioMargins([user]);
 
       assert.ok(im > mm, "IM > MM for same position");
+      assert.deepEqual([combinedIm, combinedMm], [im, mm], "combined read matches standalone margins");
     });
   });
 
@@ -619,6 +645,37 @@ describe("PortfolioMarginEngine", () => {
 
   });
 
+  describe("oracle freshness", () => {
+    it("reverts margin reads when the oracle is stale", async () => {
+      const { pme, oracleMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
+
+      await oracleMock.write.freezeTimestamp();
+      await networkHelpers.time.increase(3601);
+
+      await viem.assertions.revertWithCustomError(
+        pme.read.computePortfolioIM([user]),
+        pme,
+        "OracleStale",
+      );
+    });
+
+    it("reverts margin reads when the oracle answer is non-positive", async () => {
+      const { pme, oracleMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
+
+      await oracleMock.write.setPrice([0n, 6]);
+
+      await viem.assertions.revertWithCustomError(
+        pme.read.computePortfolioIM([user]),
+        pme,
+        "InvalidOracle",
+      );
+    });
+  });
+
   describe("gamma and vega", () => {
     it("gamma reduces stress loss for long gamma position", async () => {
       const { pme, optionsMock, user } = await networkHelpers.loadFixture(
@@ -632,14 +689,13 @@ describe("PortfolioMarginEngine", () => {
     });
 
     it("short gamma increases stress loss", async () => {
-      const { pme, perpsMock, optionsMock, user } = await networkHelpers.loadFixture(
+      const { pme, optionsMock, user } = await networkHelpers.loadFixture(
         deployPortfolioMarginEngineFixture,
       );
 
-      await perpsMock.write.setUserPosition([user, 0n, 0n]);
-      await optionsMock.write.setNetGreeks([user, 0n, 0n, 0n]);
+      await optionsMock.write.setNetGreeks([user, 0n, -WAD, 0n]);
       const im = await pme.read.computePortfolioIM([user]);
-      assert.equal(im, 0n, "delta-neutral, no gamma/vega → 0 margin");
+      assert.ok(im > 0n, "negative gamma loses under either spot move");
     });
 
     it("vega exposure adds to margin", async () => {
@@ -652,6 +708,17 @@ describe("PortfolioMarginEngine", () => {
 
       assert.ok(im > 0n, "pure vega position has positive stress margin");
       assert.equal(im, 100_000n, "vega stress = vega * volShock in token decimals");
+    });
+
+    it("short vega is stressed in the opposite volatility scenario", async () => {
+      const { pme, optionsMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
+
+      await optionsMock.write.setNetGreeks([user, 0n, 0n, -WAD]);
+      const im = await pme.read.computePortfolioIM([user]);
+
+      assert.equal(im, 100_000n, "negative vega loses under the positive vol shock");
     });
   });
 });

@@ -40,17 +40,17 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           package_json_file: market-maker/package.json
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "24"
           cache: "pnpm"
           cache-dependency-path: market-maker/pnpm-lock.yaml
 
@@ -63,8 +63,8 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      # Skip the pretest (which calls sync-abi.sh, requires the perps and
-      # futures-marketplace contract repos to be checked out side-by-side).
-      # Tests cover core/ and apps/ logic; ABI shape is validated at runtime.
+      # Must go through the package script: it supplies `--import=amaro/strip`,
+      # without which node refuses to strip types from the contract ABIs that
+      # ship as .ts inside node_modules.
       - name: Run tests
-        run: node --test --test-force-exit --test-concurrency=1 'tests/**/*.test.ts'
+        run: pnpm test

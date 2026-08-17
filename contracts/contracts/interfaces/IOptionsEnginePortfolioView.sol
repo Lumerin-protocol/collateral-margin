@@ -12,7 +12,7 @@ interface IOptionsEnginePortfolioView {
     ///      own vault. See `ILinearMarket.vault`.
     function vault() external view returns (ICollateralVault);
 
-    function getNetGreeks(address user) external view returns (int256 netDelta, uint256 netGamma, uint256 netVega);
+    function getNetGreeks(address user) external view returns (int256 netDelta, int256 netGamma, int256 netVega);
 
     function getOptionsReservedMargin(address user) external view returns (uint256);
 }

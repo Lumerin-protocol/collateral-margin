@@ -30,11 +30,13 @@ function makeConfig(): Config {
 
 function makeChain(scripted: {
   activeExpirationAts?: readonly bigint[];
+  /** Tradable window for futures order aggregates; defaults to activeExpirationAts. */
+  tradableExpirationAts?: readonly bigint[];
   futuresPositions?: Record<string, { netQuantity: bigint; netEntryValue: bigint }>;
   /** Keyed by expiry; absent means the expiry has not settled. */
   settlementPrices?: Record<string, bigint>;
   perpNetQty?: bigint;
-  perpEntry?: bigint;
+  perpNetEntryValue?: bigint;
   perpFunding?: bigint;
   perpOrders?: RestingOrders;
   futuresOrders?: RestingOrders;
@@ -69,7 +71,7 @@ function makeChain(scripted: {
               }
               return {
                 netQuantity: scripted.perpNetQty ?? 0n,
-                aggregatedEntryPrice: scripted.perpEntry ?? 0n,
+                netEntryValue: scripted.perpNetEntryValue ?? 0n,
               };
             }
             case "settlementPrice": {
@@ -90,13 +92,44 @@ function makeChain(scripted: {
                 sellOrderFillLoss: 0n,
               };
             }
-            case "getOrderValues": {
-              const orders =
-                (c.address === PERPS ? scripted.perpOrders : scripted.futuresOrders) ?? NO_ORDERS;
-              return [orders.buyValue, orders.sellValue];
+            case "getOrderAggregate": {
+              // Perps-only cross-user aggregate.
+              const orders = scripted.perpOrders ?? NO_ORDERS;
+              return {
+                buyQty: 0n,
+                sellQty: 0n,
+                buyValue: orders.buyValue,
+                sellValue: orders.sellValue,
+              };
+            }
+            case "getOrderAggregateAtExpiration": {
+              const orders = scripted.futuresOrders ?? NO_ORDERS;
+              const dates =
+                scripted.tradableExpirationAts ?? scripted.activeExpirationAts ?? [];
+              // Put the full venue totals on the first expiry so a single-window
+              // sum matches the scripted RestingOrders values.
+              const expirationAt = c.args?.[1] as bigint;
+              const isFirst = dates.length === 0 || expirationAt === dates[0];
+              return {
+                buyQty: 0n,
+                sellQty: 0n,
+                buyValue: isFirst ? orders.buyValue : 0n,
+                sellValue: isFirst ? orders.sellValue : 0n,
+              };
             }
             case "getActiveExpirationDates":
               return scripted.activeExpirationAts ?? [];
+            case "getExpirationDates": {
+              if (scripted.tradableExpirationAts !== undefined) {
+                return scripted.tradableExpirationAts;
+              }
+              if (scripted.activeExpirationAts !== undefined) {
+                return scripted.activeExpirationAts;
+              }
+              // Flat accounts still need one window slot when futures order
+              // totals are scripted without explicit expiries.
+              return scripted.futuresOrders === undefined ? [] : [0n];
+            }
             case "imSpotShock":
               return scripted.imShock ?? 10n ** 17n;
             case "mmSpotShock":
@@ -131,13 +164,14 @@ describe("predict/snapshot: readAccountSnapshot", () => {
     assert.equal(snap.user, USER);
     assert.equal(snap.balance, 0n);
     assert.equal(snap.perp.netQty, 0n);
+    assert.equal(snap.perp.entryPrice, 0n);
     assert.equal(snap.perp.fundingOwed, 0n);
     assert.equal(snap.futures.positions.length, 0);
     assert.deepEqual(snap.perp.orders, NO_ORDERS);
     assert.deepEqual(snap.futures.orders, NO_ORDERS);
   });
 
-  it("pairs each venue's getRiskView deltas with its getOrderValues totals", async () => {
+  it("pairs each venue's risk deltas with its order aggregate totals", async () => {
     const perpOrders: RestingOrders = {
       buyDelta: 2_000_000n,
       sellDelta: 500_000n,
@@ -169,6 +203,16 @@ describe("predict/snapshot: readAccountSnapshot", () => {
     const chain = makeChain({ perpFunding: 1_000n });
     const snap = await readAccountSnapshot(chain, makeConfig(), USER);
     assert.equal(snap.perp.fundingOwed, 1_000n);
+  });
+
+  it("derives the perps average entry price from signed entry value", async () => {
+    const chain = makeChain({
+      perpNetQty: -2_000_000n,
+      perpNetEntryValue: -240_000_000n,
+    });
+    const snap = await readAccountSnapshot(chain, makeConfig(), USER);
+
+    assert.equal(snap.perp.entryPrice, 120_000_000n);
   });
 
   it("hydrates futures aggregates from active delivery dates", async () => {

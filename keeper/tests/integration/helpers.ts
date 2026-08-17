@@ -3,6 +3,7 @@ import type { Address, Hex } from "viem";
 import type { PlanOutcome } from "../../src/coordinator/planner.ts";
 import type { KeeperHarness } from "./buildKeeper.ts";
 import type { DeployedStack } from "./deployStack.ts";
+import { PerpsPositionAbi } from "../../src/venues/perpsPositionAbi.ts";
 
 /**
  * Integration-test helpers.
@@ -73,7 +74,7 @@ export async function runOneSweep(keeper: KeeperHarness, user: Address): Promise
 export interface PerpsPosition {
   /** Signed; positive = long, negative = short, zero = flat. */
   netQuantity: bigint;
-  aggregatedEntryPrice: bigint;
+  netEntryValue: bigint;
 }
 
 export async function readPerpsPosition(
@@ -82,7 +83,7 @@ export async function readPerpsPosition(
 ): Promise<PerpsPosition> {
   return (await stack.publicClient.readContract({
     address: stack.addresses.perps,
-    abi: stack.abis.perps,
+    abi: PerpsPositionAbi,
     functionName: "getUserPosition",
     args: [user],
   })) as PerpsPosition;
@@ -138,12 +139,30 @@ export async function readFuturesOrderIds(
   stack: DeployedStack,
   user: Address,
 ): Promise<readonly Hex[]> {
-  return (await stack.publicClient.readContract({
+  const expirationAts = (await stack.publicClient.readContract({
     address: stack.addresses.futures,
     abi: stack.abis.futures,
-    functionName: "getUserOrders",
-    args: [user],
-  })) as readonly Hex[];
+    functionName: "getExpirationDates",
+  })) as readonly bigint[];
+  if (expirationAts.length === 0) return [];
+
+  const perExpiry = await Promise.all(
+    expirationAts.map(
+      (expirationAt) =>
+        stack.publicClient.readContract({
+          address: stack.addresses.futures,
+          abi: stack.abis.futures,
+          functionName: "getUserOrdersAtExpiration",
+          args: [user, expirationAt],
+        }) as Promise<readonly Hex[]>,
+    ),
+  );
+
+  const orderIds: Hex[] = [];
+  for (const ids of perExpiry) {
+    for (const id of ids) orderIds.push(id);
+  }
+  return orderIds;
 }
 
 /** Resolves to true once `user` is flat on perps. */

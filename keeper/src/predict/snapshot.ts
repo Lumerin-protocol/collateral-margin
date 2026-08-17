@@ -4,8 +4,9 @@ import type { Config } from "../config.ts";
 import { CollateralVaultAbi } from "collateral-margin-abi/CollateralVault.ts";
 import { PortfolioMarginEngineAbi } from "collateral-margin-abi/PortfolioMarginEngine.ts";
 import { HashPowerPerpsDEXAbi } from "derivatives-marketplace-abi/HashPowerPerpsDEX.ts";
-import { FuturesAbi } from "futures-marketplace-abi/Futures.ts";
+import { HashPowerFuturesAbi } from "../abi/HashPowerFutures.ts";
 import type { AccountSnapshot, MMParams } from "@hashpower/portfolio-margin";
+import { PerpsPositionAbi } from "../venues/perpsPositionAbi.ts";
 
 /**
  * Read the engine-wide constants once. They only change on PME admin
@@ -63,19 +64,20 @@ export async function readMMParams(
  * Read everything needed to evaluate `mmSurplus(P)` for a single user as a
  * function of price. Two RPC round-trips:
  *
- *   1. Bulk multicall: balance, both venues' `getRiskView` / `getOrderValues`,
- *      the perp position, futures activeExpirationAts.
- *   2. Per-expiry multicall: hydrate each aggregate via `getUserPosition`, plus
- *      its `settlementPrice` — an expiry that has settled but not yet been swept
- *      out of the active set is marked at that pinned price and carries no delta,
- *      so the predictor cannot treat it like a live leg.
+ *   1. Bulk multicall: balance, perps risk/aggregate/position, futures risk,
+ *      futures active position expiries, and the tradable delivery window.
+ *   2. Per-expiry multicall: hydrate each futures position via `getUserPosition`
+ *      + `settlementPrice`, and sum `getOrderAggregateAtExpiration` over the
+ *      tradable window for unclamped limit-price totals.
  *
- * Round-trip 2 collapses to zero calls when the user has no futures
- * positions (the common case for perps-only users).
+ * Round-trip 2 collapses to zero position/settlement calls when the user has
+ * no futures positions (the common case for perps-only users). Order-aggregate
+ * calls still run when the tradable window is non-empty.
  *
  * `getRiskView` carries the per-side order delta but reports fill loss only at the
  * current mark, and the clamp makes that non-invertible once it reads zero — so the
- * per-side limit-price totals come from `getOrderValues` and the predictor derives
+ * per-side limit-price totals come from the order-aggregate cache (perps:
+ * `getOrderAggregate`; futures: summed AtExpiration) and the predictor derives
  * fill loss at whatever price it is evaluating. Pending funding also rides in
  * `getRiskView`, replacing the separate `getPendingFunding` read.
  */
@@ -88,10 +90,10 @@ export async function readAccountSnapshot(
     balance,
     perpPosition,
     perpRisk,
-    perpOrderValues,
+    perpOrderAggregate,
     futuresRisk,
-    futuresOrderValues,
     activeExpirationAts,
+    tradableExpirationAts,
   ] = await chain.publicClient.multicall({
     contracts: [
       {
@@ -102,7 +104,7 @@ export async function readAccountSnapshot(
       },
       {
         address: config.perps.address,
-        abi: HashPowerPerpsDEXAbi,
+        abi: PerpsPositionAbi,
         functionName: "getUserPosition" as const,
         args: [user] as const,
       },
@@ -115,51 +117,72 @@ export async function readAccountSnapshot(
       {
         address: config.perps.address,
         abi: HashPowerPerpsDEXAbi,
-        functionName: "getOrderValues" as const,
+        functionName: "getOrderAggregate" as const,
         args: [user] as const,
       },
       {
         address: config.futures.address,
-        abi: FuturesAbi,
+        abi: HashPowerFuturesAbi,
         functionName: "getRiskView" as const,
         args: [user] as const,
       },
       {
         address: config.futures.address,
-        abi: FuturesAbi,
-        functionName: "getOrderValues" as const,
+        abi: HashPowerFuturesAbi,
+        functionName: "getActiveExpirationDates" as const,
         args: [user] as const,
       },
       {
         address: config.futures.address,
-        abi: FuturesAbi,
-        functionName: "getActiveExpirationDates" as const,
-        args: [user] as const,
+        abi: HashPowerFuturesAbi,
+        functionName: "getExpirationDates" as const,
       },
     ] as const,
     allowFailure: false,
   });
 
   const expirationAts = activeExpirationAts as readonly bigint[];
+  const orderExpirationAts = tradableExpirationAts as readonly bigint[];
   const futuresPositions: AccountSnapshot["futures"]["positions"] = [];
-  if (expirationAts.length > 0) {
+
+  type OrderAggregate = {
+    buyQty: bigint;
+    sellQty: bigint;
+    buyValue: bigint;
+    sellValue: bigint;
+  };
+  let futuresOrderAggregate: OrderAggregate = {
+    buyQty: 0n,
+    sellQty: 0n,
+    buyValue: 0n,
+    sellValue: 0n,
+  };
+
+  if (expirationAts.length > 0 || orderExpirationAts.length > 0) {
     const perExpiry = await chain.publicClient.multicall({
       contracts: [
         ...expirationAts.map((expirationAt) => ({
           address: config.futures.address,
-          abi: FuturesAbi,
+          abi: HashPowerFuturesAbi,
           functionName: "getUserPosition" as const,
           args: [user, expirationAt] as const,
         })),
         ...expirationAts.map((expirationAt) => ({
           address: config.futures.address,
-          abi: FuturesAbi,
+          abi: HashPowerFuturesAbi,
           functionName: "settlementPrice" as const,
           args: [expirationAt] as const,
+        })),
+        ...orderExpirationAts.map((expirationAt) => ({
+          address: config.futures.address,
+          abi: HashPowerFuturesAbi,
+          functionName: "getOrderAggregateAtExpiration" as const,
+          args: [user, expirationAt] as const,
         })),
       ],
       allowFailure: false,
     });
+
     for (let i = 0; i < expirationAts.length; i++) {
       const pos = perExpiry[i] as { netQuantity: bigint; netEntryValue: bigint } | undefined;
       const settlementPrice = perExpiry[expirationAts.length + i] as bigint | undefined;
@@ -173,6 +196,18 @@ export async function readAccountSnapshot(
         settlementPrice: settlementPrice ?? 0n,
       });
     }
+
+    const orderOffset = expirationAts.length * 2;
+    for (let i = 0; i < orderExpirationAts.length; i++) {
+      const aggregate = perExpiry[orderOffset + i] as OrderAggregate | undefined;
+      if (aggregate === undefined) continue;
+      futuresOrderAggregate = {
+        buyQty: futuresOrderAggregate.buyQty + aggregate.buyQty,
+        sellQty: futuresOrderAggregate.sellQty + aggregate.sellQty,
+        buyValue: futuresOrderAggregate.buyValue + aggregate.buyValue,
+        sellValue: futuresOrderAggregate.sellValue + aggregate.sellValue,
+      };
+    }
   }
 
   const funding = perpRisk.pendingFunding;
@@ -181,27 +216,34 @@ export async function readAccountSnapshot(
     balance: balance as bigint,
     perp: {
       netQty: perpPosition.netQuantity,
-      entryPrice: perpPosition.aggregatedEntryPrice,
-      orders: restingOrders(perpRisk, perpOrderValues),
+      entryPrice:
+        perpPosition.netQuantity === 0n
+          ? 0n
+          : (abs(perpPosition.netEntryValue) * 1_000_000n) / abs(perpPosition.netQuantity),
+      orders: restingOrders(perpRisk, perpOrderAggregate),
       // PME uses `max(0, pendingFunding)` — only what the user owes.
       fundingOwed: funding > 0n ? funding : 0n,
     },
     futures: {
       positions: futuresPositions,
-      orders: restingOrders(futuresRisk, futuresOrderValues),
+      orders: restingOrders(futuresRisk, futuresOrderAggregate),
     },
   };
 }
 
-/** Pair a venue's `getRiskView` deltas with its `getOrderValues` limit-price totals. */
+/** Pair a venue's risk deltas with its cached order aggregate. */
 function restingOrders(
   risk: { buyOrderDelta: bigint; sellOrderDelta: bigint },
-  values: readonly [bigint, bigint],
+  aggregate: { buyValue: bigint; sellValue: bigint },
 ): AccountSnapshot["perp"]["orders"] {
   return {
     buyDelta: risk.buyOrderDelta,
     sellDelta: risk.sellOrderDelta,
-    buyValue: values[0],
-    sellValue: values[1],
+    buyValue: aggregate.buyValue,
+    sellValue: aggregate.sellValue,
   };
+}
+
+function abs(value: bigint): bigint {
+  return value < 0n ? -value : value;
 }

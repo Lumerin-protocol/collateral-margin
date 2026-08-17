@@ -5,6 +5,11 @@ export const contractErrors = [
     "type": "error"
   },
   {
+    "inputs": [],
+    "name": "OracleStale",
+    "type": "error"
+  },
+  {
     "inputs": [
       {
         "internalType": "string",

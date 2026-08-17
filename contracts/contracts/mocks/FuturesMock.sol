@@ -74,4 +74,8 @@ contract FuturesMock is ILinearMarket {
             sellOrderFillLoss: _sellOrderFillLoss[user]
         });
     }
+
+    function hasRestingOrderDelta(address user) external view returns (bool) {
+        return _buyOrderDelta[user] != 0 || _sellOrderDelta[user] != 0;
+    }
 }

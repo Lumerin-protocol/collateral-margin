@@ -7,6 +7,7 @@ import { sendLiquidate } from "../tx/liquidate.ts";
 import { readAccountSnapshot, readMMParams } from "../predict/snapshot.ts";
 import { type MMParams, solvePerpCloseToTarget } from "@hashpower/portfolio-margin";
 import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
+import { PerpsPositionAbi } from "./perpsPositionAbi.ts";
 import type {
   LiquidateOrdersOutcome,
   MarketId,
@@ -81,13 +82,13 @@ export class PerpsVenue implements Venue {
   }
 
   async readPositions(user: Address): Promise<VenuePosition[]> {
-    // Single-market netted position. We need entryPrice + qty + market price
-    // to derive `unrealizedLoss` and `notional`.
+    // Single-market netted position. The signed entry value lets us derive PnL
+    // directly without reconstructing a rounded average entry price.
     const [position, marketPrice] = await this.chain.publicClient.multicall({
       contracts: [
         {
           address: this.config.perps.address,
-          abi: HashPowerPerpsDEXAbi,
+          abi: PerpsPositionAbi,
           functionName: "getUserPosition" as const,
           args: [user] as const,
         },
@@ -104,9 +105,8 @@ export class PerpsVenue implements Venue {
 
     const absQty = abs(position.netQuantity);
     const isLong = position.netQuantity > 0n;
-    // PnL in token decimals: priceDiff * netQty / 10^QUANTITY_DECIMALS
-    const priceDiff = marketPrice - position.aggregatedEntryPrice;
-    const pnl = (priceDiff * position.netQuantity) / QUANTITY_SCALE;
+    // PnL in token decimals: mark value minus the signed entry value.
+    const pnl = (marketPrice * position.netQuantity) / QUANTITY_SCALE - position.netEntryValue;
     const unrealizedLoss = pnl < 0n ? -pnl : 0n;
     const notional = (marketPrice * absQty) / QUANTITY_SCALE;
 

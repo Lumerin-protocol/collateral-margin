@@ -8,7 +8,7 @@ export type Address = `0x${string}`;
 
 /**
  * A venue's resting book reduced to what the margin math needs, as reported by
- * `ILinearMarket.getRiskView` plus the venue's `getOrderValues`.
+ * `ILinearMarket.getRiskView` plus the venue's `getOrderAggregate`.
  *
  * Nothing here is constant in P. The engine stresses order delta as part of net
  * delta, and the fill-loss terms are `max(0, value − P × delta / 10^tokenDecimals)`
@@ -37,8 +37,8 @@ export interface RestingOrders {
  * predictor can re-evaluate at any new price without further RPC reads.
  *
  * Shapes deliberately mirror the on-chain getters:
- *   - perps: `getRiskView` + `getOrderValues` + `getUserPosition`
- *   - futures: `getRiskView` + `getOrderValues` + `getActiveExpirationDates`/`getUserPosition`
+ *   - perps: `getRiskView` + `getOrderAggregate` + `getUserPosition`
+ *   - futures: `getRiskView` + `getOrderAggregate` + `getActiveExpirationDates`/`getUserPosition`
  *
  * Bigints throughout because PME math is performed in token-decimal units
  * (typically USDC = 6 decimals) with intermediate WAD scaling. JS numbers

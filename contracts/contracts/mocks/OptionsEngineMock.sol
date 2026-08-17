@@ -8,8 +8,8 @@ import { IOptionsEnginePortfolioView } from "../interfaces/IOptionsEnginePortfol
 contract OptionsEngineMock is IOptionsEnginePortfolioView {
     struct Greeks {
         int256 netDelta;
-        uint256 netGamma;
-        uint256 netVega;
+        int256 netGamma;
+        int256 netVega;
     }
 
     mapping(address => Greeks) private _greeks;
@@ -22,7 +22,7 @@ contract OptionsEngineMock is IOptionsEnginePortfolioView {
         vault = _vault;
     }
 
-    function setNetGreeks(address user, int256 delta, uint256 gamma, uint256 vega) external {
+    function setNetGreeks(address user, int256 delta, int256 gamma, int256 vega) external {
         _greeks[user] = Greeks(delta, gamma, vega);
     }
 
@@ -30,7 +30,7 @@ contract OptionsEngineMock is IOptionsEnginePortfolioView {
         _reserved[user] = amount;
     }
 
-    function getNetGreeks(address user) external view returns (int256, uint256, uint256) {
+    function getNetGreeks(address user) external view returns (int256, int256, int256) {
         Greeks memory g = _greeks[user];
         return (g.netDelta, g.netGamma, g.netVega);
     }

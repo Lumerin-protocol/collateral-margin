@@ -68,7 +68,7 @@ contract PortfolioMarginEngine is
     using EnumerableSet for EnumerableSet.AddressSet;
 
     uint256 private constant MAX_ORACLE_STALENESS = 1 hours;
-    string public constant VERSION = "2.0.0";
+    string public constant VERSION = "2.1.0";
 
     // ── Storage ─────────────────────────────────────────────────────────────
 
@@ -119,6 +119,7 @@ contract PortfolioMarginEngine is
     error LinearMarketNotRegistered();
     error OracleNotSet();
     error InvalidOracle();
+    error OracleStale();
     error VaultMismatch();
     /// @dev A dependency did not answer a call the engine depends on: no code at the
     ///      address, or the call reverted. Covers every dependency; which one is bad is
@@ -252,6 +253,14 @@ contract PortfolioMarginEngine is
         return _computeMargin(user, false);
     }
 
+    /// @notice Compute IM and MM from one market/options snapshot and one oracle read.
+    function computePortfolioMargins(address user) external view returns (uint256 im, uint256 mm) {
+        MarginInputs memory inputs = _marginInputs(user, _linearAggregate(user));
+        uint256 spotPrice = _getSpotPriceWad();
+        im = _marginFromInputs(inputs, true, spotPrice);
+        mm = _marginFromInputs(inputs, false, spotPrice);
+    }
+
     /// @notice Margin charged against a delta-one resting order's notional (both token
     ///         decimals).
     /// @dev The IM spot shock is the single knob sizing unmatched linear exposure across
@@ -270,6 +279,15 @@ contract PortfolioMarginEngine is
     /// @notice Check if user is healthy (balance >= MM).
     function isHealthy(address user) external view returns (bool) {
         return vault.balanceOf(user) >= _computeMargin(user, false);
+    }
+
+    /// @notice Whether the account is liquidatable: vault balance below portfolio MM.
+    ///         The exact predicate the venues' liquidation entry points enforce.
+    /// @dev See {IPortfolioMarginEngine-isLiquidatable}. Deliberately the strict inverse
+    ///      of {isHealthy}; kept as its own entry point because it is the question keepers
+    ///      and venue UIs ask, and `isHealthy` is not part of the venue-facing interface.
+    function isLiquidatable(address user) external view returns (bool) {
+        return vault.balanceOf(user) < _computeMargin(user, false);
     }
 
     /// @notice Check if user can place an order requiring additionalIM (in token decimals).
@@ -291,12 +309,15 @@ contract PortfolioMarginEngine is
     ///      wanting a per-order gate want `linearOrderMargin` instead.
     function orderMarginOf(address user) external view returns (uint256) {
         LinearAggregate memory agg = _linearAggregate(user);
-        uint256 withOrders = _marginFromAggregate(user, agg, true);
+        if (agg.buyOrderDelta == 0 && agg.sellOrderDelta == 0 && agg.fillLoss == 0) return 0;
+        MarginInputs memory inputs = _marginInputs(user, agg);
+        uint256 spotPrice = _getSpotPriceWad();
+        uint256 withOrders = _marginFromInputs(inputs, true, spotPrice);
 
-        agg.buyOrderDelta = 0;
-        agg.sellOrderDelta = 0;
-        agg.fillLoss = 0;
-        uint256 withoutOrders = _marginFromAggregate(user, agg, true);
+        inputs.linear.buyOrderDelta = 0;
+        inputs.linear.sellOrderDelta = 0;
+        inputs.linear.fillLoss = 0;
+        uint256 withoutOrders = _marginFromInputs(inputs, true, spotPrice);
 
         return withOrders > withoutOrders ? withOrders - withoutOrders : 0;
     }
@@ -310,13 +331,12 @@ contract PortfolioMarginEngine is
     ///
     ///      Keyed on delta, not order count, so an order carrying no risk cannot deadlock
     ///      liquidation — an expired futures order still occupies its participant index but
-    ///      contributes nothing here. Short-circuits on the first market with exposure, so
-    ///      the common case costs one `getRiskView`.
+    ///      contributes nothing here. Markets answer this from their order indexes or
+    ///      aggregate caches, without computing position PnL or reading an oracle.
     function hasRestingOrderDelta(address user) external view returns (bool) {
         uint256 len = linearMarkets.length();
         for (uint256 i = 0; i < len; i++) {
-            ILinearMarket.RiskView memory account = ILinearMarket(linearMarkets.at(i)).getRiskView(user);
-            if (account.buyOrderDelta != 0 || account.sellOrderDelta != 0) return true;
+            if (ILinearMarket(linearMarkets.at(i)).hasRestingOrderDelta(user)) return true;
         }
         return false;
     }
@@ -336,37 +356,58 @@ contract PortfolioMarginEngine is
         uint256 fundingOwed;
     }
 
+    struct MarginInputs {
+        LinearAggregate linear;
+        int256 netDelta;
+        int256 netGamma;
+        int256 netVega;
+        uint256 optionsReserved;
+    }
+
     function _computeMargin(address user, bool isIM) private view returns (uint256) {
         return _marginFromAggregate(user, _linearAggregate(user), isIM);
     }
 
-    /// @dev Folds options greeks into the linear aggregate and prices it. Split out from
-    ///      `_computeMargin` so `orderMarginOf` can re-price the same aggregate with the
-    ///      order fields zeroed without a second round of external reads.
+    /// @dev Fold options into an already-collected linear snapshot.
+    function _marginInputs(address user, LinearAggregate memory agg)
+        private
+        view
+        returns (MarginInputs memory inputs)
+    {
+        inputs.linear = agg;
+        inputs.netDelta = agg.netDelta;
+        if (address(optionsEngine) != address(0)) {
+            (int256 optDelta, int256 optGamma, int256 optVega) = optionsEngine.getNetGreeks(user);
+            inputs.netDelta += optDelta;
+            inputs.netGamma = optGamma;
+            inputs.netVega = optVega;
+            inputs.optionsReserved = M.fromWad(optionsEngine.getOptionsReservedMargin(user), collateralDecimals);
+        }
+    }
+
+    /// @dev Price one shared account snapshot at either IM or MM shocks.
     function _marginFromAggregate(address user, LinearAggregate memory agg, bool isIM)
         private
         view
         returns (uint256)
     {
-        // 1. Options Greeks — WAD-scaled signed delta, unsigned gamma/vega (optional)
-        int256 netDelta = agg.netDelta;
-        uint256 netGamma = 0;
-        uint256 netVega = 0;
-        uint256 optReservedTokens = 0;
-        if (address(optionsEngine) != address(0)) {
-            (int256 optDelta, uint256 optGamma, uint256 optVega) = optionsEngine.getNetGreeks(user);
-            netDelta += optDelta;
-            netGamma = optGamma;
-            netVega = optVega;
-            optReservedTokens = M.fromWad(optionsEngine.getOptionsReservedMargin(user), collateralDecimals);
-        }
+        return _marginFromInputs(_marginInputs(user, agg), isIM, _getSpotPriceWad());
+    }
 
+    function _marginFromInputs(MarginInputs memory inputs, bool isIM, uint256 spotPrice)
+        private
+        view
+        returns (uint256)
+    {
+        LinearAggregate memory agg = inputs.linear;
         // 2. Stress both fill legs (WAD-scaled) and keep the worse. Gamma and vega ride
         //    along unchanged in both — only delta moves with the orders.
-        uint256 worstLoss =
-            _worstStressLoss(netDelta + int256(agg.buyOrderDelta), netGamma, netVega, isIM);
-        uint256 sellLoss =
-            _worstStressLoss(netDelta - int256(agg.sellOrderDelta), netGamma, netVega, isIM);
+        uint256 worstLoss = _worstStressLoss(
+            inputs.netDelta + int256(agg.buyOrderDelta), inputs.netGamma, inputs.netVega, isIM, spotPrice
+        );
+        uint256 sellLoss = _worstStressLoss(
+            inputs.netDelta - int256(agg.sellOrderDelta), inputs.netGamma, inputs.netVega, isIM, spotPrice
+        );
         if (sellLoss > worstLoss) worstLoss = sellLoss;
 
         // Convert stress loss from WAD to token decimals
@@ -379,7 +420,7 @@ contract PortfolioMarginEngine is
             ? agg.unrealizedLossPerMarket
             : (agg.netUnrealizedPnl < 0 ? uint256(-agg.netUnrealizedPnl) : 0);
 
-        return stressTokens + agg.fillLoss + optReservedTokens + pnlTokens + agg.fundingOwed;
+        return stressTokens + agg.fillLoss + inputs.optionsReserved + pnlTokens + agg.fundingOwed;
     }
 
     /// @dev One batched getRiskView call per registered linear market: sums the WAD-lifted
@@ -406,10 +447,10 @@ contract PortfolioMarginEngine is
         }
     }
 
-    /// @dev Evaluate 4 stress scenarios and return the worst-case loss (WAD).
-    ///      Scenarios: (±Δs, ±Δσ) where Δs = spotShock * spotPrice (dollar move)
+    /// @dev Return the worst loss over (±Δs, ±Δσ), where each linear term is minimized
+    ///      independently and the gamma term is unchanged across spot directions.
     ///      PnL ≈ delta·Δs + ½·gamma·Δs² + vega·Δσ
-    function _worstStressLoss(int256 netDelta, uint256 netGamma, uint256 netVega, bool isIM)
+    function _worstStressLoss(int256 netDelta, int256 netGamma, int256 netVega, bool isIM, uint256 spotPrice)
         private
         view
         returns (uint256 worst)
@@ -418,43 +459,17 @@ contract PortfolioMarginEngine is
         uint256 volShock = isIM ? imVolShock : mmVolShock;
 
         // Convert percentage shock → dollar move (WAD)
-        uint256 spotPrice = _getSpotPriceWad();
         uint256 deltaS = spotShockFrac * spotPrice / WAD;
 
         // Pre-compute gamma term: ½ · gamma · Δs²
-        uint256 gammaTerm = netGamma * deltaS / WAD * deltaS / (2 * WAD);
+        int256 gammaTerm = netGamma * int256(deltaS) / int256(WAD) * int256(deltaS) / int256(2 * WAD);
 
-        // Scenario 1: spot +, vol +
-        worst = _scenarioLoss(netDelta, gammaTerm, netVega, int256(deltaS), int256(volShock));
-
-        // Scenario 2: spot +, vol -
-        uint256 loss = _scenarioLoss(netDelta, gammaTerm, netVega, int256(deltaS), -int256(volShock));
-        if (loss > worst) worst = loss;
-
-        // Scenario 3: spot -, vol +
-        loss = _scenarioLoss(netDelta, gammaTerm, netVega, -int256(deltaS), int256(volShock));
-        if (loss > worst) worst = loss;
-
-        // Scenario 4: spot -, vol -
-        loss = _scenarioLoss(netDelta, gammaTerm, netVega, -int256(deltaS), -int256(volShock));
-        if (loss > worst) worst = loss;
-    }
-
-    /// @dev Compute loss for a single scenario. Returns max(0, -PnL) in WAD.
-    ///      PnL = delta·Δs/WAD + gammaTerm + vega·Δσ/WAD
-    ///      Note: gammaTerm is pre-computed and always the same magnitude across ±spotShock
-    ///      (quadratic in |Δs|), so we always ADD it regardless of direction.
-    function _scenarioLoss(int256 netDelta, uint256 gammaTerm, uint256 netVega, int256 deltaS, int256 deltaVol)
-        private
-        pure
-        returns (uint256)
-    {
-        int256 deltaPnl = netDelta * deltaS / int256(WAD);
-        int256 vegaPnl = int256(netVega) * deltaVol / int256(WAD);
-        // Gamma term is ½γ(Δs)² — always non-negative, always adds to P&L
-        // (positive gamma profits from moves, negative gamma loses)
-        int256 pnl = deltaPnl + int256(gammaTerm) + vegaPnl;
-        return pnl < 0 ? uint256(-pnl) : 0;
+        int256 deltaPnl = netDelta * int256(deltaS) / int256(WAD);
+        int256 vegaPnl = netVega * int256(volShock) / int256(WAD);
+        uint256 deltaLoss = deltaPnl < 0 ? uint256(-deltaPnl) : uint256(deltaPnl);
+        uint256 vegaLoss = vegaPnl < 0 ? uint256(-vegaPnl) : uint256(vegaPnl);
+        int256 worstPnl = gammaTerm - int256(deltaLoss) - int256(vegaLoss);
+        worst = worstPnl < 0 ? uint256(-worstPnl) : 0;
     }
 
 
@@ -495,14 +510,13 @@ contract PortfolioMarginEngine is
         }
     }
 
-    /// @dev Read the index oracle and scale to WAD. Reverts when no oracle is
-    ///      configured — an unset oracle must not silently zero out the delta/gamma
-    ///      stress loss. Returns 0 on a stale/non-positive answer (zero stress, same
-    ///      degradation semantics as the products' own oracle reads).
+    /// @dev Read the index oracle and scale to WAD. Missing, invalid, or stale
+    ///      prices must fail closed: returning zero would erase delta/gamma stress.
     function _getSpotPriceWad() private view returns (uint256) {
         if (address(priceOracle) == address(0)) revert OracleNotSet();
         (, int256 answer,, uint256 updatedAt,) = priceOracle.latestRoundData();
-        if (answer <= 0 || block.timestamp - updatedAt > MAX_ORACLE_STALENESS) return 0;
+        if (answer <= 0 || updatedAt == 0 || updatedAt > block.timestamp) revert InvalidOracle();
+        if (block.timestamp - updatedAt > MAX_ORACLE_STALENESS) revert OracleStale();
         return M.toWad(uint256(answer), oracleDecimals);
     }
 
@@ -548,7 +562,7 @@ contract PortfolioMarginEngine is
 
     function _validateOptionsContract(address _optionsEngine)private view{
       try IOptionsEnginePortfolioView(_optionsEngine).getNetGreeks(address(this)) returns (
-          int256, uint256, uint256
+          int256, int256, int256
       ) { } catch {
           revert InvalidDependency();
       }

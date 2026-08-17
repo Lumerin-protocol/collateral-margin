@@ -12,7 +12,6 @@ import { Notifier } from "./alert/notifier.ts";
 import { Healthcheck } from "./runtime/healthcheck.ts";
 import { Scheduler } from "./runtime/scheduler.ts";
 import { BalanceMonitor } from "./runtime/balanceMonitor.ts";
-import { OutdatedOrderSweeper } from "./runtime/outdatedOrderSweeper.ts";
 import { PerpsVenue } from "./venues/perps.ts";
 import { FuturesVenue } from "./venues/futures.ts";
 import { PriceFeed } from "./oracle/priceFeed.ts";
@@ -162,18 +161,6 @@ async function main(): Promise<void> {
   // concern, not specific to any one venue.
   const balanceMonitor = new BalanceMonitor(chain, config, logger);
 
-  // Futures-specific maintenance: walks tracked participants and closes
-  // any of their orders past `expirationAt` via the permissionless
-  // `Futures.removeOutdatedOrder` entrypoint (Futures v2.11.0+ no longer
-  // auto-sweeps on `createOrder`). Cheap, off the hot path — see
-  // `runtime/outdatedOrderSweeper.ts` for the gas-trade reasoning. Set
-  // OUTDATED_ORDERS_SWEEP_INTERVAL_MS=0 to disable when another keeper
-  // owns this responsibility for the deployment.
-  const outdatedOrderSweeper =
-    config.outdatedOrders.sweepIntervalMs > 0
-      ? new OutdatedOrderSweeper(chain, config, tracker, logger, ethUsdFeed)
-      : undefined;
-
   // Newly-tracked users should not wait for the next sweep tick. Kicking the
   // executor wakes any idle workers so they can pick up the new user as soon
   // as the next sweep enriches the queue. (We can't enqueue here without an
@@ -206,7 +193,6 @@ async function main(): Promise<void> {
     priceFeed.stop();
     balanceMonitor.stop();
     ethUsdFeed?.stop();
-    outdatedOrderSweeper?.stop();
     deliveryCoordinator?.stop();
     await executor.stop();
     if (webhookIngester !== undefined) await webhookIngester.stop();
@@ -301,10 +287,6 @@ async function main(): Promise<void> {
     await deliveryCoordinator.bootstrapFromUsers(seedUsers);
   }
   await scheduler.runSweep();
-  // Start the expired-order sweeper after backfill so its eager first
-  // tick sees the populated tracker, not an empty one. Skipped entirely
-  // when `outdatedOrders.sweepIntervalMs` is 0 (operator opt-out).
-  if (outdatedOrderSweeper !== undefined) await outdatedOrderSweeper.start();
   // Backfill fires `tracker.onAdded` for every existing user, which the
   // predictor consumes via `rebuild`. Those rebuilds are fire-and-forget,
   // so we wait until `inflightRebuilds` drains before claiming "running"
