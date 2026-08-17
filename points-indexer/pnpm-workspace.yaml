@@ -1,0 +1,9 @@
+# pnpm 11 keys allowBuilds by exact resolution, so a git dependency needs one
+# entry per pinned commit. Both the current pin and the v0.4.2 tag are listed so
+# bumping the spec does not break installs mid-flight.
+allowBuilds:
+  esbuild: false
+  hardhat-matchstick-ts@https://codeload.github.com/lsheva/matchstick-ts/tar.gz/6c7e4b5d584a9fc75b66d1f6c03820e20313c9ad#path:packages/hardhat-matchstick-ts: true
+  matchstick-ts@https://codeload.github.com/lsheva/matchstick-ts/tar.gz/6c7e4b5d584a9fc75b66d1f6c03820e20313c9ad#path:packages/matchstick-ts: true
+  hardhat-matchstick-ts@https://codeload.github.com/lsheva/matchstick-ts/tar.gz/d613d674898f6d0d01a880dd4e1b514f707b93b9#path:packages/hardhat-matchstick-ts: true
+  matchstick-ts@https://codeload.github.com/lsheva/matchstick-ts/tar.gz/d613d674898f6d0d01a880dd4e1b514f707b93b9#path:packages/matchstick-ts: true
