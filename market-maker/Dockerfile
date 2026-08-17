@@ -5,7 +5,9 @@ WORKDIR /app
 
 RUN corepack enable
 
-COPY package.json pnpm-lock.yaml ./
+# pnpm-workspace.yaml carries the allowBuilds allowances; pnpm 11 treats ignored
+# build scripts as a hard install error, so it must be present before install.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile --prod
 
 # ── Runtime ───────────────────────────────────────────────────────────────────
