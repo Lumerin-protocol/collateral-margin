@@ -11,6 +11,10 @@ import type pino from "pino";
 import { DeliveryCoordinator, __testing } from "../../src/delivery/coordinator.ts";
 import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
+import type {
+  FuturesExpiryIndex,
+  PositionListener,
+} from "../../src/discovery/futuresExpiryIndex.ts";
 
 const FUTURES = "0x000000000000000000000000000000000000F00d" as Address;
 const USER_A = "0x0000000000000000000000000000000000000b0b" as Address;
@@ -216,6 +220,35 @@ describe("delivery/coordinator: trackKey helpers", () => {
 });
 
 describe("delivery/coordinator: event indexing", () => {
+  it("seeds and follows the Futures expiry index when provided", async () => {
+    const futureExpiry = 9_000_000_000n;
+    let listener: PositionListener | undefined;
+    const expiryIndex = {
+      positionEntries: () => [{ user: USER_A, expirationAt: futureExpiry }],
+      onPositionChanged: (next: PositionListener) => {
+        listener = next;
+        return () => {
+          listener = undefined;
+        };
+      },
+    } as unknown as FuturesExpiryIndex;
+    const coord = new DeliveryCoordinator(
+      makeChain({ blockTimestamp: 1n }),
+      makeConfig(),
+      silentLogger,
+      undefined,
+      expiryIndex,
+    );
+    await coord.start();
+    assert.equal(coord.has(USER_A, futureExpiry), true);
+
+    listener?.(USER_B, futureExpiry, true);
+    assert.equal(coord.has(USER_B, futureExpiry), true);
+    listener?.(USER_A, futureExpiry, false);
+    assert.equal(coord.has(USER_A, futureExpiry), false);
+    coord.stop();
+  });
+
   it("indexes maker+taker on OrderMatched and drops on PositionSettled", async () => {
     const watchers: ChainStubOptions["watchers"] = {};
     const chain = makeChain({ watchers });

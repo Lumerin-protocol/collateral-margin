@@ -954,11 +954,17 @@ describe("DeliveryCoordinator (live RPC)", () => {
         BigInt(ctx.aliceFuturesQty),
       );
 
-      // Seed the delivery index from history — the positions were created
-      // before the keeper booted, so the live watcher hasn't seen them.
-      await keeper.delivery.backfill(0n, 10_000n);
+      // The position predates keeper startup. Expiry-scoped replay must
+      // discover it and seed delivery without a deployment-wide backfill.
       for (const id of positionsBefore) {
-        assert.ok(keeper.delivery.has(alice, BigInt(id)), `backfill should index position ${id}`);
+        assert.ok(
+          keeper.futuresExpiryIndex.has(alice),
+          `expiry replay should discover ${alice}`,
+        );
+        assert.ok(
+          keeper.delivery.has(alice, BigInt(id)),
+          `expiry replay should index position ${id}`,
+        );
       }
 
       // Fast-forward past `expirationAt`. `settlePosition` requires

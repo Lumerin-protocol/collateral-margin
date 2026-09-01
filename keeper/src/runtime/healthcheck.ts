@@ -4,7 +4,9 @@ import type pino from "pino";
 import type { Config } from "../config.ts";
 import type { CoordinatorExecutor } from "../coordinator/executor.ts";
 import type { CoordinatorQueue } from "../coordinator/queue.ts";
-import type { ParticipantTracker } from "../discovery/tracker.ts";
+import type { DeliveryCoordinator } from "../delivery/coordinator.ts";
+import type { FuturesExpiryIndex } from "../discovery/futuresExpiryIndex.ts";
+import type { ParticipantSource } from "../discovery/types.ts";
 import type { PriceFeed } from "../oracle/priceFeed.ts";
 import type { PredictedThresholds, PredictiveCoordinator } from "../predict/coordinator.ts";
 
@@ -33,22 +35,26 @@ export class Healthcheck {
 
   private readonly config: Config;
   private readonly signerAddress: Address;
-  private readonly tracker: ParticipantTracker;
+  private readonly tracker: ParticipantSource;
   private readonly executor: CoordinatorExecutor;
   private readonly queue: CoordinatorQueue;
   private readonly predictor: PredictiveCoordinator | undefined;
   private readonly priceFeed: PriceFeed | undefined;
+  private readonly futuresExpiryIndex: FuturesExpiryIndex | undefined;
+  private readonly deliveryCoordinator: DeliveryCoordinator | undefined;
   private readonly logger: pino.Logger;
 
   constructor(
     config: Config,
     signerAddress: Address,
-    tracker: ParticipantTracker,
+    tracker: ParticipantSource,
     executor: CoordinatorExecutor,
     queue: CoordinatorQueue,
     logger: pino.Logger,
     predictor?: PredictiveCoordinator,
     priceFeed?: PriceFeed,
+    futuresExpiryIndex?: FuturesExpiryIndex,
+    deliveryCoordinator?: DeliveryCoordinator,
   ) {
     this.config = config;
     this.signerAddress = signerAddress;
@@ -57,6 +63,8 @@ export class Healthcheck {
     this.queue = queue;
     this.predictor = predictor;
     this.priceFeed = priceFeed;
+    this.futuresExpiryIndex = futuresExpiryIndex;
+    this.deliveryCoordinator = deliveryCoordinator;
     this.logger = logger.child({ component: "healthcheck" });
   }
 
@@ -72,6 +80,7 @@ export class Healthcheck {
       network: this.config.chain.network,
       discoveryMode: this.config.chain.discoveryMode,
       dryRun: String(this.config.keeper.dryRun),
+      deliveryEnabled: String(this.config.delivery.enabled),
       signer: this.signerAddress,
       vault: this.config.vault.address,
       perps: this.config.perps.address,
@@ -111,6 +120,7 @@ export class Healthcheck {
     // and which one is it). `mmDeficit` is `|mmSurplus|` because the
     // queue only ever holds underwater accounts (`mmSurplus < 0`).
     const head = this.queue.peek();
+    const expiry = this.futuresExpiryIndex?.stats();
     return {
       executorRunning: this.executor.isRunning() ? 1 : 0,
       trackedUsers: this.tracker.list(),
@@ -125,6 +135,15 @@ export class Healthcheck {
       predictedThresholds: this.predictor?.thresholds() ?? [],
       predictorInflight: this.predictor?.inflightUsers() ?? [],
       currentPrice: this.priceFeed?.current()?.toString() ?? null,
+      futuresExpiryCaches: expiry?.caches ?? 0,
+      futuresIndexedUsers: expiry?.users ?? 0,
+      futuresTrackedPositions: expiry?.positions ?? 0,
+      futuresPastDuePositions: expiry?.pastDue ?? 0,
+      futuresOldestUnresolvedExpiry:
+        expiry?.oldestUnresolved?.toString() ?? null,
+      futuresReplayFromBlock: expiry?.replayFromBlock?.toString() ?? null,
+      futuresReplayHeadBlock: expiry?.replayHeadBlock?.toString() ?? null,
+      deliveryTrackedPositions: this.deliveryCoordinator?.size() ?? 0,
     };
   }
 

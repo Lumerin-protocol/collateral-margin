@@ -8,9 +8,12 @@ import {
 import type pino from "pino";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
+import type {
+  ParticipantListener,
+  ParticipantSource,
+} from "./types.ts";
 import { CollateralVaultAbi as collateralVaultAbi } from "collateral-margin-abi/CollateralVault.ts";
 import { HashPowerPerpsDEXAbi as perpsAbi } from "derivatives-marketplace-abi/HashPowerPerpsDEX.ts";
-import { HashPowerFuturesAbi as futuresAbi } from "../abi/HashPowerFutures.ts";
 
 /**
  * Set of user addresses with collateral or open positions/orders that the
@@ -18,7 +21,7 @@ import { HashPowerFuturesAbi as futuresAbi } from "../abi/HashPowerFutures.ts";
  *
  *   - Vault Deposited / Withdrawn / Transfer  → adds users on first deposit
  *   - Perps OrderCreated / OrderMatched / PositionLiquidated
- *   - Futures OrderCreated / OrderMatched / PositionLiquidated
+ * Futures discovery is expiry-scoped and owned by `FuturesExpiryIndex`.
  *
  * On startup, `backfill(fromBlock)` scans the same six events historically
  * via `getLogs` so the cold-start window doesn't miss participants who
@@ -34,9 +37,9 @@ import { HashPowerFuturesAbi as futuresAbi } from "../abi/HashPowerFutures.ts";
  * positions/orders. The cost of an extra `readAccountHealthBatch` call per
  * dormant user is far smaller than the cost of missing a re-funding event.
  */
-export type TrackerListener = (user: Address) => void;
+export type TrackerListener = ParticipantListener;
 
-export class ParticipantTracker {
+export class ParticipantTracker implements ParticipantSource {
   private readonly users = new Set<Address>();
   private readonly addedListeners = new Set<TrackerListener>();
   private readonly changedListeners = new Set<TrackerListener>();
@@ -97,18 +100,6 @@ export class ParticipantTracker {
         eventName: "OrderMatched",
         onLogs: (logs) => this.onPerpsOrderMatched(logs),
       }),
-      this.chain.publicClient.watchContractEvent({
-        address: this.config.futures.address,
-        abi: futuresAbi,
-        eventName: "OrderCreated",
-        onLogs: (logs) => this.onFuturesOrderCreated(logs),
-      }),
-      this.chain.publicClient.watchContractEvent({
-        address: this.config.futures.address,
-        abi: futuresAbi,
-        eventName: "OrderMatched",
-        onLogs: (logs) => this.onFuturesOrderMatched(logs),
-      }),
     );
   }
 
@@ -125,7 +116,7 @@ export class ParticipantTracker {
   }
 
   /**
-   * One-shot historical backfill. Scans the same six events `start()`
+   * One-shot historical backfill. Scans the same four events `start()`
    * subscribes to from `fromBlock` to the current head via `getLogs`, in
    * chunks of `chunkSize` blocks, and feeds each match through the same
    * handlers the live watcher uses. Run once at startup *after* `start()`
@@ -133,10 +124,8 @@ export class ParticipantTracker {
    * scan head and the watcher's polling cursor is fine, because `add()`
    * dedupes on checksum.
    *
-   * Futures has no `getUsersWithPositions` view on-chain, so historical
-   * `OrderCreated` / `OrderMatched` logs are the only source of cold-
-   * start participants. Perps has the view but we use logs uniformly so a
-   * single backfill mechanism covers both venues (and the vault).
+   * Futures history is deliberately excluded: its bounded per-expiry replay
+   * lives in `FuturesExpiryIndex`.
    *
    * Webhook-only discovery mode skips backfill — Goldsky owns history in
    * that configuration.
@@ -229,32 +218,6 @@ export class ParticipantTracker {
             toBlock: to,
           });
           this.onPerpsOrderMatched(logs as unknown as readonly Log[]);
-        },
-      },
-      {
-        label: "futures.OrderCreated",
-        run: async (from, to) => {
-          const logs = await this.chain.publicClient.getContractEvents({
-            address: this.config.futures.address,
-            abi: futuresAbi,
-            eventName: "OrderCreated",
-            fromBlock: from,
-            toBlock: to,
-          });
-          this.onFuturesOrderCreated(logs as unknown as readonly Log[]);
-        },
-      },
-      {
-        label: "futures.OrderMatched",
-        run: async (from, to) => {
-          const logs = await this.chain.publicClient.getContractEvents({
-            address: this.config.futures.address,
-            abi: futuresAbi,
-            eventName: "OrderMatched",
-            fromBlock: from,
-            toBlock: to,
-          });
-          this.onFuturesOrderMatched(logs as unknown as readonly Log[]);
         },
       },
     ];
@@ -353,7 +316,7 @@ export class ParticipantTracker {
    * Subscribe to "user state may have changed" events. Fires for the same
    * triggers `onAdded` does, plus any time a tracked user's state could
    * have shifted (vault transfer in/out, perps OrderCreated/Matched,
-   * futures OrderCreated/OrderMatched).
+   * Futures changes are delivered by `FuturesExpiryIndex`.
    *
    * The predictive layer uses this to invalidate and rebuild a user's
    * cached MM snapshot. Listeners must tolerate being called for users
@@ -460,28 +423,4 @@ export class ParticipantTracker {
     }
   }
 
-  /**
-   * `OrderCreated(bytes32 indexed orderId, address indexed participant,
-   *               uint256 price, int256 quantity, uint256 expirationAt)`.
-   */
-  private onFuturesOrderCreated(logs: readonly Log[]): void {
-    type Args = { orderId?: Hex; participant?: Address };
-    for (const raw of logs) {
-      const args = (raw as unknown as { args?: Args }).args;
-      if (args?.participant !== undefined) this.touch(args.participant);
-    }
-  }
-
-  /**
-   * `OrderMatched(..., address indexed maker, address indexed taker, ...)`.
-   */
-  private onFuturesOrderMatched(logs: readonly Log[]): void {
-    type Args = { maker?: Address; taker?: Address };
-    for (const raw of logs) {
-      const args = (raw as unknown as { args?: Args }).args;
-      if (args === undefined) continue;
-      if (args.maker !== undefined) this.touch(args.maker);
-      if (args.taker !== undefined) this.touch(args.taker);
-    }
-  }
 }

@@ -7,6 +7,8 @@ import type { Config } from "../../src/config.ts";
 import type { CoordinatorExecutor } from "../../src/coordinator/executor.ts";
 import type { CoordinatorQueue } from "../../src/coordinator/queue.ts";
 import type { ParticipantTracker } from "../../src/discovery/tracker.ts";
+import type { FuturesExpiryIndex } from "../../src/discovery/futuresExpiryIndex.ts";
+import type { DeliveryCoordinator } from "../../src/delivery/coordinator.ts";
 import type { PriceFeed } from "../../src/oracle/priceFeed.ts";
 import type {
   PredictedThresholds,
@@ -198,6 +200,46 @@ describe("runtime/healthcheck: snapshot", () => {
     assert.equal(snap.queueHeadUser, null);
     assert.equal(snap.queueHeadMmDeficit, 0);
   });
+
+  it("reports Futures expiry and delivery indexing state", () => {
+    const { config, tracker, executor, queue } = makeStubs({
+      executorRunning: true,
+      inflight: 0,
+    });
+    const expiryIndex = {
+      stats: () => ({
+        caches: 3,
+        users: 7,
+        positions: 2,
+        pastDue: 1,
+        oldestUnresolved: 1_787_832_000n,
+        replayFromBlock: 40_000_000n,
+        replayHeadBlock: 46_000_000n,
+      }),
+    } as unknown as FuturesExpiryIndex;
+    const delivery = { size: () => 2 } as unknown as DeliveryCoordinator;
+    const hc = new Healthcheck(
+      config,
+      SIGNER,
+      tracker,
+      executor,
+      queue,
+      silentLogger,
+      undefined,
+      undefined,
+      expiryIndex,
+      delivery,
+    );
+    const snap = hc.snapshot();
+    assert.equal(snap.futuresExpiryCaches, 3);
+    assert.equal(snap.futuresIndexedUsers, 7);
+    assert.equal(snap.futuresTrackedPositions, 2);
+    assert.equal(snap.futuresPastDuePositions, 1);
+    assert.equal(snap.futuresOldestUnresolvedExpiry, "1787832000");
+    assert.equal(snap.futuresReplayFromBlock, "40000000");
+    assert.equal(snap.futuresReplayHeadBlock, "46000000");
+    assert.equal(snap.deliveryTrackedPositions, 2);
+  });
 });
 
 describe("runtime/healthcheck: info", () => {
@@ -212,6 +254,7 @@ describe("runtime/healthcheck: info", () => {
       network: "hardhat",
       discoveryMode: "events",
       dryRun: "false",
+      deliveryEnabled: "false",
       signer: SIGNER,
       vault: config.vault.address,
       perps: config.perps.address,
