@@ -204,6 +204,9 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
   // ── Start ─────────────────────────────────────────────────────────────
+  // Bind liveness before any historical replay. ECS must be able to observe
+  // a healthy "booting" process while expiry discovery catches up.
+  health.start();
   // PriceFeed first: primes `current()` with one read so the predictor has
   // a baseline before the first tracker event fires. Predictor next so its
   // tracker hooks are in place before tracker.start() flushes any backlog.
@@ -219,7 +222,6 @@ async function main(): Promise<void> {
   if (deliveryCoordinator !== undefined) await deliveryCoordinator.start();
   await executor.start();
   scheduler.start();
-  health.start();
   // Eager initial check (logs the boot-time balance) + interval polling.
   // Started after the venues so a startup failure earlier doesn't leave
   // a phantom monitor running.
@@ -249,6 +251,7 @@ async function main(): Promise<void> {
   // so we wait until `inflightRebuilds` drains before claiming "running"
   // — otherwise the first health probe can race a half-built index.
   await predictor.awaitIdle();
+  health.markReady();
 
   // If we discovered users but couldn't index any, something is wrong
   // with the snapshot path (RPC, ABI mismatch, oracle missing) — surface

@@ -320,6 +320,7 @@ async function withServer<T>(
     priceFeed,
   );
   hc.start();
+  hc.markReady();
   try {
     return await fn(portOf(hc));
   } finally {
@@ -347,6 +348,10 @@ describe("runtime/healthcheck: HTTP endpoints", () => {
       assert.equal(info.signer, SIGNER);
       assert.equal(info.vault, STUB_CONFIG.vault.address);
       assert.equal(info.perps, STUB_CONFIG.perps.address);
+
+      const ready = await fetch(`http://127.0.0.1:${port}/ready`);
+      assert.equal(ready.status, 200);
+      assert.deepEqual(await ready.json(), { ready: true });
     });
   });
 
@@ -375,6 +380,30 @@ describe("runtime/healthcheck: HTTP endpoints", () => {
       assert.equal(res.status, 404);
     });
   });
+
+  it("serves liveness while booting and gates readiness", async () => {
+    const { config, tracker, executor, queue } = makeStubs({
+      executorRunning: false,
+      inflight: 0,
+    });
+    const hc = new Healthcheck(config, SIGNER, tracker, executor, queue, silentLogger);
+    hc.start();
+    const port = portOf(hc);
+    try {
+      const health = await fetch(`http://127.0.0.1:${port}/health`);
+      assert.equal(health.status, 200);
+      assert.equal(
+        ((await health.json()) as Record<string, unknown>).status,
+        "booting",
+      );
+
+      const ready = await fetch(`http://127.0.0.1:${port}/ready`);
+      assert.equal(ready.status, 503);
+      assert.deepEqual(await ready.json(), { ready: false });
+    } finally {
+      await hc.stop();
+    }
+  });
 });
 
 describe("runtime/healthcheck: degraded executor", () => {
@@ -385,6 +414,7 @@ describe("runtime/healthcheck: degraded executor", () => {
     });
     const hc = new Healthcheck(config, SIGNER, tracker, executor, queue, silentLogger);
     hc.start();
+    hc.markReady();
     const port = portOf(hc);
     try {
       const res = await fetch(`http://127.0.0.1:${port}/health`);
