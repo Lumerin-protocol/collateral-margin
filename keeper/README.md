@@ -109,7 +109,7 @@ src/
     liquidate.ts       # Shared simulate → send → parse-fee + revert-decoding helper
   runtime/
     scheduler.ts       # Periodic safety-net sweep over the tracker's user set
-    healthcheck.ts     # GET /health for k8s/ECS liveness probes
+    healthcheck.ts     # GET /health liveness + GET /ready readiness probes
 
 scripts/
   sync-abis.ts         # Copies sibling-package ABIs into src/abi/
@@ -168,7 +168,7 @@ See `src/config.ts` for the authoritative shape. The minimum-viable set:
 | `COORDINATOR_CONFIRMATION_BLOCKS` | no    | Block confirmations after each tx. Default `1` |
 | `KEEPER_MIN_PROFIT_MARGIN`     | no       | Bail on plans that would net ≤ this in token decimals. Default `0` |
 | `SWEEP_INTERVAL_MS`            | no       | Periodic safety-net sweep cadence (predictor handles the hot path). Default `60_000` |
-| `HEALTH_PORT`                  | no       | `GET /health` port. Default `3000`     |
+| `HEALTH_PORT`                  | no       | `/health` and `/ready` port. Default `3000` |
 | `LOG_LEVEL`                    | no       | pino level. Default `info`             |
 
 ## Dry run

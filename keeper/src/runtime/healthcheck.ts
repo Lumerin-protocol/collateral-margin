@@ -13,7 +13,9 @@ import type { PredictedThresholds, PredictiveCoordinator } from "../predict/coor
 /**
  * Health and metrics surface for the keeper.
  *
- *   GET /health   liveness probe (200 ok / 503 degraded). Body holds the
+ *   GET /health   liveness probe (200 while booting/ready, 503 degraded).
+ *   GET /ready    readiness probe (503 until startup indexing completes).
+ *                 The `/health` body holds the
  *                 full snapshot — counters AND per-user address lists
  *                 (`trackedUsers`, `predictedUsers`, `predictorInflight`,
  *                 `underwater`) — so a single `curl :3000/health | jq`
@@ -22,16 +24,17 @@ import type { PredictedThresholds, PredictiveCoordinator } from "../predict/coor
  *                 Address lists are reduced to their `length` (gauge)
  *                 here so we don't blow up Prometheus cardinality.
  *
- * Health flips to 503 when the executor isn't running (event watcher
- * silently dropped, executor stopped) so the orchestrator (k8s, ECS)
- * restarts the pod. Metrics are exposed unconditionally — useful even
- * when the keeper is degraded.
+ * Health remains live during bounded startup replay, then flips to 503 if
+ * startup times out or the ready executor stops. Metrics are exposed
+ * unconditionally — useful even when the keeper is booting or degraded.
  *
  * Predictor metrics are optional so this module remains usable for the
  * legacy boot path that doesn't have one.
  */
 export class Healthcheck {
   private server: Server | undefined;
+  private lifecycle: "booting" | "ready" | "degraded" = "booting";
+  private startupTimer: NodeJS.Timeout | undefined;
 
   private readonly config: Config;
   private readonly signerAddress: Address;
@@ -121,7 +124,10 @@ export class Healthcheck {
     // queue only ever holds underwater accounts (`mmSurplus < 0`).
     const head = this.queue.peek();
     const expiry = this.futuresExpiryIndex?.stats();
+    const ready = this.lifecycle === "ready" && this.executor.isRunning();
     return {
+      ready: ready ? 1 : 0,
+      lifecycle: this.lifecycle,
       executorRunning: this.executor.isRunning() ? 1 : 0,
       trackedUsers: this.tracker.list(),
       inflight: this.executor.inflightCount(),
@@ -148,17 +154,42 @@ export class Healthcheck {
   }
 
   start(): void {
+    if (this.server !== undefined) return;
+    this.lifecycle = "booting";
+    this.startupTimer = setTimeout(() => {
+      if (this.lifecycle !== "booting") return;
+      this.lifecycle = "degraded";
+      this.logger.error(
+        { timeoutMs: STARTUP_TIMEOUT_MS },
+        "keeper startup timed out before readiness",
+      );
+    }, STARTUP_TIMEOUT_MS);
+    if (typeof this.startupTimer.unref === "function") this.startupTimer.unref();
+
     this.server = createServer((req, res) => {
       if (req.url === "/health") {
-        const ok = this.executor.isRunning();
+        const booting = this.lifecycle === "booting";
+        const ok =
+          booting ||
+          (this.lifecycle === "ready" && this.executor.isRunning());
+        const status = booting ? "booting" : ok ? "ok" : "degraded";
         res.writeHead(ok ? 200 : 503, { "content-type": "application/json" });
         res.end(
           JSON.stringify({
-            status: ok ? "ok" : "degraded",
+            status,
             info: this.info(),
             ...this.snapshot(),
           }),
         );
+        return;
+      }
+      if (req.url === "/ready") {
+        const ready =
+          this.lifecycle === "ready" && this.executor.isRunning();
+        res.writeHead(ready ? 200 : 503, {
+          "content-type": "application/json",
+        });
+        res.end(JSON.stringify({ ready }));
         return;
       }
       if (req.url === "/metrics") {
@@ -175,10 +206,27 @@ export class Healthcheck {
   }
 
   async stop(): Promise<void> {
+    if (this.startupTimer !== undefined) clearTimeout(this.startupTimer);
+    this.startupTimer = undefined;
     if (this.server === undefined) return;
     const srv = this.server;
     this.server = undefined;
     await new Promise<void>((resolve) => srv.close(() => resolve()));
+  }
+
+  /** Mark startup indexing and the initial safety sweep complete. */
+  markReady(): void {
+    this.lifecycle = "ready";
+    if (this.startupTimer !== undefined) clearTimeout(this.startupTimer);
+    this.startupTimer = undefined;
+    this.logger.info("keeper readiness reached");
+  }
+
+  /** Force liveness into a restartable degraded state. */
+  markDegraded(): void {
+    this.lifecycle = "degraded";
+    if (this.startupTimer !== undefined) clearTimeout(this.startupTimer);
+    this.startupTimer = undefined;
   }
 
   /**
@@ -239,6 +287,8 @@ interface UnderwaterEntry {
   /** `|mmSurplus|` as a decimal string — bigints don't round-trip JSON. */
   mmDeficit: string;
 }
+
+const STARTUP_TIMEOUT_MS = 10 * 60 * 1000;
 
 function snakeCase(camel: string): string {
   return camel.replace(/([A-Z])/g, "_$1").toLowerCase();
