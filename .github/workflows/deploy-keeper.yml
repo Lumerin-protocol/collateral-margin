@@ -22,6 +22,7 @@ name: Deploy Collateral Margin Keeper
 #   KEEPER_DESIRED_COUNT            default "1" (set "0" to halt)
 #   LOG_LEVEL                       default "info"
 #   DISCOVERY_MODE                  events | webhook | both (default events)
+#   BACKFILL_FROM_BLOCK             optional startup discovery backfill anchor
 #   DELIVERY_KEEPER_ENABLED         default "false"
 #   HEALTH_PORT                     default "3000" (must match TF cnt_port)
 #   PRICE_MOVE_TRIGGER_BPS          default "1"
@@ -241,6 +242,7 @@ jobs:
           KEEPER_DESIRED_COUNT: ${{ vars.KEEPER_DESIRED_COUNT }}
           LOG_LEVEL: ${{ vars.LOG_LEVEL }}
           DISCOVERY_MODE: ${{ vars.DISCOVERY_MODE }}
+          BACKFILL_FROM_BLOCK: ${{ vars.BACKFILL_FROM_BLOCK }}
           DELIVERY_KEEPER_ENABLED: ${{ vars.DELIVERY_KEEPER_ENABLED }}
           HEALTH_PORT: ${{ vars.HEALTH_PORT }}
           PRICE_MOVE_TRIGGER_BPS: ${{ vars.PRICE_MOVE_TRIGGER_BPS }}
@@ -288,6 +290,7 @@ jobs:
             --arg KEEPER_MIN_PROFIT_MARGIN  "${KEEPER_MIN_PROFIT_MARGIN:-0}" \
             --arg LOG_LEVEL                 "${LOG_LEVEL:-info}" \
             --arg DISCOVERY_MODE            "${DISCOVERY_MODE:-events}" \
+            --arg BACKFILL_FROM_BLOCK       "${BACKFILL_FROM_BLOCK:-}" \
             --arg DELIVERY_KEEPER_ENABLED   "${DELIVERY_KEEPER_ENABLED:-false}" \
             --arg HEALTH_PORT               "${HEALTH_PORT:-3000}" \
             --arg PRICE_MOVE_TRIGGER_BPS    "${PRICE_MOVE_TRIGGER_BPS:-1}" \
@@ -321,7 +324,11 @@ jobs:
               {name:"ALCHEMY_API_KEY", value:$ALCHEMY_API_KEY},
               {name:"LIQUIDATOR_PRIVATE_KEY", value:$LIQUIDATOR_PRIVATE_KEY},
               {name:"WEBHOOK_SECRET", value:$WEBHOOK_SECRET}
-            ]' > env-block.json
+            ] + (
+              if $BACKFILL_FROM_BLOCK == "" then []
+              else [{name:"BACKFILL_FROM_BLOCK", value:$BACKFILL_FROM_BLOCK}]
+              end
+            )' > env-block.json
 
           jq --slurpfile env env-block.json '
             .containerDefinitions[0].environment = $env[0] |
