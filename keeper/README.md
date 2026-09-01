@@ -91,7 +91,9 @@ src/
     predictiveIndex.ts # Sorted threshold index (down ASC, up ASC) with O(log) crossings
     coordinator.ts     # PriceFeed + tracker → index → CoordinatorQueue + executor.kick
   discovery/
-    tracker.ts         # Event-driven participant set + one-shot startup backfill
+    tracker.ts         # Vault/Perps participant set + one-shot startup backfill
+    futuresExpiryIndex.ts # Bounded participant/position cache per Futures expiry
+    combined.ts        # Deduplicated union consumed by scheduler/predictor
     webhook.ts         # Optional Goldsky webhook ingester (Bearer-token auth)
   venues/
     types.ts           # Venue interface (multi-market aware: perps, futures, options)
@@ -153,7 +155,7 @@ See `src/config.ts` for the authoritative shape. The minimum-viable set:
 | `BTC_USDC_FEED_ADDRESS`        | yes      | Chainlink BTC/USDC AggregatorProxy (event source) |
 | `PRICE_MOVE_TRIGGER_BPS`       | no       | Skip ticks below this fractional move (default `1`) |
 | `DISCOVERY_MODE`               | no       | `events` (default) \| `webhook` \| `both` |
-| `BACKFILL_FROM_BLOCK`          | no       | Block to start the one-shot startup backfill from (vault/perps/futures discovery events). Unset = forward-only — only safe with webhook discovery or a previously-warm tracker. |
+| `BACKFILL_FROM_BLOCK`          | no       | Block to start the one-shot Vault/Perps startup backfill. Futures independently replays the bounded lifetime of active and previous expiries. |
 | `BACKFILL_CHUNK_SIZE`          | no       | Per-`getLogs` page size for backfill. Default `10000` (most public RPC limit). |
 | `DRY_RUN`                      | no       | `true` to skip on-chain broadcasts     |
 | `ALERT_WEBHOOK_URL`            | no       | Slack/Discord/PagerDuty endpoint       |
@@ -221,6 +223,8 @@ Suites cover:
 - `coordinator/planner` — orders-leg, position ranking, `OrdersStillOpen`-replay, bad-debt
 - `alert/notifier` — dedupe window, severity promotion, ordering, retry-on-failure
 - `discovery/tracker` — checksum dedupe, `onAdded` / `onChanged` listeners, startup backfill
+- `discovery/futuresExpiryIndex` — scoped replay, per-expiry partitioning, rollover retention
+- `discovery/combined` — deduplicated Vault/Perps + Futures participant union
 - `discovery/webhook` — payload extraction across `data` / `records` / array shapes
 - `runtime/scheduler` — alert ladder thresholds, queue upsert + executor kick wiring
 - `oracle/priceFeed` — rebase to token decimals (oracle already quotes 1 PH/s·day), dispatch, no-op on unchanged answer

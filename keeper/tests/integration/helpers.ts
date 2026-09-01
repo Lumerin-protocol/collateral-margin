@@ -26,7 +26,7 @@ import { PerpsPositionAbi } from "../../src/venues/perpsPositionAbi.ts";
 // ─────────────────────────────────────────────────────────────────────────
 
 /**
- * `ParticipantTracker` is event-driven — there's a small RPC-poll delay
+ * Participant discovery is event-driven — there's a small RPC-poll delay
  * between a user's first on-chain action and the keeper "knowing" about
  * them. Every test that wants the keeper to act on `user` must call this
  * first, otherwise `runSweep` / `planner.run` will short-circuit on an
@@ -37,7 +37,7 @@ export async function discoverUser(
   user: Address,
   timeoutMs = 10_000,
 ): Promise<void> {
-  await waitFor(() => keeper.tracker.has(user), timeoutMs);
+  await waitFor(() => keeper.participants.has(user), timeoutMs);
 }
 
 /**

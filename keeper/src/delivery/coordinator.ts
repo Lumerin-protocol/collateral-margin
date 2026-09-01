@@ -11,6 +11,7 @@ import type pino from "pino";
 import { HashPowerFuturesAbi } from "../abi/HashPowerFutures.ts";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
+import type { FuturesExpiryIndex } from "../discovery/futuresExpiryIndex.ts";
 import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
 import { formatGasCost } from "../tx/gasCost.ts";
 
@@ -44,23 +45,27 @@ export class DeliveryCoordinator {
   private txChain: Promise<void> = Promise.resolve();
   private unwatchers: Array<() => void> = [];
   private sweepTimer: NodeJS.Timeout | undefined;
+  private disposeExpiryIndex: (() => void) | undefined;
   private running = false;
 
   private readonly chain: Chain;
   private readonly config: Config;
   private readonly logger: pino.Logger;
   private readonly ethUsdFeed: EthUsdFeed | undefined;
+  private readonly expiryIndex: FuturesExpiryIndex | undefined;
 
   constructor(
     chain: Chain,
     config: Config,
     logger: pino.Logger,
     ethUsdFeed?: EthUsdFeed,
+    expiryIndex?: FuturesExpiryIndex,
   ) {
     this.chain = chain;
     this.config = config;
     this.logger = logger.child({ component: "deliveryCoordinator" });
     this.ethUsdFeed = ethUsdFeed;
+    this.expiryIndex = expiryIndex;
   }
 
   async start(): Promise<void> {
@@ -72,20 +77,32 @@ export class DeliveryCoordinator {
       "delivery coordinator starting (permissionless settlePosition)",
     );
 
-    this.unwatchers.push(
-      this.chain.publicClient.watchContractEvent({
-        address: this.config.futures.address,
-        abi: HashPowerFuturesAbi,
-        eventName: "OrderMatched",
-        onLogs: (logs) => this.onOrderMatched(logs),
-      }),
-      this.chain.publicClient.watchContractEvent({
-        address: this.config.futures.address,
-        abi: HashPowerFuturesAbi,
-        eventName: "PositionSettled",
-        onLogs: (logs) => this.onPositionSettled(logs),
-      }),
-    );
+    if (this.expiryIndex !== undefined) {
+      for (const pos of this.expiryIndex.positionEntries()) {
+        this.upsertTracked(pos.user, pos.expirationAt);
+      }
+      this.disposeExpiryIndex = this.expiryIndex.onPositionChanged(
+        (user, expirationAt, active) => {
+          if (active) this.upsertTracked(user, expirationAt);
+          else this.dropTracked(user, expirationAt);
+        },
+      );
+    } else {
+      this.unwatchers.push(
+        this.chain.publicClient.watchContractEvent({
+          address: this.config.futures.address,
+          abi: HashPowerFuturesAbi,
+          eventName: "OrderMatched",
+          onLogs: (logs) => this.onOrderMatched(logs),
+        }),
+        this.chain.publicClient.watchContractEvent({
+          address: this.config.futures.address,
+          abi: HashPowerFuturesAbi,
+          eventName: "PositionSettled",
+          onLogs: (logs) => this.onPositionSettled(logs),
+        }),
+      );
+    }
 
     this.sweepTimer = setInterval(() => {
       void this.sweep();
@@ -102,6 +119,8 @@ export class DeliveryCoordinator {
     }
     for (const t of this.timers.values()) clearTimeout(t);
     this.timers.clear();
+    this.disposeExpiryIndex?.();
+    this.disposeExpiryIndex = undefined;
 
     for (const u of this.unwatchers) {
       try {

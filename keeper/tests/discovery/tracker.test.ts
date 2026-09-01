@@ -155,7 +155,7 @@ describe("ParticipantTracker: onAdded listeners", () => {
 });
 
 describe("ParticipantTracker: backfill", () => {
-  it("ingests participants from every event source across all chunks", async () => {
+  it("ingests vault and perps participants across all chunks", async () => {
     // Each mocked log shape mirrors what viem's getContractEvents would
     // hand to our handlers — only `args` is read. Note the perps/futures
     // OrderCreated logs go to separate handlers keyed by contract address,
@@ -177,19 +177,13 @@ describe("ParticipantTracker: backfill", () => {
           [scriptKey(config.perps.address, "OrderMatched")]: [
             { args: { maker: userAt(4), taker: userAt(5) } },
           ],
-          [scriptKey(config.futures.address, "OrderCreated")]: [
-            { args: { participant: userAt(6) } },
-          ],
-          [scriptKey(config.futures.address, "OrderMatched")]: [
-            { args: { maker: userAt(7), taker: userAt(8) } },
-          ],
         },
       }),
       config,
       silentLogger,
     );
     await t.backfill(0n, 500n);
-    assert.equal(t.size(), 9);
+    assert.equal(t.size(), 6);
   });
 
   it("chunks the block range and calls getContractEvents per chunk", async () => {
@@ -211,8 +205,8 @@ describe("ParticipantTracker: backfill", () => {
     } as unknown as Chain;
     const t = new ParticipantTracker(chain, makeConfig(), silentLogger);
     await t.backfill(0n, 1000n);
-    // 6 sources × 3 chunks ([0,999], [1000,1999], [2000,2500]) = 18 calls.
-    assert.equal(calls.length, 18);
+    // 4 sources × 3 chunks ([0,999], [1000,1999], [2000,2500]) = 12 calls.
+    assert.equal(calls.length, 12);
     // Spot-check the chunk boundary clamping on the last page.
     const deposited = calls.filter((c) => c.eventName === "Deposited");
     assert.deepEqual(
@@ -242,7 +236,7 @@ describe("ParticipantTracker: backfill", () => {
     } as unknown as Chain;
     const t = new ParticipantTracker(chain, makeConfig(), silentLogger);
     await t.backfill(0n, 1000n);
-    assert.ok(calls >= 6, "all six sources attempted despite Deposited failure");
+    assert.ok(calls >= 4, "all four sources attempted despite Deposited failure");
     // Transfer still ingested.
     assert.equal(t.size(), 2);
   });

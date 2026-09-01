@@ -4,6 +4,8 @@ import { serializeError } from "./util/errSerializer.ts";
 import { loadConfig } from "./config.ts";
 import { createChain } from "./chain.ts";
 import { ParticipantTracker } from "./discovery/tracker.ts";
+import { FuturesExpiryIndex } from "./discovery/futuresExpiryIndex.ts";
+import { CombinedParticipantSource } from "./discovery/combined.ts";
 import { WebhookIngester } from "./discovery/webhook.ts";
 import { CoordinatorQueue } from "./coordinator/queue.ts";
 import { Planner } from "./coordinator/planner.ts";
@@ -95,13 +97,18 @@ async function main(): Promise<void> {
 
   const notifier = new Notifier(config, logger);
   const tracker = new ParticipantTracker(chain, config, logger);
+  const futuresExpiryIndex = new FuturesExpiryIndex(chain, config, logger);
+  const participants = new CombinedParticipantSource([
+    tracker,
+    futuresExpiryIndex,
+  ]);
   const queue = new CoordinatorQueue();
   const planner = new Planner(chain, config, venues, logger);
   const executor = new CoordinatorExecutor(config, queue, planner, logger);
   const scheduler = new Scheduler(
     chain,
     config,
-    tracker,
+    participants,
     queue,
     executor,
     notifier,
@@ -116,23 +123,12 @@ async function main(): Promise<void> {
   const predictor = new PredictiveCoordinator(
     chain,
     config,
-    tracker,
+    participants,
     queue,
     executor,
     priceFeed,
     logger,
     notifier,
-  );
-
-  const health = new Healthcheck(
-    config,
-    chain.account.address,
-    tracker,
-    executor,
-    queue,
-    logger,
-    predictor,
-    priceFeed,
   );
 
   let webhookIngester: WebhookIngester | undefined;
@@ -150,8 +146,22 @@ async function main(): Promise<void> {
       config,
       logger,
       ethUsdFeed,
+      futuresExpiryIndex,
     );
   }
+
+  const health = new Healthcheck(
+    config,
+    chain.account.address,
+    participants,
+    executor,
+    queue,
+    logger,
+    predictor,
+    priceFeed,
+    futuresExpiryIndex,
+    deliveryCoordinator,
+  );
 
   // Always-on gas-balance monitor on the keeper signer. Logs INFO with
   // current balance every tick (default 5 min), and escalates to WARN /
@@ -165,18 +175,8 @@ async function main(): Promise<void> {
   // executor wakes any idle workers so they can pick up the new user as soon
   // as the next sweep enriches the queue. (We can't enqueue here without an
   // AccountHealth snapshot — that lives in the scheduler.)
-  tracker.onAdded((user) => {
+  participants.onAdded(() => {
     executor.kick();
-    // View-based discovery: every newly-tracked user has their futures
-    // positions read directly from chain storage. Independent of the
-    // log-backfill pipeline, so it survives RPC providers that cap
-    // `eth_getLogs` block ranges (Alchemy free tier = 10 blocks). Without
-    // this hook a position created before keeper boot would only ever be
-    // settled if log backfill happened to find its `OrderMatched`
-    // event, which is unreliable on rate-limited RPCs.
-    if (deliveryCoordinator !== undefined) {
-      void deliveryCoordinator.indexUserPositions(user);
-    }
   });
 
   // ── Graceful shutdown ─────────────────────────────────────────────────
@@ -194,6 +194,7 @@ async function main(): Promise<void> {
     balanceMonitor.stop();
     ethUsdFeed?.stop();
     deliveryCoordinator?.stop();
+    futuresExpiryIndex.stop();
     await executor.stop();
     if (webhookIngester !== undefined) await webhookIngester.stop();
     tracker.stop();
@@ -213,6 +214,7 @@ async function main(): Promise<void> {
   if (ethUsdFeed !== undefined) await ethUsdFeed.start();
   await predictor.start();
   await tracker.start();
+  await futuresExpiryIndex.start();
   if (webhookIngester !== undefined) await webhookIngester.start();
   if (deliveryCoordinator !== undefined) await deliveryCoordinator.start();
   await executor.start();
@@ -241,51 +243,6 @@ async function main(): Promise<void> {
       "BACKFILL_FROM_BLOCK unset — skipping historical scan; cold-start may miss participants until they next emit an event",
     );
   }
-  if (deliveryCoordinator !== undefined) {
-    // Seed the delivery index from contract storage rather than logs.
-    // `tracker.list()` returns every user we've discovered (via webhook,
-    // live events, or backfill); for each we read the still-alive
-    // positions and schedule timers. Survives RPC providers that
-    // rate-limit `eth_getLogs` and is the recommended cold-start path
-    // for delivery — see `bootstrapFromUsers` in the coordinator.
-    //
-    // Two sources are folded in alongside the tracker:
-    //   1. The keeper's own signer. The validator address is also a
-    //      legitimate participant in many deployments (see
-    //      0x1441…775D4 on base-sepolia: validator + buyer/seller of
-    //      its own positions). Their positions may pre-date
-    //      BACKFILL_FROM_BLOCK, in which case the tracker has no
-    //      record of them — but we know the address at boot, so the
-    //      one extra `getActiveExpirationDates` read is a free safety net.
-    //   2. The manual seed list (`DELIVERY_BOOTSTRAP_USERS`). Used to
-    //      recover a known-stuck user when the tracker hasn't found
-    //      them — typical when log backfill is failing on the
-    //      deployed RPC, or when the user transacted before
-    //      BACKFILL_FROM_BLOCK.
-    const seen = new Set<string>(tracker.list().map((a) => a.toLowerCase()));
-    const seedUsers = [...tracker.list()];
-    const signer = chain.account.address;
-    if (!seen.has(signer.toLowerCase())) {
-      seedUsers.push(signer);
-      seen.add(signer.toLowerCase());
-      logger.info(
-        { signer },
-        "delivery bootstrap: including keeper signer (not in tracker — positions may pre-date BACKFILL_FROM_BLOCK)",
-      );
-    }
-    for (const u of config.delivery.bootstrapUsers) {
-      if (seen.has(u.toLowerCase())) continue;
-      seedUsers.push(u);
-      seen.add(u.toLowerCase());
-    }
-    if (config.delivery.bootstrapUsers.length > 0) {
-      logger.info(
-        { count: config.delivery.bootstrapUsers.length },
-        "delivery bootstrap: seeding from DELIVERY_BOOTSTRAP_USERS",
-      );
-    }
-    await deliveryCoordinator.bootstrapFromUsers(seedUsers);
-  }
   await scheduler.runSweep();
   // Backfill fires `tracker.onAdded` for every existing user, which the
   // predictor consumes via `rebuild`. Those rebuilds are fire-and-forget,
@@ -296,16 +253,16 @@ async function main(): Promise<void> {
   // If we discovered users but couldn't index any, something is wrong
   // with the snapshot path (RPC, ABI mismatch, oracle missing) — surface
   // it loudly. Tracker > 0 but predictor = 0 is a real outage shape.
-  if (tracker.size() > 0 && predictor.size() === 0) {
+  if (participants.size() > 0 && predictor.size() === 0) {
     logger.warn(
-      { tracked: tracker.size() },
+      { tracked: participants.size() },
       "tracker has users but predictor index is empty — snapshot path may be failing; check earlier 'rebuild failed' logs",
     );
   }
 
   logger.info(
     {
-      tracked: tracker.size(),
+      tracked: participants.size(),
       predicted: predictor.size(),
       currentPrice: priceFeed.current()?.toString(),
     },

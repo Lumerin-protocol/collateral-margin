@@ -4,7 +4,7 @@ import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
 import type { CoordinatorQueue } from "../coordinator/queue.ts";
 import type { CoordinatorExecutor } from "../coordinator/executor.ts";
-import type { ParticipantTracker } from "../discovery/tracker.ts";
+import type { ParticipantSource } from "../discovery/types.ts";
 import type { PriceFeed, PriceUpdate } from "../oracle/priceFeed.ts";
 import type { Notifier } from "../alert/notifier.ts";
 import { readAccountHealthBatch } from "../pme/health.ts";
@@ -58,7 +58,7 @@ export class PredictiveCoordinator {
 
   private readonly chain: Chain;
   private readonly config: Config;
-  private readonly tracker: ParticipantTracker;
+  private readonly tracker: ParticipantSource;
   private readonly queue: CoordinatorQueue;
   private readonly executor: CoordinatorExecutor;
   private readonly priceFeed: PriceFeed;
@@ -68,7 +68,7 @@ export class PredictiveCoordinator {
   constructor(
     chain: Chain,
     config: Config,
-    tracker: ParticipantTracker,
+    tracker: ParticipantSource,
     queue: CoordinatorQueue,
     executor: CoordinatorExecutor,
     priceFeed: PriceFeed,

@@ -14,6 +14,9 @@ import { hardhat } from "viem/chains";
 import type { Config } from "../../src/config.ts";
 import type { Chain } from "../../src/chain.ts";
 import { ParticipantTracker } from "../../src/discovery/tracker.ts";
+import { FuturesExpiryIndex } from "../../src/discovery/futuresExpiryIndex.ts";
+import { CombinedParticipantSource } from "../../src/discovery/combined.ts";
+import type { ParticipantSource } from "../../src/discovery/types.ts";
 import { CoordinatorQueue } from "../../src/coordinator/queue.ts";
 import { Planner } from "../../src/coordinator/planner.ts";
 import { CoordinatorExecutor } from "../../src/coordinator/executor.ts";
@@ -46,6 +49,8 @@ export interface KeeperHarness {
   config: Config;
   chain: Chain;
   tracker: ParticipantTracker;
+  futuresExpiryIndex: FuturesExpiryIndex;
+  participants: ParticipantSource;
   queue: CoordinatorQueue;
   planner: Planner;
   executor: CoordinatorExecutor;
@@ -122,13 +127,18 @@ export function buildKeeper(
 
   const notifier = new Notifier(config, log);
   const tracker = new ParticipantTracker(chain, config, log);
+  const futuresExpiryIndex = new FuturesExpiryIndex(chain, config, log);
+  const participants = new CombinedParticipantSource([
+    tracker,
+    futuresExpiryIndex,
+  ]);
   const queue = new CoordinatorQueue();
   const planner = new Planner(chain, config, venues, log);
   const executor = new CoordinatorExecutor(config, queue, planner, log);
   const scheduler = new Scheduler(
     chain,
     config,
-    tracker,
+    participants,
     queue,
     executor,
     notifier,
@@ -145,7 +155,7 @@ export function buildKeeper(
   const predictor = new PredictiveCoordinator(
     chain,
     config,
-    tracker,
+    participants,
     queue,
     executor,
     priceFeed,
@@ -155,14 +165,20 @@ export function buildKeeper(
 
   // Newly-tracked users wake idle workers — same edge `keeper/src/index.ts`
   // wires in production.
-  tracker.onAdded(() => executor.kick());
+  participants.onAdded(() => executor.kick());
 
   // Optional delivery coordinator — opt-in per test. Built but not started;
   // start() below boots it after the live tracker is up so it sees the same
   // event ordering production does.
   const delivery =
     overrides.delivery === true
-      ? new DeliveryCoordinator(chain, config, log)
+      ? new DeliveryCoordinator(
+          chain,
+          config,
+          log,
+          undefined,
+          futuresExpiryIndex,
+        )
       : undefined;
 
   let started = false;
@@ -170,6 +186,8 @@ export function buildKeeper(
     config,
     chain,
     tracker,
+    futuresExpiryIndex,
+    participants,
     queue,
     planner,
     executor,
@@ -184,6 +202,7 @@ export function buildKeeper(
       await priceFeed.start();
       await predictor.start();
       await tracker.start();
+      await futuresExpiryIndex.start();
       if (delivery !== undefined) await delivery.start();
       await executor.start();
       // Scheduler is NOT started: tests drive it manually via
@@ -196,6 +215,7 @@ export function buildKeeper(
       predictor.stop();
       priceFeed.stop();
       delivery?.stop();
+      futuresExpiryIndex.stop();
       await executor.stop();
       tracker.stop();
     },
