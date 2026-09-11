@@ -9,25 +9,32 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
+    "typecheck": "tsgo --noEmit",
+    "lint": "biome lint .",
     "clean": "rm -rf abi artifacts cache",
     "deploy:vault": "hardhat run scripts/deploy-collateral-vault.ts",
     "deploy:pme": "hardhat run scripts/deploy-portfolio-margin-engine.ts",
+    "deploy:points": "hardhat run scripts/deploy-points.ts",
+    "deploy:points-hook": "hardhat run scripts/deploy-points-hook.ts",
     "upgrade:vault": "hardhat run scripts/update-collateral-vault.ts",
     "upgrade:pme": "hardhat run scripts/update-portfolio-margin-engine.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.10",
-    "@nomicfoundation/hardhat-toolbox-viem": "^5.0.0",
-    "@nomicfoundation/hardhat-verify": "^3.0.0",
+    "@nomicfoundation/hardhat-toolbox-viem": "^5.0.7",
+    "@nomicfoundation/hardhat-verify": "^3.0.17",
+    "@nomicfoundation/hardhat-viem": "3.0.9",
     "@types/node": "^22.0.0",
-    "hardhat": "^3.2",
+    "@typescript/native-preview": "7.0.0-dev.20260707.2",
+    "hardhat": "^3.9.1",
+    "hardhat-viem-abi": "https://github.com/lsheva/hardhat-viem-abi.git#v1.0.0-alpha.2&path:packages/hardhat-viem-abi",
     "typescript": "^5.8.0"
   },
   "dependencies": {
     "@openzeppelin/contracts": "npm:@openzeppelin/contracts@5.1.0",
     "@openzeppelin/contracts-upgradeable": "npm:@openzeppelin/contracts-upgradeable@5.1.0",
     "dotenv": "^16.4.1",
-    "viem": "^2.42.1"
+    "viem": "^2.52.2"
   },
-  "packageManager": "pnpm@10.28.1"
+  "packageManager": "pnpm@11.22.0"
 }

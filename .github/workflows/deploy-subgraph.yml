@@ -1,0 +1,471 @@
+name: Deploy collateral-vault subgraph
+
+on:
+  push:
+    branches:
+      - dev
+      - stg
+      - main
+      - "cicd/**"
+    paths:
+      - "indexer/**"
+      - "contracts/abi/CollateralVault.json"
+      - ".github/workflows/deploy-subgraph.yml"
+  pull_request:
+    branches:
+      - dev
+      - stg
+      - main
+    paths:
+      - "indexer/**"
+      - "contracts/abi/CollateralVault.json"
+      - ".github/workflows/deploy-subgraph.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment (dev=DEV, stg=STG, main=LMN/PROD)"
+        required: true
+        type: choice
+        options:
+          - dev
+          - stg
+          - main
+
+concurrency:
+  group: ci-vault-subgraph-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  id-token: write # Required for OIDC
+  contents: write # Required for creating git tags
+
+env:
+  SERVICE_NAME: collateral-vault-subgraph
+
+jobs:
+  setup:
+    name: 🔧 Setup
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.gen_tag.outputs.environment }}
+      is_cicd_branch: ${{ steps.gen_tag.outputs.is_cicd_branch }}
+      version: ${{ steps.gen_tag.outputs.version }}
+      tag: ${{ steps.gen_tag.outputs.tag_name }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Generate version tag
+        id: gen_tag
+        uses: ./.github/actions/gen-tag
+        with:
+          component: indexer
+          major_version: "1"
+          environment_override: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || '' }}
+
+  build:
+    name: 🔨 Build
+    runs-on: ubuntu-latest
+    needs: setup
+    environment: ${{ github.event_name != 'pull_request' && needs.setup.outputs.environment || '' }}
+    outputs:
+      version: ${{ needs.setup.outputs.version }}
+      tag: ${{ needs.setup.outputs.tag }}
+      environment: ${{ needs.setup.outputs.environment }}
+      goldsky_subgraph_name: ${{ steps.env.outputs.goldsky_subgraph_name }}
+      goldsky_rolling_tag: ${{ steps.env.outputs.goldsky_rolling_tag }}
+      goldsky_endpoint: ${{ steps.env.outputs.goldsky_endpoint }}
+      is_cicd_branch: ${{ needs.setup.outputs.is_cicd_branch }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: indexer/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: indexer/pnpm-lock.yaml
+
+      - name: Set environment outputs
+        id: env
+        run: |
+          ENV="${{ needs.setup.outputs.environment }}"
+
+          # Goldsky subgraph name — override via vars.GOLDSKY_SUBGRAPH_NAME (default: collateral-vault)
+          GS_NAME="${{ vars.GOLDSKY_SUBGRAPH_NAME }}"
+          if [ -z "$GS_NAME" ]; then
+            GS_NAME="collateral-vault"
+          fi
+          echo "goldsky_subgraph_name=$GS_NAME" >> $GITHUB_OUTPUT
+
+          # Rolling tag and public endpoint per environment
+          case $ENV in
+            dev)
+              echo "goldsky_rolling_tag=dev-latest" >> $GITHUB_OUTPUT
+              echo "goldsky_endpoint=${{ vars.DEV_GS_VAULT }}" >> $GITHUB_OUTPUT
+              ;;
+            stg)
+              echo "goldsky_rolling_tag=stg-latest" >> $GITHUB_OUTPUT
+              echo "goldsky_endpoint=${{ vars.STG_GS_VAULT }}" >> $GITHUB_OUTPUT
+              ;;
+            main)
+              echo "goldsky_rolling_tag=lmn-latest" >> $GITHUB_OUTPUT
+              echo "goldsky_endpoint=${{ vars.LMN_GS_VAULT }}" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+          echo "🎯 Deploying to Goldsky: subgraph=${GS_NAME}, env=${ENV}"
+
+      - name: Install dependencies
+        working-directory: ./indexer
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare subgraph configuration
+        working-directory: ./indexer
+        env:
+          NETWORK: ${{ vars.NETWORK }}
+          VAULT_ADDRESS: ${{ vars.VAULT_ADDRESS }}
+          VAULT_START_BLOCK: ${{ vars.VAULT_START_BLOCK }}
+          PERPS_ADDRESS: ${{ vars.PERPS_ADDRESS }}
+          OPTIONS_ADDRESS: ${{ vars.OPTIONS_ADDRESS }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            echo "ℹ️ PR build — using .env.example dummy values"
+            set -a && source .env.example && set +a
+          fi
+          echo "⚙️ Preparing subgraph for ${{ needs.setup.outputs.environment }}..."
+          echo "   Network:        ${NETWORK}"
+          echo "   Vault:          ${VAULT_ADDRESS} (block ${VAULT_START_BLOCK})"
+          echo "   Perps:          ${PERPS_ADDRESS}"
+          echo "   Options:        ${OPTIONS_ADDRESS}"
+          pnpm prepare:env
+          echo "✅ Configuration ready"
+          echo "--- subgraph.yaml ---"
+          cat subgraph.yaml
+
+      - name: Generate code, build, test
+        working-directory: ./indexer
+        run: |
+          pnpm codegen
+          pnpm build
+          pnpm test
+          echo "✅ Build complete"
+
+      - name: Upload build artifacts
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: subgraph-build
+          path: |
+            indexer/build/
+            indexer/generated/
+            indexer/src/
+            indexer/subgraph.yaml
+            indexer/schema.graphql
+            contracts/abi/
+          retention-days: 1
+
+      - name: Build summary
+        run: |
+          echo "## 🔨 Build Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | \`${{ needs.setup.outputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Subgraph | \`${{ steps.env.outputs.goldsky_subgraph_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tag | \`${{ steps.env.outputs.goldsky_rolling_tag }}\` |" >> $GITHUB_STEP_SUMMARY
+
+      - name: PR build summary
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode:** Build only (no deployment) — deploy will run on merge" >> $GITHUB_STEP_SUMMARY
+
+  deploy:
+    name: 🚀 Deploy to Goldsky
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request'
+    outputs:
+      deploy_status: ${{ steps.goldsky_deploy.outputs.deploy_status }}
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: subgraph-build
+          path: .
+
+      - name: Install Goldsky CLI
+        run: curl -fsSL https://goldsky.com | sh -s -- -f
+
+      - name: Deploy and tag
+        id: goldsky_deploy
+        working-directory: ./indexer
+        env:
+          GOLDSKY_API_KEY: ${{ needs.build.outputs.environment == 'dev' && secrets.DEV_GOLDSKY_API_KEY || needs.build.outputs.environment == 'stg' && secrets.STG_GOLDSKY_API_KEY || secrets.LMN_GOLDSKY_API_KEY }}
+          GOLDSKY_SUBGRAPH_NAME: ${{ needs.build.outputs.goldsky_subgraph_name }}
+          SUBGRAPH_VERSION: ${{ needs.build.outputs.version }}
+          GOLDSKY_ROLLING_TAG: ${{ needs.build.outputs.goldsky_rolling_tag }}
+          GOLDSKY_ENDPOINT: ${{ needs.build.outputs.goldsky_endpoint }}
+        run: |
+          echo "🚀 Goldsky Subgraph Deployment"
+          echo "   Subgraph:  ${GOLDSKY_SUBGRAPH_NAME}"
+          echo "   Version:   ${SUBGRAPH_VERSION}"
+          echo "   Tag:       ${GOLDSKY_ROLLING_TAG}"
+          echo ""
+
+          # --- Pre-flight: check current deployment ---
+          if [ -n "${GOLDSKY_ENDPOINT}" ]; then
+            echo "📊 Current deployment:"
+            CURRENT=$(curl -s -X POST -H "Content-Type: application/json" \
+              -d '{"query":"{ _meta { deployment hasIndexingErrors block { number } } }"}' \
+              "${GOLDSKY_ENDPOINT}" 2>/dev/null || true)
+            echo "   $(echo "$CURRENT" | jq -c '.data._meta // "unavailable"' 2>/dev/null || echo 'unavailable')"
+            echo ""
+          fi
+
+          # --- Deploy new version ---
+          echo "📤 Deploying ${GOLDSKY_SUBGRAPH_NAME}/${SUBGRAPH_VERSION}..."
+          set +e
+          DEPLOY_OUTPUT=$(goldsky subgraph deploy "${GOLDSKY_SUBGRAPH_NAME}/${SUBGRAPH_VERSION}" \
+            --path . \
+            --token "${GOLDSKY_API_KEY}" 2>&1)
+          DEPLOY_EXIT=$?
+          set -e
+
+          echo "$DEPLOY_OUTPUT"
+
+          SKIP_DEPLOY=false
+          if [ $DEPLOY_EXIT -ne 0 ]; then
+            if echo "$DEPLOY_OUTPUT" | grep -qi "already exists"; then
+              echo ""
+              echo "ℹ️  Version ${SUBGRAPH_VERSION} already exists — skipping to tag"
+              SKIP_DEPLOY=true
+            elif echo "$DEPLOY_OUTPUT" | grep -qi "already deployed"; then
+              CONFLICT=$(echo "$DEPLOY_OUTPUT" | grep -oP 'under the name \K\S+(?=\.)' || true)
+              echo ""
+              echo "⚠️  Duplicate content detected — conflicts with ${CONFLICT}"
+              echo "   Removing conflicting version and retrying..."
+              goldsky subgraph tag delete "${CONFLICT}" --tag "${GOLDSKY_ROLLING_TAG}" --token "${GOLDSKY_API_KEY}" --force 2>/dev/null || true
+              goldsky subgraph delete "${CONFLICT}" --token "${GOLDSKY_API_KEY}" --force 2>/dev/null || true
+              sleep 3
+              echo "📤 Retrying deploy..."
+              goldsky subgraph deploy "${GOLDSKY_SUBGRAPH_NAME}/${SUBGRAPH_VERSION}" \
+                --path . \
+                --token "${GOLDSKY_API_KEY}"
+            else
+              echo ""
+              echo "❌ Deployment failed"
+              exit 1
+            fi
+          fi
+
+          # Brief pause for Goldsky to register the new deployment
+          if [ "$SKIP_DEPLOY" = "false" ]; then
+            sleep 5
+          fi
+
+          # --- Roll the rolling tag ---
+          echo ""
+          echo "🏷️  Moving tag ${GOLDSKY_ROLLING_TAG} → ${GOLDSKY_SUBGRAPH_NAME}/${SUBGRAPH_VERSION}"
+
+          set +e
+          TAG_OUTPUT=$(goldsky subgraph tag create "${GOLDSKY_SUBGRAPH_NAME}/${SUBGRAPH_VERSION}" \
+            --tag "${GOLDSKY_ROLLING_TAG}" \
+            --token "${GOLDSKY_API_KEY}" 2>&1)
+          TAG_EXIT=$?
+          set -e
+
+          if [ $TAG_EXIT -ne 0 ]; then
+            echo "   Tag may exist on another version — moving it..."
+            LIST_OUTPUT=$(goldsky subgraph list --token "${GOLDSKY_API_KEY}" 2>/dev/null || true)
+            OLD_TAGGED=$(echo "$LIST_OUTPUT" \
+              | grep "${GOLDSKY_SUBGRAPH_NAME}/" \
+              | grep "${GOLDSKY_ROLLING_TAG}" \
+              | awk '{print $1}' | head -1)
+            if [ -n "$OLD_TAGGED" ]; then
+              echo "   Removing tag from ${OLD_TAGGED}..."
+              goldsky subgraph tag delete "${OLD_TAGGED}" \
+                --tag "${GOLDSKY_ROLLING_TAG}" \
+                --token "${GOLDSKY_API_KEY}" \
+                --force 2>/dev/null || true
+            fi
+            goldsky subgraph tag create "${GOLDSKY_SUBGRAPH_NAME}/${SUBGRAPH_VERSION}" \
+              --tag "${GOLDSKY_ROLLING_TAG}" \
+              --token "${GOLDSKY_API_KEY}"
+          fi
+
+          echo ""
+          echo "✅ ${GOLDSKY_SUBGRAPH_NAME}/${SUBGRAPH_VERSION} deployed and tagged as ${GOLDSKY_ROLLING_TAG}"
+
+          if [ "$SKIP_DEPLOY" = "true" ]; then
+            echo "deploy_status=already_exists" >> $GITHUB_OUTPUT
+          else
+            echo "deploy_status=deployed" >> $GITHUB_OUTPUT
+          fi
+
+          echo "## 🚀 Goldsky Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Subgraph | \`${GOLDSKY_SUBGRAPH_NAME}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version | \`${SUBGRAPH_VERSION}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tag | \`${GOLDSKY_ROLLING_TAG}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | $([ "$SKIP_DEPLOY" = "true" ] && echo "Already existed" || echo "Deployed") |" >> $GITHUB_STEP_SUMMARY
+
+  verify:
+    name: 🔍 Verify
+    runs-on: ubuntu-latest
+    needs: [build, deploy]
+    if: github.event_name != 'pull_request'
+
+    steps:
+      - name: Verify deployment on Goldsky
+        env:
+          GOLDSKY_ENDPOINT: ${{ needs.build.outputs.goldsky_endpoint }}
+        run: |
+          echo "🔍 Verifying subgraph on Goldsky..."
+          echo "   Subgraph: ${{ needs.build.outputs.goldsky_subgraph_name }}"
+
+          if [ -z "${GOLDSKY_ENDPOINT}" ]; then
+            echo "⚠️ No Goldsky endpoint URL configured — skipping verification"
+            echo "   Set DEV_GS_VAULT / STG_GS_VAULT / LMN_GS_VAULT org variable"
+            exit 0
+          fi
+
+          echo "   Endpoint: ${GOLDSKY_ENDPOINT}"
+
+          # Poll for up to 60 seconds, checking every 10s
+          for i in 1 2 3 4 5 6; do
+            sleep 10
+            echo ""
+            echo "   Attempt $i/6..."
+
+            RESPONSE=$(curl -s -X POST \
+              -H "Content-Type: application/json" \
+              -d '{"query": "{ _meta { block { number } deployment hasIndexingErrors } }"}' \
+              "${GOLDSKY_ENDPOINT}")
+
+            if echo "$RESPONSE" | jq -e '.errors' > /dev/null 2>&1; then
+              echo "   Subgraph not ready yet..."
+              continue
+            fi
+
+            HAS_ERRORS=$(echo "$RESPONSE" | jq -r '.data._meta.hasIndexingErrors // false')
+            BLOCK_NUMBER=$(echo "$RESPONSE" | jq -r '.data._meta.block.number // "unknown"')
+
+            echo "   Block: $BLOCK_NUMBER"
+            echo "   Indexing errors: $HAS_ERRORS"
+
+            if [ "$HAS_ERRORS" == "true" ]; then
+              echo "⚠️ Subgraph has indexing errors — check Goldsky dashboard"
+              exit 1
+            fi
+
+            echo "✅ Subgraph deployed and indexing on Goldsky"
+            exit 0
+          done
+
+          echo "⚠️ Subgraph did not become ready within 60s — may still be syncing"
+          echo "   This is normal for new deployments. Check Goldsky dashboard."
+          exit 0
+
+  cleanup:
+    name: 🧹 Cleanup
+    runs-on: ubuntu-latest
+    needs: [setup, build, verify]
+    if: always() && github.event_name != 'pull_request'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        if: needs.verify.result == 'success'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push tag
+        if: needs.verify.result == 'success'
+        run: |
+          TAG_NAME="${{ needs.setup.outputs.tag }}"
+          echo "🏷️ Creating tag: $TAG_NAME"
+
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "⚠️ Tag $TAG_NAME already exists, skipping"
+          else
+            git tag -a "$TAG_NAME" -m "Release ${{ needs.setup.outputs.version }} - Deployed to ${{ needs.setup.outputs.environment }}"
+            git push origin "$TAG_NAME"
+            echo "✅ Tag $TAG_NAME pushed"
+          fi
+
+      - name: Summary
+        run: |
+          if [ "${{ needs.verify.result }}" == "success" ]; then
+            echo "## 🎉 Deployment Complete" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Service:** Collateral Vault Subgraph" >> $GITHUB_STEP_SUMMARY
+            echo "**Environment:** ${{ needs.setup.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Version:** ${{ needs.setup.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+            echo "**Target:** Goldsky" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Check logs above for details." >> $GITHUB_STEP_SUMMARY
+          fi
+
+  notify:
+    name: 📢 Notify
+    runs-on: ubuntu-latest
+    needs: [setup, build, deploy, verify, cleanup]
+    if: always() && github.event_name != 'pull_request'
+
+    steps:
+      - name: Checkout (for composite action)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Determine status
+        id: status
+        run: |
+          if [ "${{ needs.verify.result }}" == "success" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          elif [ "${{ needs.verify.result }}" == "failure" ] || [ "${{ needs.deploy.result }}" == "failure" ] || [ "${{ needs.build.result }}" == "failure" ]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+          elif [ "${{ needs.verify.result }}" == "cancelled" ] || [ "${{ needs.deploy.result }}" == "cancelled" ]; then
+            echo "status=cancelled" >> $GITHUB_OUTPUT
+          else
+            echo "status=skipped" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Slack notification
+        uses: ./.github/actions/slack-notify
+        with:
+          status: ${{ steps.status.outputs.status }}
+          environment: ${{ needs.setup.outputs.environment }}
+          service_name: "Collateral Vault Subgraph"
+          version: ${{ needs.setup.outputs.version }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          additional_info: "${{ format('*Subgraph:* `{0}/{1}` → `{2}` • *Status:* {3}', needs.build.outputs.goldsky_subgraph_name, needs.build.outputs.version, needs.build.outputs.goldsky_rolling_tag, needs.deploy.outputs.deploy_status) }}"

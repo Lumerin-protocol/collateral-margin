@@ -1,0 +1,11 @@
+build
+data
+generated
+subgraph.yaml
+.env*
+!.env.example
+node_modules
+
+# Matchstick test runtime artifacts
+tests/.bin/
+tests/.latest.json

@@ -1,0 +1,135 @@
+# yaml-language-server: $schema=../schemas/portfolio.json
+# Titan Market Maker - Portfolio (perps + all futures expiries) - STAGING (base-mainnet).
+#
+#   PRIVATE_KEY                       - hex private key of the staging market-making wallet
+#   ALCHEMY_API_KEY                   - Alchemy API key (URL is composed below)
+#   PERPS_ADDRESS                     - HashPowerPerpsDEX address on base-mainnet (staging deployment)
+#   FUTURES_ADDRESS                   - Futures address on base-mainnet (staging deployment)
+#   ETH_PRICE_FEED_ADDRESS            - Chainlink ETH/USD aggregator on base-mainnet
+#   HASHPRICE_ORACLE_SUBGRAPH_URL     - hashprice-oracle subgraph URL for σ backfill at startup
+#
+# One process, one signer, one shared collateral vault. Perps and every
+# selected futures expiry quote together; the TxCoordinator sequences their
+# txs on a single nonce and each market is isolated behind its own circuit
+# breaker.
+
+nodeEnv: staging
+commitHash: ${COMMIT_HASH:-unknown}
+logLevel: ${MAKER_LOG_LEVEL:-debug}
+dryRun: ${MAKER_DRY_RUN:-false}
+# Cancel resting orders on SIGINT/SIGTERM. Set false for hot-restart deploys
+# where you'd rather absorb the brief stale-quote risk than pay cancel gas.
+cancelOrdersOnShutdown: ${MAKER_CANCEL_ORDERS_ON_SHUTDOWN:-true}
+
+wallets:
+  primary:
+    privateKey: ${PRIVATE_KEY}
+
+# Single shared signer for the whole portfolio.
+wallet: primary
+
+network:
+  name: base
+  rpcUrl: https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}
+  ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
+
+venues:
+  - kind: perps
+    address: ${PERPS_ADDRESS}
+    maxPositionSize: 50
+    pricing:
+      strategy: effective-spread
+      minSpreadBps: 15
+      volatilityMultiplier: 2.0
+      inventorySkewGamma: 0.5
+      maxSkewTicks: 20
+    sizing:
+      strategy: geometric-taper
+      baseQuantity: "1000000" # venue-native (perps hashrate base units)
+      numLevelsPerSide: 10
+      taperRatio: 0.6
+
+  - kind: futures
+    address: ${FUTURES_ADDRESS}
+    maxPositionSize: 50
+    # Quote the three nearest expiries; the roll adds/drops markets as dates mature.
+    marketSelection:
+      mode: nearest
+      count: 3
+    pricing:
+      strategy: reservation-price
+      riskAversion: 0.001
+      marginCallTimeSec: 3600
+      minSpreadBps: 15
+      volatilityMultiplier: 2.5
+      maxSkewTicks: 0
+    sizing:
+      strategy: geometric-taper
+      # 1 futures contract ≈ 1.0 perps qty (1e6). Perps total/side =
+      # baseQuantity×numLevels/1e6 = 10. Split across `count` expiries; base=4
+      # keeps taper levels non-zero. Order count is 2×levels×expiries (=60).
+      baseQuantity: 4 # venue-native (contracts)
+      numLevelsPerSide: 10
+      taperRatio: 0.6
+      # Nearest expiry keeps full size; each further date × this factor.
+      expirySizeDecay: 0.6
+
+# Shared portfolio-wide budget across every market.
+risk:
+  maxPositionSize: 50
+  maxUtilizationPct: 80
+  minCollateralBalance: 10
+  maxDailyLossUsd: 500
+  maxGasBudgetPerHourUsd: 50
+  maxGasBudgetPerDayUsd: 500
+  gasSpikeThresholdPct: 200
+  gasPenaltyBps: 5
+  urgentRequoteThresholdTicks: 10
+
+gas:
+  gasCapMultiplier: 2.0
+
+timing:
+  pollIntervalSec: 3
+  requoteCooldownSec: 1
+  resyncIntervalSec: 60
+  levelSpacingTicks: 1
+  staleBandAllowanceUsd: 0.03
+  staleSizeAllowanceUsd: 50
+
+collateral:
+  autoDeposit: true
+  autoDepositMinAmount: 1
+  maxCollateralAmount: 4000
+
+oracle:
+  windowSize: 60
+  precisionBits: 48
+  historyLookbackMultiplier: 4
+  history:
+    subgraphUrl: ${HASHPRICE_ORACLE_SUBGRAPH_URL}
+
+health:
+  port: ${MAKER_HEALTH_PORT:-3001}
+
+# Centralized submission / nonce recovery.
+txCoordinator:
+  # Cost units per tx, NOT raw call count. One unit ≈ the cheapest call:
+  # perps = one order per price level; futures = one contract (qty=1). Futures
+  # createOrder gas scales with qty, so a full 3-expiry quote is many units and
+  # must be chunked to avoid out-of-gas.
+  confirmationTimeoutSec: 60
+  maxReplacements: 2
+  replacementFeeBumpPct: 15
+
+# Per-market fault isolation.
+circuitBreaker:
+  quarantineThreshold: 3
+  baseBackoffSec: 5
+  maxBackoffSec: 180
+
+rollCheckIntervalSec: 300
+sharedStalenessGraceSec: 30
+
+readBatchSize: 100
+writeBatchSize: 100

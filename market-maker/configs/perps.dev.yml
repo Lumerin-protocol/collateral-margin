@@ -1,0 +1,98 @@
+# yaml-language-server: $schema=../schemas/perps.json
+# Titan Market Maker - Perps - DEV (base-sepolia).
+#
+# Real quoting on base-sepolia. Small sizes, debug-level logs, autoDeposit
+# on so the wallet stays funded.
+#
+#   PRIVATE_KEY                       - hex private key of the dev market-making wallet
+#   ALCHEMY_API_KEY                   - Alchemy API key (URL is composed below)
+#   PERPS_ADDRESS                     - HashPowerPerpsDEX address on base-sepolia
+#   ETH_PRICE_FEED_ADDRESS            - optional Chainlink ETH/USD aggregator on base-sepolia
+#   HASHPRICE_ORACLE_SUBGRAPH_URL     - optional hashprice-oracle subgraph URL for σ backfill
+
+nodeEnv: development
+commitHash: ${COMMIT_HASH:-unknown}
+logLevel: ${MAKER_LOG_LEVEL:-debug}
+dryRun: ${MAKER_DRY_RUN:-false}
+# Dev iterates fast; leave resting orders on base-sepolia on Ctrl-C so we
+# don't burn gas on cancel-then-reopen across every restart.
+cancelOrdersOnShutdown: true
+
+wallets:
+  primary:
+    privateKey: ${PRIVATE_KEY}
+
+network:
+  name: base-sepolia
+  rpcUrl: https://base-sepolia.g.alchemy.com/v2/${ALCHEMY_API_KEY}
+  ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
+
+venue:
+  kind: perps
+  address: ${PERPS_ADDRESS}
+  wallet: primary
+
+pricing:
+  strategy: effective-spread
+  # The MM reads the unrounded oracle answer (PerpsVenue.getRawMarketPrice),
+  # so the mid lands between ticks and tick-rounding alone produces 1-tick
+  # bid/ask separation. A non-zero floor still buys insurance for the rare
+  # case `r` lands exactly on a tick.
+  minSpreadBps: 0
+  volatilityMultiplier: 0
+  inventorySkewGamma: 0.5
+  maxSkewTicks: 20
+
+sizing:
+  strategy: geometric-taper
+  baseQuantity: "1000000" # venue-native units (hashrate base)
+  numLevelsPerSide: 10
+  taperRatio: 0.6
+
+risk:
+  maxPositionSize: 50
+  maxUtilizationPct: 80
+  minCollateralBalance: 10
+  maxDailyLossUsd: 500
+  maxGasBudgetPerHourUsd: 50
+  maxGasBudgetPerDayUsd: 500
+  gasSpikeThresholdPct: 200
+  gasPenaltyBps: 5
+  urgentRequoteThresholdTicks: 10
+
+gas:
+  gasCapMultiplier: 2.0
+
+timing:
+  pollIntervalSec: 30
+  requoteCooldownSec: 1
+  resyncIntervalSec: 60
+  # Perps matching is "limit" — deeper levels fill conditional on shallower
+  # ones being hit first, so production normally wants levelSpacing ≥ 3 to
+  # spread inventory risk along the book. In dev we keep it tight (1 tick)
+  # to match futures and visually verify the level layout.
+  levelSpacingTicks: 1
+  staleBandAllowanceUsd: 0.03
+  staleSizeAllowanceUsd: 50
+
+collateral:
+  autoDeposit: true
+  autoDepositMinAmount: 500
+  maxCollateralAmount: 5000
+
+oracle:
+  # Window de-duplicates by price, so 60 samples ≈ 60 oracle updates regardless
+  # of poll cadence. Multiplier 4× compensates for Chainlink's slow heartbeat
+  # so backfill returns a full window.
+  windowSize: 60
+  precisionBits: 48
+  historyLookbackMultiplier: 4
+  history:
+    subgraphUrl: ${HASHPRICE_ORACLE_SUBGRAPH_URL:-}
+
+health:
+  port: ${MAKER_HEALTH_PORT:-3002}
+
+readBatchSize: 100
+# Per-operation batch sizes for writes (perps: individual cancelOrder / createOrder).
+writeBatchSize: 100

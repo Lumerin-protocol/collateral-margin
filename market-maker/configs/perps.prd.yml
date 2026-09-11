@@ -1,0 +1,90 @@
+# yaml-language-server: $schema=../schemas/perps.json
+# Titan Market Maker - Perps - PRODUCTION (base-mainnet).
+#
+# Real money. Tighter risk caps and a higher utilization headroom; logs at
+# info to keep CloudWatch ingestion costs bounded. Tune sizing per
+# liquidity provision target.
+#
+#   PRIVATE_KEY                       - hex private key of the production wallet (Secrets Manager)
+#   ALCHEMY_API_KEY                   - Alchemy API key (URL is composed below)
+#   PERPS_ADDRESS                     - HashPowerPerpsDEX address on base-mainnet (production deployment)
+#   ETH_PRICE_FEED_ADDRESS            - Chainlink ETH/USD aggregator on base-mainnet (USD-denominated risk gates)
+#   HASHPRICE_ORACLE_SUBGRAPH_URL     - hashprice-oracle subgraph URL for σ backfill at startup
+
+nodeEnv: production
+commitHash: ${COMMIT_HASH:-unknown}
+logLevel: ${MAKER_LOG_LEVEL:-info}
+dryRun: ${MAKER_DRY_RUN:-false}
+# Cancel resting orders on SIGINT/SIGTERM. Set false for hot-restart deploys
+# where you'd rather absorb the brief stale-quote risk than pay cancel gas.
+cancelOrdersOnShutdown: ${MAKER_CANCEL_ORDERS_ON_SHUTDOWN:-true}
+
+wallets:
+  primary:
+    privateKey: ${PRIVATE_KEY}
+
+network:
+  name: base
+  rpcUrl: https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}
+  ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
+
+venue:
+  kind: perps
+  address: ${PERPS_ADDRESS}
+  wallet: primary
+
+pricing:
+  strategy: effective-spread
+  minSpreadBps: 10
+  volatilityMultiplier: 2.0
+  inventorySkewGamma: 0.5
+  maxSkewTicks: 20
+
+sizing:
+  strategy: geometric-taper
+  baseQuantity: "10000000" # venue-native units (hashrate base)
+  numLevelsPerSide: 10
+  taperRatio: 0.6
+
+risk:
+  maxPositionSize: 1000
+  maxUtilizationPct: 75 # tighter than dev/stg
+  minCollateralBalance: 100 # operational floor
+  maxDailyLossUsd: 1000 # daily loss circuit-breaker
+  maxGasBudgetPerHourUsd: 50
+  maxGasBudgetPerDayUsd: 500
+  gasSpikeThresholdPct: 200
+  gasPenaltyBps: 5
+  urgentRequoteThresholdTicks: 10
+
+gas:
+  gasCapMultiplier: 2.0
+
+timing:
+  pollIntervalSec: 3
+  requoteCooldownSec: 1
+  resyncIntervalSec: 60
+  levelSpacingTicks: 5
+  staleBandAllowanceUsd: 0.03
+  staleSizeAllowanceUsd: 50
+
+collateral:
+  autoDeposit: true
+  autoDepositMinAmount: 1
+  maxCollateralAmount: 10000
+oracle:
+  # 60 de-duplicated samples → ±9% standard error on σ. With Chainlink heartbeat
+  # of a few minutes and historyLookbackMultiplier=4, backfill covers ~4 hours
+  # of oracle activity, easily enough to fill the window on cold start.
+  windowSize: 60
+  precisionBits: 48
+  historyLookbackMultiplier: 4
+  history:
+    subgraphUrl: ${HASHPRICE_ORACLE_SUBGRAPH_URL}
+
+health:
+  port: ${MAKER_HEALTH_PORT:-3001}
+
+readBatchSize: 100
+# Per-operation batch sizes for writes.
+writeBatchSize: 100

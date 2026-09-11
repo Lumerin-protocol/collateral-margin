@@ -1,0 +1,13 @@
+{
+  "yaml.schemas": {
+    "./schemas/perps.json": "configs/perps.*.yml",
+    "./schemas/futures.json": "configs/futures.*.yml"
+  },
+  "yaml.format.enable": true,
+  "yaml.validate": true,
+  "yaml.hover": true,
+  "yaml.completion": true,
+  "files.associations": {
+    "configs/*.yml": "yaml"
+  }
+}

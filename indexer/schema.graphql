@@ -1,0 +1,125 @@
+# ── Vault root entity (singleton, id = "0") ─────────────────────────────────
+type Vault @entity(immutable: false) {
+  "Singleton entity, id is always the literal string \"0\"."
+  id: String!
+
+  # Contract identity / config
+  contractAddress: Bytes!
+  collateralToken: Bytes!
+  marginEngine: Bytes!
+  insuranceFundAddress: Bytes!
+  decimals: Int!
+
+  # Lifetime stats
+  totalDeposited: BigInt! # cumulative gross deposits (excludes insurance-fund deposits)
+  totalWithdrawn: BigInt! # cumulative gross withdrawals (excludes insurance-fund withdrawals)
+  insuranceFundDeposited: BigInt! # cumulative gross insurance-fund deposits
+  insuranceFundWithdrawn: BigInt! # cumulative gross insurance-fund withdrawals
+  totalSupply: BigInt! # current outstanding receipt tokens
+  insuranceFundBalance: BigInt! # current INSURANCE_FUND_ADDR balance
+  totalUsers: Int! # number of distinct addresses with non-zero historical activity
+
+  # Counters
+  depositCount: Int!
+  withdrawalCount: Int!
+  internalTransferCount: Int!
+
+  # Timestamps
+  initializedAt: BigInt!
+  lastUpdatedAt: BigInt!
+}
+
+# ── Per-user account ────────────────────────────────────────────────────────
+type VaultUser @entity(immutable: false) {
+  id: Bytes! # user address
+  address: Bytes!
+
+  "Current receipt token balance (mirrors `vault.balanceOf(address)`)."
+  balance: BigInt!
+
+  "Cumulative gross collateral deposited by/for this user."
+  totalDeposited: BigInt!
+  "Cumulative gross collateral withdrawn by/for this user."
+  totalWithdrawn: BigInt!
+
+  "Signed net of internal transfers (received - sent)."
+  netInternalIn: BigInt!
+  "Signed net of internal transfers routed via the perps engine (received - sent)."
+  netFromPerps: BigInt!
+  "Signed net of internal transfers routed via the options engine (received - sent)."
+  netFromOptions: BigInt!
+  "Signed net of internal transfers routed via any other caller (received - sent)."
+  netFromOther: BigInt!
+
+  # Counters
+  depositCount: Int!
+  withdrawalCount: Int!
+
+  # Relations
+  deposits: [VaultDeposit!]! @derivedFrom(field: "user")
+  withdrawals: [VaultWithdrawal!]! @derivedFrom(field: "user")
+  internalTransfersIn: [VaultInternalTransfer!]! @derivedFrom(field: "to")
+  internalTransfersOut: [VaultInternalTransfer!]! @derivedFrom(field: "from")
+
+  # Timestamps
+  createdAt: BigInt!
+  lastActivityAt: BigInt!
+}
+
+# ── Deposit (`Deposited` event; covers `deposit`, `depositFor`, `depositForPermit`, `depositInsuranceFund`) ─
+type VaultDeposit @entity(immutable: true) {
+  id: Bytes! # tx hash + log index
+  user: VaultUser! # receipt-token recipient
+  sender: Bytes! # account that supplied the underlying collateral (msg.sender)
+  amount: BigInt!
+  "True when this deposit credits the insurance-fund vanity address."
+  isInsuranceFund: Boolean!
+
+  # Metadata
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── Withdrawal (`Withdrawn` event; covers `withdraw`, `withdrawTo`, `withdrawInsuranceFund`) ─
+type VaultWithdrawal @entity(immutable: true) {
+  id: Bytes! # tx hash + log index
+  user: VaultUser! # account whose receipt tokens were burned
+  recipient: Bytes! # who received the underlying collateral
+  amount: BigInt!
+  "True when this withdrawal debits the insurance-fund vanity address."
+  isInsuranceFund: Boolean!
+
+  # Metadata
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── Internal transfer (`Transfer` event with from != 0x0 && to != 0x0) ──────
+"""
+Bucket for the calling contract that triggered an internal vault transfer.
+Resolved from `transaction.to` against the perps/options addresses passed in via
+the data source `context` (see subgraph.template.yaml).
+"""
+enum CallerCategory {
+  PERPS
+  OPTIONS
+  OTHER
+}
+
+type VaultInternalTransfer @entity(immutable: true) {
+  id: Bytes! # tx hash + log index
+  from: VaultUser!
+  to: VaultUser!
+  amount: BigInt!
+  "Raw `transaction.to` (the contract whose function was called by the EOA)."
+  caller: Bytes!
+  "Bucketed `caller`: PERPS / OPTIONS / OTHER."
+  callerCategory: CallerCategory!
+
+  # Metadata
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}

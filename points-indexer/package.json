@@ -1,0 +1,49 @@
+{
+  "name": "points-indexer",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "type": "module",
+  "scripts": {
+    "clean": "rm -rf data generated build subgraph.yaml",
+    "prepare:env": "envsubst < subgraph.template.yaml > subgraph.yaml",
+    "prepare-local": "set -a && source ../.env && set +a && pnpm prepare:env",
+    "codegen": "graph codegen",
+    "build": "graph build",
+    "deploy": "graph deploy --node https://api.studio.thegraph.com/deploy/ points",
+    "create-local": "graph create --node http://localhost:8020/ points",
+    "remove-local": "graph remove --node http://localhost:8020/ points",
+    "deploy-local": "graph deploy --node http://localhost:8020/ --ipfs http://localhost:5001 --version-label 0 points",
+    "setup-local": "pnpm prepare-local && pnpm codegen && pnpm build && pnpm create-local && pnpm deploy-local",
+    "test": "graph test -v 0.6.0",
+    "test:integration": "hardhat test nodejs",
+    "test:integration:debug": "MATCHSTICK_VERBOSE=true hardhat test nodejs",
+    "lint": "biome lint .",
+    "indexer": "docker compose --env-file ../.env up",
+    "graph:api": "open http://localhost:8030/graphql/playground",
+    "lint:fix": "biome check --write .",
+    "typecheck": "tsgo --noEmit -p integration/tsconfig.json"
+  },
+  "dependencies": {
+    "@graphprotocol/graph-ts": "0.38.2"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.13",
+    "@graphprotocol/graph-cli": "^0.98.1",
+    "@nomicfoundation/hardhat-network-helpers": "^3.0.11",
+    "@nomicfoundation/hardhat-node-test-runner": "3.0.17",
+    "@nomicfoundation/hardhat-viem": "3.0.9",
+    "@types/node": "^25.3.0",
+    "@typescript/native-preview": "7.0.0-dev.20260707.2",
+    "assemblyscript": "^0.19.23",
+    "collateral-margin-contracts": "link:../contracts",
+    "hardhat": "^3.9.1",
+    "hardhat-matchstick-ts": "github:lsheva/matchstick-ts#v0.4.2&path:packages/hardhat-matchstick-ts",
+    "matchstick-as": "0.6.0",
+    "matchstick-ts": "github:lsheva/matchstick-ts#v0.4.2&path:packages/matchstick-ts",
+    "typescript": "^5.9.3",
+    "viem": "2.52.2"
+  },
+  "packageManager": "pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621"
+}

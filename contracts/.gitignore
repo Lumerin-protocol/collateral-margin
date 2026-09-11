@@ -3,3 +3,7 @@ artifacts
 cache
 .env
 *.tsbuildinfo
+
+# Deploy script output (deployed addresses)
+points-addr.tmp
+points-hook-addr.tmp

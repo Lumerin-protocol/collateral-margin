@@ -1,0 +1,577 @@
+name: Deploy Collateral Margin Keeper
+
+# Unified cross-venue liquidation keeper (perps + futures + vault/PME).
+# Replaces derivatives-marketplace svc-perps-keeper-*.
+#
+# Terraform (.bedrock/.terragrunt/06_col_mar_keeper_svc.tf) builds ECS shell,
+# internal ALB, Route53 keeper.{env}.hashpower.exchange, and log group.
+# This workflow builds the image, pushes to GHCR, and registers task-def
+# revisions with full runtime config from GitHub.
+#
+# GitHub Variables (per environment: dev / stg / main):
+#   NETWORK                         e.g. base-sepolia
+#   VAULT_ADDRESS                   CollateralVault proxy
+#   PME_ADDRESS                     PortfolioMarginEngine proxy
+#   PERPS_ADDRESS                   HashPowerPerpsDEX
+#   FUTURES_ADDRESS                 Futures proxy
+#   HASHPRICE_USD_ADDRESS           HashpriceUSD aggregator
+#   BTC_USD_FEED_ADDRESS            Chainlink BTC/USDC feed
+#   ETH_USD_FEED_ADDRESS            optional — gas cost logging
+#   DRY_RUN                         "true" | "false" (default false)
+#   KEEPER_MIN_PROFIT_MARGIN        default "0"
+#   KEEPER_DESIRED_COUNT            default "1" (set "0" to halt)
+#   LOG_LEVEL                       default "info"
+#   DISCOVERY_MODE                  events | webhook | both (default events)
+#   BACKFILL_FROM_BLOCK             optional startup discovery backfill anchor
+#   DELIVERY_KEEPER_ENABLED         default "false"
+#   HEALTH_PORT                     default "3000" (must match TF cnt_port)
+#   PRICE_MOVE_TRIGGER_BPS          default "1"
+#   SWEEP_INTERVAL_MS               default "60000"
+#   ALERT_WEBHOOK_URL               optional Slack/Discord webhook
+#
+# GitHub Secrets (per environment):
+#   ALCHEMY_API_KEY                 RPC (or set ETH_NODE_ADDRESS via var — not secret)
+#   LIQUIDATOR_PRIVATE_KEY          same wallet as legacy perps keeper
+#   WEBHOOK_SECRET                  optional — Goldsky bearer token
+#
+# Repository secrets (all environments):
+#   AWS_ROLE_ARN_DEV / _STG / _LMN    from terragrunt output github_actions_role_arn
+#   SLACK_WEBHOOK_URL                 optional — deploy notifications
+
+on:
+  push:
+    branches:
+      - dev
+      - stg
+      - main
+      - "cicd/**"
+    paths:
+      - "keeper/**"
+      - ".github/workflows/deploy-keeper.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment (dev=DEV, stg=STG, main=LMN/PROD)"
+        required: true
+        type: choice
+        options:
+          - dev
+          - stg
+          - main
+
+permissions:
+  id-token: write
+  contents: write
+  packages: write
+
+env:
+  GHCR_REGISTRY: ghcr.io
+  GHCR_IMAGE: ghcr.io/lumerin-protocol/collateral-margin-keeper
+
+jobs:
+  build:
+    name: 🔨 Build
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.gen_tag.outputs.version }}
+      tag: ${{ steps.gen_tag.outputs.tag_name }}
+      environment: ${{ steps.gen_tag.outputs.environment }}
+      env_suffix: ${{ steps.env_config.outputs.env_suffix }}
+      aws_region: ${{ steps.env_config.outputs.aws_region }}
+      ecs_cluster: ${{ steps.env_config.outputs.ecs_cluster }}
+      ecs_service: ${{ steps.env_config.outputs.ecs_service }}
+      task_family: ${{ steps.env_config.outputs.task_family }}
+      keeper_health_url: ${{ steps.env_config.outputs.keeper_health_url }}
+      is_cicd_branch: ${{ steps.gen_tag.outputs.is_cicd_branch }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Generate version tag
+        id: gen_tag
+        uses: ./.github/actions/gen-tag
+        with:
+          component: keeper
+          major_version: "1"
+          environment_override: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.environment || '' }}
+
+      - name: Environment config
+        id: env_config
+        run: |
+          ENV="${{ steps.gen_tag.outputs.environment }}"
+          echo "aws_region=us-east-1" >> $GITHUB_OUTPUT
+          echo "task_family=tsk-col-mar-keeper" >> $GITHUB_OUTPUT
+
+          case "$ENV" in
+            dev)
+              SUFFIX="dev"
+              URL_HOST_PREFIX="dev."
+              ;;
+            stg)
+              SUFFIX="stg"
+              URL_HOST_PREFIX="stg."
+              ;;
+            main)
+              SUFFIX="lmn"
+              URL_HOST_PREFIX=""
+              ;;
+            *)
+              echo "::error::Unknown environment '$ENV'"
+              exit 1
+              ;;
+          esac
+
+          echo "env_suffix=${SUFFIX}" >> $GITHUB_OUTPUT
+          echo "ecs_cluster=ecs-derivatives-marketplace-${SUFFIX}" >> $GITHUB_OUTPUT
+          echo "ecs_service=svc-col-mar-keeper-${SUFFIX}" >> $GITHUB_OUTPUT
+          echo "keeper_health_url=https://keeper.${URL_HOST_PREFIX}hashpower.exchange/health" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Docker tags
+        id: docker_tags
+        run: |
+          TAGS="${{ env.GHCR_IMAGE }}:${{ steps.gen_tag.outputs.version }}
+          ${{ env.GHCR_IMAGE }}:${{ steps.gen_tag.outputs.environment }}-latest"
+
+          if [ "${{ steps.gen_tag.outputs.environment }}" == "main" ]; then
+            TAGS="${TAGS}
+          ${{ env.GHCR_IMAGE }}:latest"
+          fi
+
+          echo "tags<<EOF" >> $GITHUB_OUTPUT
+          echo "$TAGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./keeper
+          push: ${{ steps.gen_tag.outputs.is_cicd_branch != 'true' }}
+          load: ${{ steps.gen_tag.outputs.is_cicd_branch == 'true' }}
+          tags: ${{ steps.docker_tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.repositoryUrl }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.gen_tag.outputs.version }}
+
+      - name: CI/CD test summary
+        if: steps.gen_tag.outputs.is_cicd_branch == 'true'
+        run: |
+          echo "## 🔧 CI/CD Test Build Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Mode:** Test only (no deployment)" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ steps.gen_tag.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+
+  deploy:
+    name: 🚀 Deploy
+    runs-on: ubuntu-latest
+    needs: build
+    if: needs.build.outputs.is_cicd_branch != 'true'
+    environment: ${{ needs.build.outputs.environment }}
+    outputs:
+      task_def_arn: ${{ steps.deploy.outputs.task_def_arn }}
+      skipped: ${{ steps.svc_check.outputs.skip }}
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ needs.build.outputs.environment == 'dev' && secrets.AWS_ROLE_ARN_DEV || needs.build.outputs.environment == 'stg' && secrets.AWS_ROLE_ARN_STG || secrets.AWS_ROLE_ARN_LMN }}
+          aws-region: ${{ needs.build.outputs.aws_region }}
+          role-session-name: GitHubActions-ColMarKeeper-${{ github.run_id }}
+
+      - name: Verify service exists
+        id: svc_check
+        env:
+          SERVICE: ${{ needs.build.outputs.ecs_service }}
+          CLUSTER: ${{ needs.build.outputs.ecs_cluster }}
+          REGION: ${{ needs.build.outputs.aws_region }}
+        run: |
+          ACTIVE_COUNT=$(aws ecs describe-services \
+            --cluster "$CLUSTER" \
+            --services "$SERVICE" \
+            --region "$REGION" \
+            --query 'services[?status==`ACTIVE`] | length(@)' \
+            --output text 2>/dev/null || echo "0")
+
+          if [ "$ACTIVE_COUNT" = "0" ]; then
+            echo "⚠️ ECS service '$SERVICE' is not ACTIVE in cluster '$CLUSTER'."
+            echo "    Set keeper_service.create=true in bedrock tfvars and apply first."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Service '$SERVICE' is active. Proceeding with deploy."
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Render new task definition + deploy
+        id: deploy
+        if: steps.svc_check.outputs.skip != 'true'
+        env:
+          CLUSTER: ${{ needs.build.outputs.ecs_cluster }}
+          SERVICE: ${{ needs.build.outputs.ecs_service }}
+          TASK_FAMILY: ${{ needs.build.outputs.task_family }}
+          REGION: ${{ needs.build.outputs.aws_region }}
+          IMAGE: ${{ env.GHCR_IMAGE }}:${{ needs.build.outputs.version }}
+          KEEPER_VERSION: ${{ needs.build.outputs.version }}
+
+          NETWORK: ${{ vars.NETWORK }}
+          VAULT_ADDRESS: ${{ vars.VAULT_ADDRESS }}
+          PME_ADDRESS: ${{ vars.PME_ADDRESS }}
+          PERPS_ADDRESS: ${{ vars.PERPS_ADDRESS }}
+          FUTURES_ADDRESS: ${{ vars.FUTURES_ADDRESS }}
+          HASHPRICE_USD_ADDRESS: ${{ vars.HASHPRICE_USD_ADDRESS }}
+          BTC_USD_FEED_ADDRESS: ${{ vars.BTC_USD_FEED_ADDRESS }}
+          ETH_USD_FEED_ADDRESS: ${{ vars.ETH_USD_FEED_ADDRESS }}
+          DRY_RUN: ${{ vars.DRY_RUN }}
+          KEEPER_MIN_PROFIT_MARGIN: ${{ vars.KEEPER_MIN_PROFIT_MARGIN }}
+          KEEPER_DESIRED_COUNT: ${{ vars.KEEPER_DESIRED_COUNT }}
+          LOG_LEVEL: ${{ vars.LOG_LEVEL }}
+          DISCOVERY_MODE: ${{ vars.DISCOVERY_MODE }}
+          BACKFILL_FROM_BLOCK: ${{ vars.BACKFILL_FROM_BLOCK }}
+          DELIVERY_KEEPER_ENABLED: ${{ vars.DELIVERY_KEEPER_ENABLED }}
+          HEALTH_PORT: ${{ vars.HEALTH_PORT }}
+          PRICE_MOVE_TRIGGER_BPS: ${{ vars.PRICE_MOVE_TRIGGER_BPS }}
+          SWEEP_INTERVAL_MS: ${{ vars.SWEEP_INTERVAL_MS }}
+          ALERT_WEBHOOK_URL: ${{ vars.ALERT_WEBHOOK_URL }}
+          ETH_NODE_ADDRESS: ${{ vars.ETH_NODE_ADDRESS }}
+
+          ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
+          LIQUIDATOR_PRIVATE_KEY: ${{ secrets.LIQUIDATOR_PRIVATE_KEY }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+        run: |
+          set -euo pipefail
+          DESIRED_COUNT="${KEEPER_DESIRED_COUNT:-1}"
+
+          echo "🚀 Deploying keeper to ${{ needs.build.outputs.environment }}"
+          echo "   Cluster: ${CLUSTER}"
+          echo "   Service: ${SERVICE}"
+          echo "   Task Family: ${TASK_FAMILY}"
+          echo "   Image: ${IMAGE}"
+          echo "   DRY_RUN: ${DRY_RUN:-false}"
+          echo "   Desired Count: ${DESIRED_COUNT}"
+
+          aws ecs describe-task-definition \
+            --task-definition "${TASK_FAMILY}" \
+            --region "${REGION}" \
+            --query 'taskDefinition' > task-def.json
+
+          jq --arg IMAGE "${IMAGE}" '
+            .containerDefinitions[0].image = $IMAGE |
+            del(.containerDefinitions[0].command, .containerDefinitions[0].entryPoint) |
+            del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                .compatibilities, .registeredAt, .registeredBy)
+          ' task-def.json > new-task-def.json
+
+          jq -n \
+            --arg NETWORK                   "${NETWORK}" \
+            --arg VAULT_ADDRESS             "${VAULT_ADDRESS}" \
+            --arg PME_ADDRESS               "${PME_ADDRESS}" \
+            --arg PERPS_ADDRESS             "${PERPS_ADDRESS}" \
+            --arg FUTURES_ADDRESS           "${FUTURES_ADDRESS}" \
+            --arg HASHPRICE_USD_ADDRESS     "${HASHPRICE_USD_ADDRESS}" \
+            --arg BTC_USD_FEED_ADDRESS      "${BTC_USD_FEED_ADDRESS}" \
+            --arg ETH_USD_FEED_ADDRESS      "${ETH_USD_FEED_ADDRESS:-}" \
+            --arg DRY_RUN                   "${DRY_RUN:-false}" \
+            --arg KEEPER_MIN_PROFIT_MARGIN  "${KEEPER_MIN_PROFIT_MARGIN:-0}" \
+            --arg LOG_LEVEL                 "${LOG_LEVEL:-info}" \
+            --arg DISCOVERY_MODE            "${DISCOVERY_MODE:-events}" \
+            --arg BACKFILL_FROM_BLOCK       "${BACKFILL_FROM_BLOCK:-}" \
+            --arg DELIVERY_KEEPER_ENABLED   "${DELIVERY_KEEPER_ENABLED:-false}" \
+            --arg HEALTH_PORT               "${HEALTH_PORT:-3000}" \
+            --arg PRICE_MOVE_TRIGGER_BPS    "${PRICE_MOVE_TRIGGER_BPS:-1}" \
+            --arg SWEEP_INTERVAL_MS         "${SWEEP_INTERVAL_MS:-60000}" \
+            --arg ALERT_WEBHOOK_URL         "${ALERT_WEBHOOK_URL:-}" \
+            --arg ETH_NODE_ADDRESS          "${ETH_NODE_ADDRESS:-}" \
+            --arg ALCHEMY_API_KEY           "${ALCHEMY_API_KEY}" \
+            --arg LIQUIDATOR_PRIVATE_KEY    "${LIQUIDATOR_PRIVATE_KEY}" \
+            --arg WEBHOOK_SECRET            "${WEBHOOK_SECRET:-}" \
+            --arg KEEPER_VERSION            "${KEEPER_VERSION}" \
+            '[
+              {name:"KEEPER_VERSION", value:$KEEPER_VERSION},
+              {name:"NETWORK", value:$NETWORK},
+              {name:"VAULT_ADDRESS", value:$VAULT_ADDRESS},
+              {name:"PME_ADDRESS", value:$PME_ADDRESS},
+              {name:"PERPS_ADDRESS", value:$PERPS_ADDRESS},
+              {name:"FUTURES_ADDRESS", value:$FUTURES_ADDRESS},
+              {name:"HASHPRICE_USD_ADDRESS", value:$HASHPRICE_USD_ADDRESS},
+              {name:"BTC_USD_FEED_ADDRESS", value:$BTC_USD_FEED_ADDRESS},
+              {name:"ETH_USD_FEED_ADDRESS", value:$ETH_USD_FEED_ADDRESS},
+              {name:"DRY_RUN", value:$DRY_RUN},
+              {name:"KEEPER_MIN_PROFIT_MARGIN", value:$KEEPER_MIN_PROFIT_MARGIN},
+              {name:"LOG_LEVEL", value:$LOG_LEVEL},
+              {name:"DISCOVERY_MODE", value:$DISCOVERY_MODE},
+              {name:"DELIVERY_KEEPER_ENABLED", value:$DELIVERY_KEEPER_ENABLED},
+              {name:"HEALTH_PORT", value:$HEALTH_PORT},
+              {name:"PRICE_MOVE_TRIGGER_BPS", value:$PRICE_MOVE_TRIGGER_BPS},
+              {name:"SWEEP_INTERVAL_MS", value:$SWEEP_INTERVAL_MS},
+              {name:"ALERT_WEBHOOK_URL", value:$ALERT_WEBHOOK_URL},
+              {name:"ETH_NODE_ADDRESS", value:$ETH_NODE_ADDRESS},
+              {name:"ALCHEMY_API_KEY", value:$ALCHEMY_API_KEY},
+              {name:"LIQUIDATOR_PRIVATE_KEY", value:$LIQUIDATOR_PRIVATE_KEY},
+              {name:"WEBHOOK_SECRET", value:$WEBHOOK_SECRET}
+            ] + (
+              if $BACKFILL_FROM_BLOCK == "" then []
+              else [{name:"BACKFILL_FROM_BLOCK", value:$BACKFILL_FROM_BLOCK}]
+              end
+            )' > env-block.json
+
+          jq --slurpfile env env-block.json '
+            .containerDefinitions[0].environment = $env[0] |
+            del(.containerDefinitions[0].secrets, .containerDefinitions[0].command, .containerDefinitions[0].entryPoint)
+          ' new-task-def.json > final-task-def.json
+
+          NEW_TASK_DEF=$(aws ecs register-task-definition \
+            --cli-input-json file://final-task-def.json \
+            --region "${REGION}" \
+            --query 'taskDefinition.taskDefinitionArn' --output text)
+
+          echo "✅ Registered: ${NEW_TASK_DEF}"
+
+          # Export the exact ARN we deployed so the verify job can assert the
+          # service actually rolled forward to *this* revision (and didn't
+          # silently roll back to a prior one via the deployment circuit
+          # breaker — which still leaves the service "stable").
+          echo "task_def_arn=${NEW_TASK_DEF}" >> "$GITHUB_OUTPUT"
+
+          aws ecs update-service \
+            --cluster "${CLUSTER}" \
+            --service "${SERVICE}" \
+            --task-definition "${NEW_TASK_DEF}" \
+            --desired-count "${DESIRED_COUNT}" \
+            --region "${REGION}" \
+            --force-new-deployment > /dev/null
+
+          echo "✅ Deployment triggered"
+
+  verify:
+    name: 🔍 Verify
+    runs-on: ubuntu-latest
+    needs: [build, deploy]
+    if: needs.build.outputs.is_cicd_branch != 'true'
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ needs.build.outputs.environment == 'dev' && secrets.AWS_ROLE_ARN_DEV || needs.build.outputs.environment == 'stg' && secrets.AWS_ROLE_ARN_STG || secrets.AWS_ROLE_ARN_LMN }}
+          aws-region: ${{ needs.build.outputs.aws_region }}
+          role-session-name: GitHubActions-ColMarKeeper-Verify-${{ github.run_id }}
+
+      - name: Verify rollout reached the deployed revision
+        id: rollout
+        env:
+          SERVICE: ${{ needs.build.outputs.ecs_service }}
+          CLUSTER: ${{ needs.build.outputs.ecs_cluster }}
+          REGION: ${{ needs.build.outputs.aws_region }}
+          EXPECTED_ARN: ${{ needs.deploy.outputs.task_def_arn }}
+          DEPLOY_SKIPPED: ${{ needs.deploy.outputs.skipped }}
+        run: |
+          set -euo pipefail
+
+          if [ "${DEPLOY_SKIPPED}" = "true" ] || [ -z "${EXPECTED_ARN}" ]; then
+            echo "⚠️ Deploy was skipped (no task definition registered) — nothing to verify."
+            exit 0
+          fi
+
+          ACTIVE=$(aws ecs describe-services \
+            --cluster "$CLUSTER" \
+            --services "$SERVICE" \
+            --region "$REGION" \
+            --query 'services[?status==`ACTIVE`] | length(@)' \
+            --output text 2>/dev/null || echo "0")
+          if [ "$ACTIVE" = "0" ]; then
+            echo "⚠️ Service $SERVICE not active — nothing to verify."
+            exit 0
+          fi
+
+          echo "diagnose=true" >> "$GITHUB_OUTPUT"
+          echo "🎯 Expecting service to converge on: ${EXPECTED_ARN}"
+
+          # `wait services-stable` only proves the service is steady — NOT that
+          # it's steady on the *new* revision. With the deployment circuit
+          # breaker enabled, a task that crash-loops on startup gets rolled
+          # back to the previous revision, and the service is then "stable"
+          # again. So we wait (best-effort) and then assert the truth below.
+          echo "⏳ Waiting for $SERVICE to stabilize (best-effort)..."
+          if aws ecs wait services-stable \
+            --cluster "$CLUSTER" --services "$SERVICE" --region "$REGION"; then
+            echo "   service reported stable"
+          else
+            echo "   ⚠️ stabilization wait did not succeed — inspecting state anyway"
+          fi
+
+          # The PRIMARY deployment is the one ECS is currently driving toward.
+          # rolloutState is COMPLETED only when the new tasks passed health
+          # checks; FAILED means the circuit breaker tripped (and may have
+          # rolled back). We assert BOTH the task-def ARN and the rollout state.
+          PRIMARY=$(aws ecs describe-services \
+            --cluster "$CLUSTER" --services "$SERVICE" --region "$REGION" \
+            --query 'services[0].deployments[?status==`PRIMARY`] | [0]' \
+            --output json)
+
+          LIVE_ARN=$(echo "$PRIMARY" | jq -r '.taskDefinition // ""')
+          ROLLOUT=$(echo "$PRIMARY" | jq -r '.rolloutState // "UNKNOWN"')
+          ROLLOUT_REASON=$(echo "$PRIMARY" | jq -r '.rolloutStateReason // ""')
+          RUNNING=$(echo "$PRIMARY" | jq -r '.runningCount // 0')
+          DESIRED=$(echo "$PRIMARY" | jq -r '.desiredCount // 0')
+          FAILED=$(echo "$PRIMARY" | jq -r '.failedTasks // 0')
+
+          echo "   live PRIMARY task-def : ${LIVE_ARN}"
+          echo "   rolloutState          : ${ROLLOUT} (${ROLLOUT_REASON})"
+          echo "   running/desired/failed: ${RUNNING}/${DESIRED}/${FAILED}"
+
+          FAIL=0
+          if [ "$LIVE_ARN" != "$EXPECTED_ARN" ]; then
+            echo "::error::Service is running '${LIVE_ARN}' but we deployed '${EXPECTED_ARN}'. The new revision did not roll out (likely a startup crash + circuit-breaker rollback)."
+            FAIL=1
+          fi
+          if [ "$ROLLOUT" != "COMPLETED" ]; then
+            echo "::error::Deployment rolloutState is '${ROLLOUT}', expected 'COMPLETED'. Reason: ${ROLLOUT_REASON}"
+            FAIL=1
+          fi
+          if [ "$RUNNING" != "$DESIRED" ]; then
+            echo "::error::runningCount (${RUNNING}) != desiredCount (${DESIRED})."
+            FAIL=1
+          fi
+
+          if [ "$FAIL" != "0" ]; then
+            exit 1
+          fi
+          echo "✅ Service converged on the deployed revision."
+
+      # NOTE: There is intentionally no public HTTP smoke-test of /health here.
+      # The keeper sits behind an INTERNAL ALB (see
+      # .bedrock/.terragrunt/06_col_mar_keeper_svc.tf) that only accepts traffic
+      # from the VPC CIDR and VPN range — keeper.{env}.hashpower.exchange is not
+      # resolvable/reachable from GitHub-hosted runners on the public internet.
+      # Health is already proven above: the ALB target group runs a /health
+      # check, and ECS only reports rolloutState=COMPLETED once the new tasks
+      # pass it, which the rollout verification asserts alongside the exact
+      # deployed task-def ARN.
+
+      - name: Diagnose failed rollout
+        if: failure() && steps.rollout.outputs.diagnose == 'true'
+        env:
+          SERVICE: ${{ needs.build.outputs.ecs_service }}
+          CLUSTER: ${{ needs.build.outputs.ecs_cluster }}
+          REGION: ${{ needs.build.outputs.aws_region }}
+          LOG_GROUP: /ecs/col-mar-keeper-${{ needs.build.outputs.env_suffix }}
+        run: |
+          set +e
+          echo "## ❌ Rollout diagnostics" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "### Stopped tasks (stop reasons)"
+          STOPPED=$(aws ecs list-tasks --cluster "$CLUSTER" --service-name "$SERVICE" \
+            --desired-status STOPPED --region "$REGION" \
+            --query 'taskArns' --output text)
+          if [ -n "$STOPPED" ] && [ "$STOPPED" != "None" ]; then
+            aws ecs describe-tasks --cluster "$CLUSTER" --tasks $STOPPED --region "$REGION" \
+              --query 'tasks[].{stoppedReason:stoppedReason,task:taskArn,containers:containers[].{name:name,exitCode:exitCode,reason:reason}}' \
+              --output json | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "(no stopped tasks found)" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+          echo "### Recent keeper logs (${LOG_GROUP}, last 10m)"
+          aws logs tail "$LOG_GROUP" --region "$REGION" --since 10m --format short 2>&1 \
+            | tail -n 60 | tee -a "$GITHUB_STEP_SUMMARY"
+
+  cleanup:
+    name: 🧹 Cleanup
+    runs-on: ubuntu-latest
+    needs: [build, verify]
+    if: always() && needs.build.outputs.is_cicd_branch != 'true'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        if: needs.verify.result == 'success'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push tag
+        if: needs.verify.result == 'success'
+        run: |
+          TAG_NAME="${{ needs.build.outputs.tag }}"
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "⚠️ Tag $TAG_NAME already exists, skipping"
+          else
+            git tag -a "$TAG_NAME" -m "Release ${{ needs.build.outputs.version }} - Keeper deployed to ${{ needs.build.outputs.environment }}"
+            git push origin "$TAG_NAME"
+            echo "✅ Tag pushed"
+          fi
+
+      - name: Deployment summary
+        if: needs.verify.result == 'success'
+        run: |
+          echo "## 🎉 Keeper Deployment Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ needs.build.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ needs.build.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Image:** \`${{ env.GHCR_IMAGE }}:${{ needs.build.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Health:** ${{ needs.build.outputs.keeper_health_url }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Cluster:** ${{ needs.build.outputs.ecs_cluster }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Service:** ${{ needs.build.outputs.ecs_service }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Failure summary
+        if: needs.verify.result == 'failure'
+        run: |
+          echo "## ❌ Keeper Deployment Failed" >> $GITHUB_STEP_SUMMARY
+          echo "Check deploy and verify job logs." >> $GITHUB_STEP_SUMMARY
+
+  notify:
+    name: 📢 Notify
+    runs-on: ubuntu-latest
+    needs: [build, deploy, verify, cleanup]
+    if: always() && needs.build.result == 'success'
+
+    steps:
+      - name: Checkout (for composite action)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 2
+
+      - name: Determine status
+        id: status
+        run: |
+          if [ "${{ needs.build.outputs.is_cicd_branch }}" == "true" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          elif [ "${{ needs.verify.result }}" == "success" ]; then
+            echo "status=success" >> $GITHUB_OUTPUT
+          elif [ "${{ needs.verify.result }}" == "failure" ] || [ "${{ needs.deploy.result }}" == "failure" ]; then
+            echo "status=failure" >> $GITHUB_OUTPUT
+          else
+            echo "status=skipped" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Slack notification
+        uses: ./.github/actions/slack-notify
+        with:
+          status: ${{ steps.status.outputs.status }}
+          environment: ${{ needs.build.outputs.environment }}
+          service_name: "Collateral Margin Keeper"
+          version: ${{ needs.build.outputs.version }}
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          image_tag: ${{ needs.build.outputs.is_cicd_branch != 'true' && format('{0}:{1}', env.GHCR_IMAGE, needs.build.outputs.version) || '' }}
+          additional_info: "${{ needs.build.outputs.is_cicd_branch == 'true' && '*Mode:* CI/CD test build only' || format('*Health:* <{0}|keeper> • *Cluster:* `{1}` • *Service:* `{2}`', needs.build.outputs.keeper_health_url, needs.build.outputs.ecs_cluster, needs.build.outputs.ecs_service) }}"

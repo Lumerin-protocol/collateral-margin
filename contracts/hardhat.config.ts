@@ -1,19 +1,26 @@
 import { configVariable, defineConfig } from "hardhat/config";
 import hardhatToolboxViem from "@nomicfoundation/hardhat-toolbox-viem";
-import codegenPlugin from "./plugins/codegen/index.ts";
+import hardhatViemAbi from "hardhat-viem-abi";
 import { tryLoadEnvFile } from "./lib/env.ts";
 
 tryLoadEnvFile("./../.env");
 tryLoadEnvFile(".env");
 
 export default defineConfig({
-  plugins: [hardhatToolboxViem, codegenPlugin],
+  plugins: [hardhatToolboxViem, hardhatViemAbi],
   codegen: {
+    // Keepers and the UI install `abi/` as this package name; do not rename casually.
+    packageJson: { name: "collateral-margin-abi" },
     contracts: [
       "CollateralVault",
       "ICollateralVault",
       "PortfolioMarginEngine",
       "IPortfolioMarginEngine",
+      "Points",
+      "IPoints",
+      "PointsHook",
+      "IPointsHook",
+      "PointsRedeemer",
     ],
   },
   paths: {

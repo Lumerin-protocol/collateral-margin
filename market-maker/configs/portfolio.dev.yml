@@ -1,0 +1,143 @@
+# yaml-language-server: $schema=../schemas/portfolio.json
+# Titan Market Maker - Portfolio (perps + all futures expiries) - DEV (base-sepolia).
+#
+#   PRIVATE_KEY                       - hex private key of the dev market-making wallet
+#   ALCHEMY_API_KEY                   - Alchemy API key (URL is composed below)
+#   PERPS_ADDRESS                     - HashPowerPerpsDEX address on base-sepolia
+#   FUTURES_ADDRESS                   - Futures address on base-sepolia
+#   ETH_PRICE_FEED_ADDRESS            - optional Chainlink ETH/USD aggregator on base-sepolia
+#   HASHPRICE_ORACLE_SUBGRAPH_URL     - optional hashprice-oracle subgraph URL for σ backfill
+#
+# One process, one signer, one shared collateral vault. Perps and every
+# selected futures expiry quote together; the TxCoordinator sequences their
+# txs on a single nonce and each market is isolated behind its own circuit
+# breaker.
+
+nodeEnv: development
+commitHash: ${COMMIT_HASH:-unknown}
+logLevel: ${MAKER_LOG_LEVEL:-debug}
+dryRun: ${MAKER_DRY_RUN:-false}
+# Dev iterates fast; leave resting orders on base-sepolia on Ctrl-C so we
+# don't burn gas on cancel-then-reopen across every restart.
+cancelOrdersOnShutdown: false
+
+wallets:
+  primary:
+    privateKey: ${PRIVATE_KEY}
+
+# Single shared signer for the whole portfolio.
+wallet: primary
+
+network:
+  name: base-sepolia
+  rpcUrl: https://base-sepolia.g.alchemy.com/v2/${ALCHEMY_API_KEY}
+  ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
+
+venues:
+  - kind: perps
+    address: ${PERPS_ADDRESS}
+    maxPositionSize: 50
+    pricing:
+      # The MM reads the unrounded oracle answer (PerpsVenue.getRawMarketPrice),
+      # so the mid lands between ticks and tick-rounding alone produces 1-tick
+      # bid/ask separation. A non-zero floor still buys insurance for the rare
+      # case `r` lands exactly on a tick.
+      strategy: effective-spread
+      minSpreadBps: 0
+      volatilityMultiplier: 0
+      inventorySkewGamma: 0.5
+      maxSkewTicks: 20
+    sizing:
+      strategy: geometric-taper
+      baseQuantity: "1000000" # venue-native (perps hashrate base units)
+      numLevelsPerSide: 10
+      taperRatio: 0.6
+
+  - kind: futures
+    address: ${FUTURES_ADDRESS}
+    maxPositionSize: 50
+    # Quote the three nearest expiries; the roll adds/drops markets as dates mature.
+    marketSelection:
+      mode: nearest
+      count: 3
+    pricing:
+      strategy: reservation-price
+      riskAversion: 0.001
+      marginCallTimeSec: 3600
+      minSpreadBps: 0
+      volatilityMultiplier: 0
+      maxSkewTicks: 0
+    sizing:
+      strategy: geometric-taper
+      # 1 futures contract ≈ 1.0 perps qty (1e6). Perps total/side =
+      # baseQuantity×numLevels/1e6 = 10. Split across `count` expiries; base=4
+      # keeps taper levels non-zero. Order count is 2×levels×expiries (=60).
+      baseQuantity: 4 # venue-native (contracts)
+      numLevelsPerSide: 10
+      taperRatio: 0.6
+      # Nearest expiry keeps full size; each further date × this factor.
+      expirySizeDecay: 0.6
+
+# Shared portfolio-wide budget across every market.
+risk:
+  maxPositionSize: 50
+  maxUtilizationPct: 80
+  minCollateralBalance: 10
+  maxDailyLossUsd: 500
+  maxGasBudgetPerHourUsd: 50
+  maxGasBudgetPerDayUsd: 500
+  gasSpikeThresholdPct: 200
+  gasPenaltyBps: 5
+  urgentRequoteThresholdTicks: 10
+
+gas:
+  gasCapMultiplier: 2.0
+
+timing:
+  pollIntervalSec: 10
+  requoteCooldownSec: 1
+  resyncIntervalSec: 60
+  levelSpacingTicks: 1
+  staleBandAllowanceUsd: 0.03
+  staleSizeAllowanceUsd: 50
+
+collateral:
+  autoDeposit: true
+  autoDepositMinAmount: 500
+  # Headroom for 10-level books on perps + 3 futures expiries.
+  maxCollateralAmount: 10000
+
+oracle:
+  # Window de-duplicates by price, so 60 samples ≈ 60 oracle updates regardless
+  # of poll cadence. Multiplier 4× compensates for Chainlink's slow heartbeat
+  # so backfill returns a full window.
+  windowSize: 60
+  precisionBits: 48
+  historyLookbackMultiplier: 4
+  history:
+    subgraphUrl: ${HASHPRICE_ORACLE_SUBGRAPH_URL:-}
+
+health:
+  port: ${MAKER_HEALTH_PORT:-3001}
+
+# Centralized submission / nonce recovery.
+txCoordinator:
+  # Cost units per tx, NOT raw call count. One unit ≈ the cheapest call:
+  # perps = one order per price level; futures = one contract (qty=1). Futures
+  # createOrder gas scales with qty, so a full 3-expiry quote is many units and
+  # must be chunked to avoid out-of-gas. Lowered from 50 for base-sepolia.
+  confirmationTimeoutSec: 60
+  maxReplacements: 2
+  replacementFeeBumpPct: 15
+
+# Per-market fault isolation.
+circuitBreaker:
+  quarantineThreshold: 3
+  baseBackoffSec: 5
+  maxBackoffSec: 180
+
+rollCheckIntervalSec: 300
+sharedStalenessGraceSec: 30
+
+readBatchSize: 100
+writeBatchSize: 100

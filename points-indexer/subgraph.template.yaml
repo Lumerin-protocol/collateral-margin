@@ -1,0 +1,62 @@
+# Use subgraph.template.yaml to add changes to the subgraph.yaml file.
+# Variables are substituted via envsubst from environment variables.
+#
+# Hard precondition (design §7): the POINTS token and PointsRedeemer must be
+# deployed on the SAME network with finalized addresses. A single subgraph cannot
+# index across networks. The PointsHook is intentionally NOT indexed — all accrual
+# is mirrored from the POINTS `Transfer` (mint) stream.
+specVersion: 1.3.0
+indexerHints:
+  prune: auto
+schema:
+  file: ./schema.graphql
+dataSources:
+  # ── Canonical mirror: HP balances + mints from Transfer (mint/burn) ───────
+  - kind: ethereum
+    name: Points
+    network: "${NETWORK}"
+    source:
+      address: "${POINTS_ADDRESS}"
+      startBlock: ${POINTS_START_BLOCK}
+      abi: Points
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - PointsProgram
+        - UserPoints
+        - PointsMint
+      abis:
+        - name: Points
+          file: ../contracts/abi/Points.json
+      eventHandlers:
+        - event: Transfer(indexed address,indexed address,uint256)
+          handler: handleTransfer
+        - event: Finalized()
+          handler: handleFinalized
+      file: ./src/points.ts
+
+  # ── Redemption: POINTS → GOV swaps ────────────────────────────────────────
+  # - kind: ethereum
+  #   name: PointsRedeemer
+  #   network: "${NETWORK}"
+  #   source:
+  #     address: "${REDEEMER_ADDRESS}"
+  #     startBlock: ${REDEEMER_START_BLOCK}
+  #     abi: PointsRedeemer
+  #   mapping:
+  #     kind: ethereum/events
+  #     apiVersion: 0.0.9
+  #     language: wasm/assemblyscript
+  #     entities:
+  #       - PointsProgram
+  #       - UserPoints
+  #       - PointsRedemption
+  #     abis:
+  #       - name: PointsRedeemer
+  #         file: ../contracts/abi/PointsRedeemer.json
+  #     eventHandlers:
+  #       - event: Swapped(indexed address,uint256,uint256,uint256,uint256)
+  #         handler: handleSwapped
+  #     file: ./src/points.ts
