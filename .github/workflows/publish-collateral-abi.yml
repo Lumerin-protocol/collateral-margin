@@ -19,11 +19,11 @@ name: Publish @hashpower/collateral-abi
 on:
   push:
     branches:
-      # NOTE: publishing off `dev` while the repo operates there.
-      # At GA, change this to `main` (and update the `npm-publish`
-      # environment's deployment-branch rule to match) so npm only
-      # updates on mainline releases.
+      # `dev` = testnet npm bumps. `main` is already allowed so a
+      # dev→main promotion does not need a workflow edit. GitHub
+      # environment `npm-publish` must permit both branches.
       - dev
+      - main
     paths:
       - "contracts/abi/**"
       - "collateral-abi/**"
