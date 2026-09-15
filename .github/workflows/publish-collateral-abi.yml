@@ -19,11 +19,11 @@ name: Publish @hashpower/collateral-abi
 on:
   push:
     branches:
-      # NOTE: publishing off `dev` while the repo operates there.
-      # At GA, change this to `main` (and update the `npm-publish`
-      # environment's deployment-branch rule to match) so npm only
-      # updates on mainline releases.
+      # `dev` = testnet npm bumps. `main` is already allowed so a
+      # dev→main promotion does not need a workflow edit. GitHub
+      # environment `npm-publish` must permit both branches.
       - dev
+      - main
     paths:
       - "contracts/abi/**"
       - "collateral-abi/**"
@@ -167,6 +167,23 @@ jobs:
             https://api.github.com/repos/Lumerin-protocol/hashpower-io/dispatches \
             -d "{\"event_type\":\"abi-published\",\"client_payload\":{\"package\":\"@hashpower/collateral-abi\",\"version\":\"${{ steps.bump.outputs.version }}\",\"source_ref\":\"${{ github.ref_name }}\"}}"
           echo "Dispatched abi-published to Lumerin-protocol/hashpower-io"
+
+      - name: Trigger hashpower-mcp ABI bump PR
+        if: steps.bump.outputs.level != 'none'
+        continue-on-error: true
+        env:
+          DISPATCH_TOKEN: ${{ secrets.HASHPOWER_MCP_DISPATCH_TOKEN || secrets.HASHPOWER_IO_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$DISPATCH_TOKEN" ]; then
+            echo "::warning::No dispatch token for hashpower-mcp — add HASHPOWER_MCP_DISPATCH_TOKEN (or expand HASHPOWER_IO_DISPATCH_TOKEN to include that repo)."
+            exit 0
+          fi
+          curl -sf -X POST \
+            -H "Authorization: Bearer $DISPATCH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/Lumerin-protocol/hashpower-mcp/dispatches \
+            -d "{\"event_type\":\"abi-published\",\"client_payload\":{\"package\":\"@hashpower/collateral-abi\",\"version\":\"${{ steps.bump.outputs.version }}\",\"source_ref\":\"${{ github.ref_name }}\"}}"
+          echo "Dispatched abi-published to Lumerin-protocol/hashpower-mcp"
 
       - name: Summary
         if: steps.bump.outputs.level != 'none'
