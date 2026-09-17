@@ -17,7 +17,7 @@ if (FUTURES === undefined || ALCHEMY === undefined) {
 }
 
 const RPC_URL = `https://${NETWORK}.g.alchemy.com/v2/${ALCHEMY}`;
-const CHAINS = { "base-sepolia": baseSepolia, "base-mainnet": base, hardhat };
+const CHAINS = { "base-sepolia": baseSepolia, base, hardhat };
 const chain = CHAINS[NETWORK as keyof typeof CHAINS];
 
 const USERS: Address[] = ["0x1441Bc52156Cf18c12cde6A92aE6BDE8B7f775D4"];

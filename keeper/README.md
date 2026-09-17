@@ -144,7 +144,7 @@ See `src/config.ts` for the authoritative shape. The minimum-viable set:
 
 | Var                            | Required | Purpose                                |
 | ------------------------------ | -------- | -------------------------------------- |
-| `NETWORK`                      | yes      | Chain label (e.g. `arbitrum-sepolia`)  |
+| `NETWORK`                      | yes      | `hardhat`, `base-sepolia`, or `base`   |
 | `ETH_NODE_ADDRESS`             | yes      | RPC URL                                |
 | `LIQUIDATOR_PRIVATE_KEY`       | yes      | Signer (single key for both venues)    |
 | `VAULT_ADDRESS`                | yes      | Shared CollateralVault                 |

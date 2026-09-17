@@ -73,7 +73,7 @@ export default defineConfig({
       url: configVariable("ALCHEMY_API_KEY", "https://base-sepolia.g.alchemy.com/v2/{variable}"),
       accounts: [configVariable("PRIVATE_KEY")],
     },
-    "base-mainnet": {
+    base: {
       type: "http",
       chainType: "l1",
       chainId: 8453,
