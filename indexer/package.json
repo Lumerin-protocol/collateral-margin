@@ -7,7 +7,8 @@
   "type": "module",
   "scripts": {
     "clean": "rm -rf data generated build subgraph.yaml",
-    "prepare:env": "set -a && . \"${ENV_FILE:?ENV_FILE must point at an env file, e.g. ../config/dev.env}\" && set +a && envsubst < subgraph.template.yaml > subgraph.yaml",
+    "//prepare:env": "`.` searches PATH when its operand has no slash, so a bare filename must be made explicitly relative for dash, which is /bin/sh on the CI runners.",
+    "prepare:env": "ENV_FILE=\"${ENV_FILE:?ENV_FILE must point at an env file, e.g. ../config/dev.env}\"; case \"$ENV_FILE\" in */*) ;; *) ENV_FILE=\"./$ENV_FILE\" ;; esac; set -a && . \"$ENV_FILE\" && set +a && envsubst < subgraph.template.yaml > subgraph.yaml",
     "prepare-local": "ENV_FILE=../config/dev.env pnpm prepare:env",
     "codegen": "graph codegen",
     "build": "graph build",
