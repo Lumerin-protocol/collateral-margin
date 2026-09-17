@@ -64,8 +64,7 @@ jobs:
       # are only needed at deploy time.
       - name: Prepare subgraph (with .env.example defaults)
         run: |
-          set -a && source .env.example && set +a
-          pnpm prepare:env
+          ENV_FILE=.env.example pnpm prepare:env
           echo "--- subgraph.yaml ---"
           cat subgraph.yaml
 

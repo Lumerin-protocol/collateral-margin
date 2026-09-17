@@ -4,33 +4,32 @@ on:
   push:
     branches:
       - dev
-      - stg
       - main
       - "cicd/**"
     paths:
       - "points-indexer/**"
+      - "config/*.env"
       - "contracts/abi/Points.json"
       - "contracts/abi/PointsRedeemer.json"
       - ".github/workflows/deploy-points-subgraph.yml"
   pull_request:
     branches:
       - dev
-      - stg
       - main
     paths:
       - "points-indexer/**"
+      - "config/*.env"
       - "contracts/abi/Points.json"
       - "contracts/abi/PointsRedeemer.json"
       - ".github/workflows/deploy-points-subgraph.yml"
   workflow_dispatch:
     inputs:
       environment:
-        description: "Target environment (dev=DEV, stg=STG, main=LMN/PROD)"
+        description: "Target environment (dev=DEV, main=LMN/PROD)"
         required: true
         type: choice
         options:
           - dev
-          - stg
           - main
 
 concurrency:
@@ -116,19 +115,21 @@ jobs:
           fi
           echo "goldsky_subgraph_name=$GS_NAME" >> $GITHUB_OUTPUT
 
-          # Rolling tag and public endpoint per environment
+          # Rolling tag, public endpoint, and the config/<name>.env to load.
           case $ENV in
             dev)
               echo "goldsky_rolling_tag=dev-latest" >> $GITHUB_OUTPUT
               echo "goldsky_endpoint=${{ vars.DEV_GS_POINTS }}" >> $GITHUB_OUTPUT
-              ;;
-            stg)
-              echo "goldsky_rolling_tag=stg-latest" >> $GITHUB_OUTPUT
-              echo "goldsky_endpoint=${{ vars.STG_GS_POINTS }}" >> $GITHUB_OUTPUT
+              echo "config_env=dev" >> $GITHUB_OUTPUT
               ;;
             main)
               echo "goldsky_rolling_tag=lmn-latest" >> $GITHUB_OUTPUT
               echo "goldsky_endpoint=${{ vars.LMN_GS_POINTS }}" >> $GITHUB_OUTPUT
+              echo "config_env=prd" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "::error::Unknown environment '$ENV' (expected dev or main)"
+              exit 1
               ;;
           esac
 
@@ -138,24 +139,24 @@ jobs:
         working-directory: ./points-indexer
         run: pnpm install --frozen-lockfile
 
+      # Addresses, start blocks and NETWORK all come from config/<env>.env.
+      # PR builds render from the dummy values in .env.example, since real
+      # addresses are only needed at deploy time.
       - name: Prepare subgraph configuration
         working-directory: ./points-indexer
         env:
-          NETWORK: ${{ vars.NETWORK }}
-          POINTS_ADDRESS: ${{ vars.POINTS_ADDRESS }}
-          POINTS_START_BLOCK: ${{ vars.POINTS_START_BLOCK }}
-          REDEEMER_ADDRESS: ${{ vars.REDEEMER_ADDRESS }}
-          REDEEMER_START_BLOCK: ${{ vars.REDEEMER_START_BLOCK }}
+          CONFIG_ENV: ${{ steps.env.outputs.config_env }}
+          DEPLOY_ENV: ${{ needs.setup.outputs.environment }}
         run: |
+          set -euo pipefail
           if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
             echo "ℹ️ PR build — using .env.example dummy values"
-            set -a && source .env.example && set +a
+            ENV_FILE=.env.example
+          else
+            ENV_FILE="../config/${CONFIG_ENV}.env"
           fi
-          echo "⚙️ Preparing subgraph for ${{ needs.setup.outputs.environment }}..."
-          echo "   Network:    ${NETWORK}"
-          echo "   Points:     ${POINTS_ADDRESS} (block ${POINTS_START_BLOCK})"
-          echo "   Redeemer:   ${REDEEMER_ADDRESS} (block ${REDEEMER_START_BLOCK})"
-          pnpm prepare:env
+          echo "⚙️ Preparing subgraph for ${DEPLOY_ENV} from ${ENV_FILE}..."
+          ENV_FILE="$ENV_FILE" pnpm prepare:env
           echo "✅ Configuration ready"
           echo "--- subgraph.yaml ---"
           cat subgraph.yaml
@@ -220,7 +221,7 @@ jobs:
         id: goldsky_deploy
         working-directory: ./points-indexer
         env:
-          GOLDSKY_API_KEY: ${{ needs.build.outputs.environment == 'dev' && secrets.DEV_GOLDSKY_API_KEY || needs.build.outputs.environment == 'stg' && secrets.STG_GOLDSKY_API_KEY || secrets.LMN_GOLDSKY_API_KEY }}
+          GOLDSKY_API_KEY: ${{ needs.build.outputs.environment == 'dev' && secrets.DEV_GOLDSKY_API_KEY || secrets.LMN_GOLDSKY_API_KEY }}
           GOLDSKY_SUBGRAPH_NAME: ${{ needs.build.outputs.goldsky_subgraph_name }}
           SUBGRAPH_VERSION: ${{ needs.build.outputs.version }}
           GOLDSKY_ROLLING_TAG: ${{ needs.build.outputs.goldsky_rolling_tag }}
@@ -347,7 +348,7 @@ jobs:
 
           if [ -z "${GOLDSKY_ENDPOINT}" ]; then
             echo "⚠️ No Goldsky endpoint URL configured — skipping verification"
-            echo "   Set DEV_GS_POINTS / STG_GS_POINTS / LMN_GS_POINTS org variable"
+            echo "   Set DEV_GS_POINTS / LMN_GS_POINTS org variable"
             exit 0
           fi
 

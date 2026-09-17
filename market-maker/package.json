@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "engines": {
-    "node": ">=22.6.0"
+    "node": ">=22.9.0"
   },
   "scripts": {
     "test": "pnpm node --test --test-force-exit --test-concurrency=1 'tests/**/*.test.ts'",
@@ -18,18 +18,15 @@
     "perps": "pnpm node --watch src/apps/perps/main.ts",
     "futures": "pnpm node --watch src/apps/futures/main.ts",
     "portfolio": "pnpm node --watch src/apps/portfolio/main.ts",
-    "local:perps": "pnpm perps --config configs/perps.local.yml | pino-pretty",
-    "local:futures": "pnpm futures --config configs/futures.local.yml | pino-pretty",
-    "local:portfolio": "pnpm portfolio --config configs/portfolio.local.yml | pino-pretty",
-    "dev:perps": "pnpm perps --config configs/perps.dev.yml | pino-pretty",
-    "dev:futures": "pnpm futures --config configs/futures.dev.yml | pino-pretty",
-    "dev:portfolio": "pnpm portfolio --config configs/portfolio.dev.yml | pino-pretty",
-    "stg:perps": "pnpm perps --config configs/perps.stg.yml",
-    "stg:futures": "pnpm futures --config configs/futures.stg.yml",
-    "stg:portfolio": "pnpm portfolio --config configs/portfolio.stg.yml",
-    "prd:perps": "pnpm perps --config configs/perps.prd.yml",
-    "prd:futures": "pnpm futures --config configs/futures.prd.yml",
-    "prd:portfolio": "pnpm portfolio --config configs/portfolio.prd.yml",
+    "local:perps": "pnpm node --env-file-if-exists=../.env --env-file-if-exists=.env --watch src/apps/perps/main.ts --config configs/perps.local.yml | pino-pretty",
+    "local:futures": "pnpm node --env-file-if-exists=../.env --env-file-if-exists=.env --watch src/apps/futures/main.ts --config configs/futures.local.yml | pino-pretty",
+    "local:portfolio": "pnpm node --env-file-if-exists=../.env --env-file-if-exists=.env --watch src/apps/portfolio/main.ts --config configs/portfolio.local.yml | pino-pretty",
+    "dev:perps": "pnpm node --env-file=../config/dev.env --env-file-if-exists=../.env --env-file-if-exists=.env --watch src/apps/perps/main.ts --config configs/perps.dev.yml | pino-pretty",
+    "dev:futures": "pnpm node --env-file=../config/dev.env --env-file-if-exists=../.env --env-file-if-exists=.env --watch src/apps/futures/main.ts --config configs/futures.dev.yml | pino-pretty",
+    "dev:portfolio": "pnpm node --env-file=../config/dev.env --env-file-if-exists=../.env --env-file-if-exists=.env --watch src/apps/portfolio/main.ts --config configs/portfolio.dev.yml | pino-pretty",
+    "prd:perps": "pnpm node --env-file=../config/prd.env --env-file-if-exists=../.env --env-file-if-exists=.env src/apps/perps/main.ts --config configs/perps.prd.yml",
+    "prd:futures": "pnpm node --env-file=../config/prd.env --env-file-if-exists=../.env --env-file-if-exists=.env src/apps/futures/main.ts --config configs/futures.prd.yml",
+    "prd:portfolio": "pnpm node --env-file=../config/prd.env --env-file-if-exists=../.env --env-file-if-exists=.env src/apps/portfolio/main.ts --config configs/portfolio.prd.yml",
     "lint:fix": "biome check --write ."
   },
   "dependencies": {

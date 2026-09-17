@@ -22,6 +22,12 @@ defs, separate wallets, separate logs. They only share the image so a
 single `docker push` rolls both venues forward (each can still be
 pinned to a different image tag).
 
+The non-secret half of that `env:` block is not configured in Terraform
+or in GitHub Variables. `deploy-col-mar-mm.yml` reads `config/dev.env`
+or `config/prd.env` — the same files the market-maker loads locally —
+and passes every key it finds to the task definition, alongside the
+secrets it names explicitly. Add a public setting by editing that file.
+
 ## Files
 
 * `ecs-task.tf` — reusable Terraform module template for one MM service.

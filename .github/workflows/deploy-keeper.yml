@@ -6,57 +6,44 @@ name: Deploy Collateral Margin Keeper
 # Terraform (.bedrock/.terragrunt/06_col_mar_keeper_svc.tf) builds ECS shell,
 # internal ALB, Route53 keeper.{env}.hashpower.exchange, and log group.
 # This workflow builds the image, pushes to GHCR, and registers task-def
-# revisions with full runtime config from GitHub.
+# revisions with the runtime config from config/<env>.env plus secrets.
 #
-# GitHub Variables (per environment: dev / stg / main):
-#   NETWORK                         e.g. base-sepolia
-#   VAULT_ADDRESS                   CollateralVault proxy
-#   PME_ADDRESS                     PortfolioMarginEngine proxy
-#   PERPS_ADDRESS                   HashPowerPerpsDEX
-#   FUTURES_ADDRESS                 Futures proxy
-#   HASHPRICE_USD_ADDRESS           HashpriceUSD aggregator
-#   BTC_USD_FEED_ADDRESS            Chainlink BTC/USDC feed
-#   ETH_USD_FEED_ADDRESS            optional — gas cost logging
-#   DRY_RUN                         "true" | "false" (default false)
-#   KEEPER_MIN_PROFIT_MARGIN        default "0"
-#   KEEPER_DESIRED_COUNT            default "1" (set "0" to halt)
-#   LOG_LEVEL                       default "info"
-#   DISCOVERY_MODE                  events | webhook | both (default events)
-#   BACKFILL_FROM_BLOCK             optional startup discovery backfill anchor
-#   DELIVERY_KEEPER_ENABLED         default "false"
-#   HEALTH_PORT                     default "3000" (must match TF cnt_port)
-#   PRICE_MOVE_TRIGGER_BPS          default "1"
-#   SWEEP_INTERVAL_MS               default "60000"
-#   ALERT_WEBHOOK_URL               optional Slack/Discord webhook
+# Container config (NETWORK, contract addresses, log level, intervals, …) is
+# NOT declared here. It comes from config/dev.env and config/prd.env, which are
+# the same files the keeper loads locally, and every key in the chosen file is
+# passed to the task definition. To add or change one, edit that file.
+#
+# GitHub Variables (per environment: dev / main):
+#   KEEPER_DESIRED_COUNT              default "1" (set "0" to halt) — deploy
+#                                     orchestration, not container config
 #
 # GitHub Secrets (per environment):
-#   ALCHEMY_API_KEY                 RPC (or set ETH_NODE_ADDRESS via var — not secret)
-#   LIQUIDATOR_PRIVATE_KEY          same wallet as legacy perps keeper
-#   WEBHOOK_SECRET                  optional — Goldsky bearer token
+#   ALCHEMY_API_KEY                   RPC (or set ETH_NODE_ADDRESS in config)
+#   LIQUIDATOR_PRIVATE_KEY            same wallet as legacy perps keeper
+#   WEBHOOK_SECRET                    optional — Goldsky bearer token
 #
 # Repository secrets (all environments):
-#   AWS_ROLE_ARN_DEV / _STG / _LMN    from terragrunt output github_actions_role_arn
+#   AWS_ROLE_ARN_DEV / _LMN           from terragrunt output github_actions_role_arn
 #   SLACK_WEBHOOK_URL                 optional — deploy notifications
 
 on:
   push:
     branches:
       - dev
-      - stg
       - main
       - "cicd/**"
     paths:
       - "keeper/**"
+      - "config/*.env"
       - ".github/workflows/deploy-keeper.yml"
   workflow_dispatch:
     inputs:
       environment:
-        description: "Target environment (dev=DEV, stg=STG, main=LMN/PROD)"
+        description: "Target environment (dev=DEV, main=LMN/PROD)"
         required: true
         type: choice
         options:
           - dev
-          - stg
           - main
 
 permissions:
@@ -77,6 +64,7 @@ jobs:
       tag: ${{ steps.gen_tag.outputs.tag_name }}
       environment: ${{ steps.gen_tag.outputs.environment }}
       env_suffix: ${{ steps.env_config.outputs.env_suffix }}
+      config_env: ${{ steps.env_config.outputs.config_env }}
       aws_region: ${{ steps.env_config.outputs.aws_region }}
       ecs_cluster: ${{ steps.env_config.outputs.ecs_cluster }}
       ecs_service: ${{ steps.env_config.outputs.ecs_service }}
@@ -106,26 +94,27 @@ jobs:
           echo "aws_region=us-east-1" >> $GITHUB_OUTPUT
           echo "task_family=tsk-col-mar-keeper" >> $GITHUB_OUTPUT
 
+          # CONFIG_ENV names the config/<name>.env holding this environment's
+          # public container config; SUFFIX names the AWS resources.
           case "$ENV" in
             dev)
               SUFFIX="dev"
               URL_HOST_PREFIX="dev."
-              ;;
-            stg)
-              SUFFIX="stg"
-              URL_HOST_PREFIX="stg."
+              CONFIG_ENV="dev"
               ;;
             main)
               SUFFIX="lmn"
               URL_HOST_PREFIX=""
+              CONFIG_ENV="prd"
               ;;
             *)
-              echo "::error::Unknown environment '$ENV'"
+              echo "::error::Unknown environment '$ENV' (expected dev or main)"
               exit 1
               ;;
           esac
 
           echo "env_suffix=${SUFFIX}" >> $GITHUB_OUTPUT
+          echo "config_env=${CONFIG_ENV}" >> $GITHUB_OUTPUT
           echo "ecs_cluster=ecs-derivatives-marketplace-${SUFFIX}" >> $GITHUB_OUTPUT
           echo "ecs_service=svc-col-mar-keeper-${SUFFIX}" >> $GITHUB_OUTPUT
           echo "keeper_health_url=https://keeper.${URL_HOST_PREFIX}hashpower.exchange/health" >> $GITHUB_OUTPUT
@@ -188,10 +177,16 @@ jobs:
       skipped: ${{ steps.svc_check.outputs.skip }}
 
     steps:
+      # Needed for config/<env>.env, which supplies the container environment.
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ needs.build.outputs.environment == 'dev' && secrets.AWS_ROLE_ARN_DEV || needs.build.outputs.environment == 'stg' && secrets.AWS_ROLE_ARN_STG || secrets.AWS_ROLE_ARN_LMN }}
+          role-to-assume: ${{ needs.build.outputs.environment == 'dev' && secrets.AWS_ROLE_ARN_DEV || secrets.AWS_ROLE_ARN_LMN }}
           aws-region: ${{ needs.build.outputs.aws_region }}
           role-session-name: GitHubActions-ColMarKeeper-${{ github.run_id }}
 
@@ -227,34 +222,18 @@ jobs:
           TASK_FAMILY: ${{ needs.build.outputs.task_family }}
           REGION: ${{ needs.build.outputs.aws_region }}
           IMAGE: ${{ env.GHCR_IMAGE }}:${{ needs.build.outputs.version }}
+          CONFIG_ENV: ${{ needs.build.outputs.config_env }}
+
+          # Everything public lives in config/<env>.env. Only secrets and
+          # values computed by this run are declared here.
           KEEPER_VERSION: ${{ needs.build.outputs.version }}
-
-          NETWORK: ${{ vars.NETWORK }}
-          VAULT_ADDRESS: ${{ vars.VAULT_ADDRESS }}
-          PME_ADDRESS: ${{ vars.PME_ADDRESS }}
-          PERPS_ADDRESS: ${{ vars.PERPS_ADDRESS }}
-          FUTURES_ADDRESS: ${{ vars.FUTURES_ADDRESS }}
-          HASHPRICE_USD_ADDRESS: ${{ vars.HASHPRICE_USD_ADDRESS }}
-          BTC_USD_FEED_ADDRESS: ${{ vars.BTC_USD_FEED_ADDRESS }}
-          ETH_USD_FEED_ADDRESS: ${{ vars.ETH_USD_FEED_ADDRESS }}
-          DRY_RUN: ${{ vars.DRY_RUN }}
-          KEEPER_MIN_PROFIT_MARGIN: ${{ vars.KEEPER_MIN_PROFIT_MARGIN }}
           KEEPER_DESIRED_COUNT: ${{ vars.KEEPER_DESIRED_COUNT }}
-          LOG_LEVEL: ${{ vars.LOG_LEVEL }}
-          DISCOVERY_MODE: ${{ vars.DISCOVERY_MODE }}
-          BACKFILL_FROM_BLOCK: ${{ vars.BACKFILL_FROM_BLOCK }}
-          DELIVERY_KEEPER_ENABLED: ${{ vars.DELIVERY_KEEPER_ENABLED }}
-          HEALTH_PORT: ${{ vars.HEALTH_PORT }}
-          PRICE_MOVE_TRIGGER_BPS: ${{ vars.PRICE_MOVE_TRIGGER_BPS }}
-          SWEEP_INTERVAL_MS: ${{ vars.SWEEP_INTERVAL_MS }}
-          ALERT_WEBHOOK_URL: ${{ vars.ALERT_WEBHOOK_URL }}
-          ETH_NODE_ADDRESS: ${{ vars.ETH_NODE_ADDRESS }}
-
           ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
           LIQUIDATOR_PRIVATE_KEY: ${{ secrets.LIQUIDATOR_PRIVATE_KEY }}
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
         run: |
           set -euo pipefail
+          CONFIG="config/${CONFIG_ENV}.env"
           DESIRED_COUNT="${KEEPER_DESIRED_COUNT:-1}"
 
           echo "🚀 Deploying keeper to ${{ needs.build.outputs.environment }}"
@@ -262,7 +241,7 @@ jobs:
           echo "   Service: ${SERVICE}"
           echo "   Task Family: ${TASK_FAMILY}"
           echo "   Image: ${IMAGE}"
-          echo "   DRY_RUN: ${DRY_RUN:-false}"
+          echo "   Config: ${CONFIG}"
           echo "   Desired Count: ${DESIRED_COUNT}"
 
           aws ecs describe-task-definition \
@@ -277,58 +256,28 @@ jobs:
                 .compatibilities, .registeredAt, .registeredBy)
           ' task-def.json > new-task-def.json
 
-          jq -n \
-            --arg NETWORK                   "${NETWORK}" \
-            --arg VAULT_ADDRESS             "${VAULT_ADDRESS}" \
-            --arg PME_ADDRESS               "${PME_ADDRESS}" \
-            --arg PERPS_ADDRESS             "${PERPS_ADDRESS}" \
-            --arg FUTURES_ADDRESS           "${FUTURES_ADDRESS}" \
-            --arg HASHPRICE_USD_ADDRESS     "${HASHPRICE_USD_ADDRESS}" \
-            --arg BTC_USD_FEED_ADDRESS      "${BTC_USD_FEED_ADDRESS}" \
-            --arg ETH_USD_FEED_ADDRESS      "${ETH_USD_FEED_ADDRESS:-}" \
-            --arg DRY_RUN                   "${DRY_RUN:-false}" \
-            --arg KEEPER_MIN_PROFIT_MARGIN  "${KEEPER_MIN_PROFIT_MARGIN:-0}" \
-            --arg LOG_LEVEL                 "${LOG_LEVEL:-info}" \
-            --arg DISCOVERY_MODE            "${DISCOVERY_MODE:-events}" \
-            --arg BACKFILL_FROM_BLOCK       "${BACKFILL_FROM_BLOCK:-}" \
-            --arg DELIVERY_KEEPER_ENABLED   "${DELIVERY_KEEPER_ENABLED:-false}" \
-            --arg HEALTH_PORT               "${HEALTH_PORT:-3000}" \
-            --arg PRICE_MOVE_TRIGGER_BPS    "${PRICE_MOVE_TRIGGER_BPS:-1}" \
-            --arg SWEEP_INTERVAL_MS         "${SWEEP_INTERVAL_MS:-60000}" \
-            --arg ALERT_WEBHOOK_URL         "${ALERT_WEBHOOK_URL:-}" \
-            --arg ETH_NODE_ADDRESS          "${ETH_NODE_ADDRESS:-}" \
-            --arg ALCHEMY_API_KEY           "${ALCHEMY_API_KEY}" \
-            --arg LIQUIDATOR_PRIVATE_KEY    "${LIQUIDATOR_PRIVATE_KEY}" \
-            --arg WEBHOOK_SECRET            "${WEBHOOK_SECRET:-}" \
-            --arg KEEPER_VERSION            "${KEEPER_VERSION}" \
-            '[
-              {name:"KEEPER_VERSION", value:$KEEPER_VERSION},
-              {name:"NETWORK", value:$NETWORK},
-              {name:"VAULT_ADDRESS", value:$VAULT_ADDRESS},
-              {name:"PME_ADDRESS", value:$PME_ADDRESS},
-              {name:"PERPS_ADDRESS", value:$PERPS_ADDRESS},
-              {name:"FUTURES_ADDRESS", value:$FUTURES_ADDRESS},
-              {name:"HASHPRICE_USD_ADDRESS", value:$HASHPRICE_USD_ADDRESS},
-              {name:"BTC_USD_FEED_ADDRESS", value:$BTC_USD_FEED_ADDRESS},
-              {name:"ETH_USD_FEED_ADDRESS", value:$ETH_USD_FEED_ADDRESS},
-              {name:"DRY_RUN", value:$DRY_RUN},
-              {name:"KEEPER_MIN_PROFIT_MARGIN", value:$KEEPER_MIN_PROFIT_MARGIN},
-              {name:"LOG_LEVEL", value:$LOG_LEVEL},
-              {name:"DISCOVERY_MODE", value:$DISCOVERY_MODE},
-              {name:"DELIVERY_KEEPER_ENABLED", value:$DELIVERY_KEEPER_ENABLED},
-              {name:"HEALTH_PORT", value:$HEALTH_PORT},
-              {name:"PRICE_MOVE_TRIGGER_BPS", value:$PRICE_MOVE_TRIGGER_BPS},
-              {name:"SWEEP_INTERVAL_MS", value:$SWEEP_INTERVAL_MS},
-              {name:"ALERT_WEBHOOK_URL", value:$ALERT_WEBHOOK_URL},
-              {name:"ETH_NODE_ADDRESS", value:$ETH_NODE_ADDRESS},
-              {name:"ALCHEMY_API_KEY", value:$ALCHEMY_API_KEY},
-              {name:"LIQUIDATOR_PRIVATE_KEY", value:$LIQUIDATOR_PRIVATE_KEY},
-              {name:"WEBHOOK_SECRET", value:$WEBHOOK_SECRET}
-            ] + (
-              if $BACKFILL_FROM_BLOCK == "" then []
-              else [{name:"BACKFILL_FROM_BLOCK", value:$BACKFILL_FROM_BLOCK}]
-              end
-            )' > env-block.json
+          # The container environment is every key declared in config/<env>.env
+          # plus the secrets and computed values from the step env above.
+          # Sourcing cannot clobber a secret, because no secret is named in the
+          # config file. jq then reads values straight out of the environment,
+          # so each key is written exactly once: in the config file.
+          set -a && . "$CONFIG" && set +a
+
+          KEYS=$( { sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$CONFIG"; \
+                    printf '%s\n' KEEPER_VERSION ALCHEMY_API_KEY LIQUIDATOR_PRIVATE_KEY WEBHOOK_SECRET; } )
+
+          # Empty values are dropped so the keeper applies its own defaults
+          # instead of parsing an empty string.
+          jq -n --arg keys "$KEYS" '[
+            $keys
+            | split("\n")
+            | unique
+            | .[]
+            | select(. != "" and ($ENV[.] // "") != "")
+            | {name: ., value: $ENV[.]}
+          ]' > env-block.json
+
+          echo "   Container env keys: $(jq -r '[.[].name] | join(", ")' env-block.json)"
 
           jq --slurpfile env env-block.json '
             .containerDefinitions[0].environment = $env[0] |
@@ -368,7 +317,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          role-to-assume: ${{ needs.build.outputs.environment == 'dev' && secrets.AWS_ROLE_ARN_DEV || needs.build.outputs.environment == 'stg' && secrets.AWS_ROLE_ARN_STG || secrets.AWS_ROLE_ARN_LMN }}
+          role-to-assume: ${{ needs.build.outputs.environment == 'dev' && secrets.AWS_ROLE_ARN_DEV || secrets.AWS_ROLE_ARN_LMN }}
           aws-region: ${{ needs.build.outputs.aws_region }}
           role-session-name: GitHubActions-ColMarKeeper-Verify-${{ github.run_id }}
 

@@ -1,5 +1,4 @@
 import pino from "pino";
-import { loadDotenvFiles } from "../../core/env.ts";
 import { createNetworkClients } from "../../core/client.ts";
 import { WalletRegistry } from "../../core/wallet.ts";
 import { OracleTracker } from "../../core/oracleTracker.ts";
@@ -20,7 +19,6 @@ import { sanitiseConfig } from "../../core/config/base.ts";
 import { loadPerpsConfig } from "./config.ts";
 
 async function main(): Promise<void> {
-  loadDotenvFiles(import.meta.dirname);
   const config = loadPerpsConfig();
   const logger = pino({
     level: config.logLevel,

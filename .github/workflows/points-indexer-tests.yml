@@ -76,8 +76,7 @@ jobs:
       - name: Prepare subgraph (with .env.example defaults)
         working-directory: ./points-indexer
         run: |
-          set -a && source .env.example && set +a
-          pnpm prepare:env
+          ENV_FILE=.env.example pnpm prepare:env
           echo "--- subgraph.yaml ---"
           cat subgraph.yaml
 
