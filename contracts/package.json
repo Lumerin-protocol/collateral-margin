@@ -13,7 +13,6 @@
     "lint": "biome lint .",
     "clean": "rm -rf abi artifacts cache",
     "run:dev": "hardhat run --env dev",
-    "run:stg": "hardhat run --env stg",
     "run:prod": "hardhat run --env prd"
   },
   "devDependencies": {
