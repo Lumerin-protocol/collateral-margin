@@ -24,7 +24,7 @@ export interface Chain {
 const VIEM_CHAINS: Record<NetworkName, ViemChain> = {
   hardhat,
   "base-sepolia": baseSepolia,
-  "base-mainnet": base,
+  base,
 };
 
 /**

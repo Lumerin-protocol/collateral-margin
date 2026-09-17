@@ -21,13 +21,23 @@ import type pino from "pino";
  *   - coordinator: cross-account ordering + concurrency
  *   - runtime:    healthcheck port, log level, dry-run, intervals
  */
-export type NetworkName = "hardhat" | "base-sepolia" | "base-mainnet";
+export type NetworkName = "hardhat" | "base-sepolia" | "base";
 
 export const SUPPORTED_NETWORKS: readonly NetworkName[] = [
   "hardhat",
   "base-sepolia",
-  "base-mainnet",
+  "base",
 ] as const;
+
+/**
+ * Names accepted on input but normalized before use. `base-mainnet` was the
+ * keeper's own spelling before `NETWORK` was unified across the subgraph
+ * manifests and the market-maker; task definitions registered before that
+ * change still carry it.
+ */
+const NETWORK_ALIASES: Readonly<Record<string, NetworkName>> = {
+  "base-mainnet": "base",
+};
 
 export interface Config {
   /**
@@ -293,10 +303,11 @@ function parseAddressList(name: string): readonly Address[] {
 }
 
 function requireNetwork(): NetworkName {
-  const value = requireEnv("NETWORK");
+  const raw = requireEnv("NETWORK");
+  const value = NETWORK_ALIASES[raw] ?? raw;
   if (!(SUPPORTED_NETWORKS as readonly string[]).includes(value)) {
     throw new Error(
-      `NETWORK must be one of ${SUPPORTED_NETWORKS.join("|")}, got "${value}"`,
+      `NETWORK must be one of ${SUPPORTED_NETWORKS.join("|")}, got "${raw}"`,
     );
   }
   return value as NetworkName;
@@ -315,9 +326,10 @@ function resolveRpcUrl(network: NetworkName): string {
     return process.env.HARDHAT_RPC_URL ?? "http://127.0.0.1:8545";
   }
 
+  // Alchemy keeps its own spelling for mainnet.
   const alchemySubdomain: Record<Exclude<NetworkName, "hardhat">, string> = {
     "base-sepolia": "base-sepolia",
-    "base-mainnet": "base-mainnet",
+    base: "base-mainnet",
   };
   const apiKey = requireEnv("ALCHEMY_API_KEY");
   return `https://${alchemySubdomain[network]}.g.alchemy.com/v2/${apiKey}`;

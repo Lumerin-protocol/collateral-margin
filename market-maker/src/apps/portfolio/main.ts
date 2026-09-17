@@ -1,5 +1,4 @@
 import pino from "pino";
-import { loadDotenvFiles } from "../../core/env.ts";
 import { createNetworkClients } from "../../core/client.ts";
 import { WalletRegistry } from "../../core/wallet.ts";
 import { OracleTracker } from "../../core/oracleTracker.ts";
@@ -177,7 +176,6 @@ function buildMarket(
 }
 
 async function main(): Promise<void> {
-  loadDotenvFiles(import.meta.dirname);
   const config = loadPortfolioConfig();
   const logger = pino({ level: config.logLevel, serializers: { err: serializeError } });
   logger.info(
