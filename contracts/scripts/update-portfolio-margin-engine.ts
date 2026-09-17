@@ -1,6 +1,6 @@
 import { encodeFunctionData, getAddress } from "viem";
 import hre from "hardhat";
-import { requireAddress } from "../lib/env.ts";
+import { readOptionalAddress, requireAddress } from "../lib/env.ts";
 import { writeAndWait } from "../lib/writeContract.ts";
 import { verifyContract } from "../lib/verify.ts";
 import { addrUrl, txUrl } from "../lib/explorer.ts";
@@ -12,6 +12,9 @@ async function main() {
   const { viem } = await hre.network.getOrCreate();
 
   const proxyAddress = requireAddress("PME_ADDRESS");
+  // Optional: post-upgrade oracle configuration. The new implementation reverts
+  // margin calls with `OracleNotSet` until the PME has its own oracle reference.
+  const PRICE_ORACLE_ADDRESS = readOptionalAddress("PRICE_ORACLE_ADDRESS");
 
   const [deployer] = await viem.getWalletClients();
   const pc = await viem.getPublicClient();
@@ -52,6 +55,14 @@ async function main() {
     logStep("Upgraded", txUrl(pc, receipt.transactionHash));
 
     logInfo("post-upgrade", { Version: await pme.read.VERSION() });
+
+    if (PRICE_ORACLE_ADDRESS) {
+      logInfo("PME.setOracle", { oracle: PRICE_ORACLE_ADDRESS });
+      await logPrompt("Proceed?");
+      const oracleSim = await pme.simulate.setOracle([PRICE_ORACLE_ADDRESS]);
+      const oracleReceipt = await writeAndWait(deployer, oracleSim);
+      logStep("Done", txUrl(pc, oracleReceipt.transactionHash));
+    }
   } else {
     const calldata = encodeFunctionData({
       abi: pme.abi,
@@ -63,6 +74,15 @@ async function main() {
       "Owner (from)": owner,
     });
     logStep(`PME.upgradeToAndCall(${newImpl.address}, 0x)`, calldata);
+
+    if (PRICE_ORACLE_ADDRESS) {
+      const oracleData = encodeFunctionData({
+        abi: pme.abi,
+        functionName: "setOracle",
+        args: [PRICE_ORACLE_ADDRESS],
+      });
+      logStep(`PME.setOracle(${PRICE_ORACLE_ADDRESS})`, oracleData);
+    }
   }
 
   logSuccess(addrUrl(pc, proxyAddress));

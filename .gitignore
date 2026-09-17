@@ -2,3 +2,13 @@ node_modules
 .env
 .env.*
 !.env.example
+.DS_Store
+
+# Terraform / Terragrunt
+.terraform
+.terraform.lock.hcl
+.terragrunt-cache
+*.out
+*.plan
+secret.tfvars
+secret.*

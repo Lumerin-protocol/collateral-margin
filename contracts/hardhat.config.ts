@@ -1,19 +1,29 @@
 import { configVariable, defineConfig } from "hardhat/config";
 import hardhatToolboxViem from "@nomicfoundation/hardhat-toolbox-viem";
-import codegenPlugin from "./plugins/codegen/index.ts";
-import { tryLoadEnvFile } from "./lib/env.ts";
-
-tryLoadEnvFile("./../.env");
-tryLoadEnvFile(".env");
+import hardhatViemAbi from "hardhat-viem-abi";
+import envLoader from "./plugins/env-loader/index.ts";
 
 export default defineConfig({
-  plugins: [hardhatToolboxViem, codegenPlugin],
+  plugins: [hardhatToolboxViem, hardhatViemAbi, envLoader],
+  envLoader: {
+    configDir: "../config",
+    // Machine/secret values; win over the named env file for overlapping keys.
+    overrideEnvFiles: ["../.env", ".env"],
+  },
+
   codegen: {
+    // Keepers and the UI install `abi/` as this package name; do not rename casually.
+    packageJson: { name: "collateral-margin-abi" },
     contracts: [
       "CollateralVault",
       "ICollateralVault",
       "PortfolioMarginEngine",
       "IPortfolioMarginEngine",
+      "Points",
+      "IPoints",
+      "PointsHook",
+      "IPointsHook",
+      "PointsRedeemer",
     ],
   },
   paths: {
@@ -43,7 +53,7 @@ export default defineConfig({
     etherscan: {
       apiKey: configVariable("ETHERSCAN_API_KEY"),
       enabled: true,
-    },
+    }
   },
   networks: {
     hardhat: {
@@ -63,7 +73,7 @@ export default defineConfig({
       url: configVariable("ALCHEMY_API_KEY", "https://base-sepolia.g.alchemy.com/v2/{variable}"),
       accounts: [configVariable("PRIVATE_KEY")],
     },
-    "base-mainnet": {
+    base: {
       type: "http",
       chainType: "l1",
       chainId: 8453,

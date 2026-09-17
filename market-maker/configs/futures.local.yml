@@ -1,0 +1,81 @@
+# yaml-language-server: $schema=../schemas/futures.json
+# Titan Market Maker - Futures - LOCAL (hardhat).
+#
+#   PRIVATE_KEY             - hex private key of the market-making wallet
+#   FUTURES_ADDRESS         - Futures address on the local chain
+
+nodeEnv: development
+commitHash: ${COMMIT_HASH:-dev}
+logLevel: debug
+dryRun: false
+# Local/dev iterates fast; leave resting orders on the hardhat book on Ctrl-C
+# so you don't pay the cancel-then-reopen round-trip on every restart.
+cancelOrdersOnShutdown: false
+
+wallets:
+  primary:
+    privateKey: ${PRIVATE_KEY}
+
+network:
+  name: "hardhat"
+  rpcUrl: "http://127.0.0.1:8545"
+  ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
+
+venue:
+  kind: futures
+  address: ${FUTURES_ADDRESS}
+  wallet: primary
+
+pricing:
+  strategy: reservation-price
+  riskAversion: 0.001
+  marginCallTimeSec: 3600
+  minSpreadBps: 20
+  volatilityMultiplier: 2.5
+  maxSkewTicks: 0
+
+sizing:
+  strategy: geometric-taper
+  baseQuantity: "10000000" # venue-native (contracts base units)
+  numLevelsPerSide: 10
+  taperRatio: 0.6
+
+risk:
+  maxPositionSize: 10
+  maxUtilizationPct: 80
+  minCollateralBalance: 1
+  maxDailyLossUsd: 100
+  maxGasBudgetPerHourUsd: 50
+  maxGasBudgetPerDayUsd: 500
+  gasSpikeThresholdPct: 200
+  gasPenaltyBps: 5
+  urgentRequoteThresholdTicks: 10
+
+gas:
+  gasCapMultiplier: 2.0
+
+timing:
+  pollIntervalSec: 3
+  requoteCooldownSec: 1
+  resyncIntervalSec: 60
+  levelSpacingTicks: 1
+  staleBandAllowanceUsd: 0.03
+  staleSizeAllowanceUsd: 50
+
+collateral:
+  autoDeposit: false
+  autoDepositMinAmount: 0
+
+oracle:
+  # No `history:` block → cold start, σ warms up live as the local oracle
+  # ticks (likely never on hardhat unless you script price updates).
+  windowSize: 60
+  precisionBits: 48
+  historyLookbackMultiplier: 4
+
+health:
+  port: 3001
+
+readBatchSize: 100
+# Per-operation batch sizes for writes.
+writeBatchSize: 100

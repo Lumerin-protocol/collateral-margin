@@ -1,0 +1,4 @@
+allowBuilds:
+  "@arbitrum/nitro-contracts": false
+  keccak: true
+  secp256k1: true

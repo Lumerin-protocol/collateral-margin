@@ -1,0 +1,51 @@
+# Use subgraph.template.yaml to add changes to the subgraph.yaml file
+# Variables are substituted via envsubst from environment variables
+specVersion: 1.3.0
+indexerHints:
+  prune: auto
+schema:
+  file: ./schema.graphql
+dataSources:
+  - kind: ethereum
+    name: CollateralVault
+    network: "${NETWORK}"
+    source:
+      address: "${VAULT_ADDRESS}"
+      startBlock: ${VAULT_START_BLOCK}
+      abi: CollateralVault
+    context:
+      # Authorized engine addresses, used to bucket `transaction.to` on
+      # internal Transfer events into PERPS / OPTIONS / OTHER.
+      perpsAddress:
+        type: String
+        data: "${PERPS_ADDRESS}"
+      optionsAddress:
+        type: String
+        data: "${OPTIONS_ADDRESS}"
+    mapping:
+      kind: ethereum/events
+      apiVersion: 0.0.9
+      language: wasm/assemblyscript
+      entities:
+        - Vault
+        - VaultUser
+        - VaultDeposit
+        - VaultWithdrawal
+        - VaultInternalTransfer
+      abis:
+        - name: CollateralVault
+          file: ../contracts/abi/CollateralVault.json
+      eventHandlers:
+        - event: Initialized(uint64)
+          handler: handleInitialized
+        - event: Transfer(indexed address,indexed address,uint256)
+          handler: handleTransfer
+        - event: Deposited(indexed address,uint256,indexed address)
+          handler: handleDeposited
+        - event: Withdrawn(indexed address,uint256,indexed address)
+          handler: handleWithdrawn
+        - event: InsuranceFundDeposited(indexed address,uint256)
+          handler: handleInsuranceFundDeposited
+        - event: InsuranceFundWithdrawn(indexed address,uint256)
+          handler: handleInsuranceFundWithdrawn
+      file: ./src/vault.ts
