@@ -12,11 +12,12 @@ async function main() {
 
   const { viem } = await hre.network.getOrCreate();
 
-  const vaultAddress = requireAddress("VAULT_ADDRESS");
+  const VAULT_ADDRESS = requireAddress("VAULT_ADDRESS");
   const SAFE_OWNER_ADDRESS = readOptionalAddress("SAFE_OWNER_ADDRESS");
-  const PERPS_DEX_ADDRESS = readOptionalAddress("PERPS_DEX_ADDRESS");
+  const PERPS_ADDRESS = readOptionalAddress("PERPS_ADDRESS");
   const OPTIONS_ENGINE_ADDRESS = readOptionalAddress("OPTIONS_ENGINE_ADDRESS");
   const FUTURES_ADDRESS = readOptionalAddress("FUTURES_ADDRESS");
+  const PRICE_ORACLE_ADDRESS = readOptionalAddress("PRICE_ORACLE_ADDRESS");
 
   const imSpotShock = readOptionalBigInt("IM_SPOT_SHOCK");
   const mmSpotShock = readOptionalBigInt("MM_SPOT_SHOCK");
@@ -33,7 +34,7 @@ async function main() {
   logInfo("deployer", { Address: addrUrl(pc, deployer.account.address) });
 
   // ── Verify vault & whether deployer can wire it ─────────────────────────
-  const vault = await viem.getContractAt("CollateralVault", vaultAddress);
+  const vault = await viem.getContractAt("CollateralVault", VAULT_ADDRESS);
   const vaultOwner = await vault.read.owner();
   const deployerIsVaultOwner = getAddress(vaultOwner) === getAddress(deployer.account.address);
   logInfo("vault", {
@@ -44,9 +45,10 @@ async function main() {
   });
 
   logInfo("optional engines (will be registered if set)", {
-    Perps: PERPS_DEX_ADDRESS ?? "(none)",
+    Perps: PERPS_ADDRESS ?? "(none)",
     Options: OPTIONS_ENGINE_ADDRESS ?? "(none)",
     Futures: FUTURES_ADDRESS ?? "(none)",
+    PriceOracle: PRICE_ORACLE_ADDRESS ?? "(none)",
   });
 
   if (overrideShocks) {
@@ -81,17 +83,18 @@ async function main() {
   const pmeInitData = encodeFunctionData({
     abi: pmeImpl.abi,
     functionName: "initialize",
-    args: [vault.address],
+    args: [],
   });
   const pmeProxy = await viem.deployContract("ERC1967Proxy", [pmeImpl.address, pmeInitData], {
     confirmations: 5,
   });
+
   logStep("Deployed", addrUrl(pc, pmeProxy.address));
   await verifyContract(pmeProxy.address, [pmeImpl.address, pmeInitData]);
   logStep("Verified", addrUrl(pc, pmeProxy.address));
 
   const pme = await viem.getContractAt("PortfolioMarginEngine", pmeProxy.address);
-  logInfo("pme", {
+  const data = {
     Address: addrUrl(pc, pme.address),
     Version: await pme.read.VERSION(),
     Owner: await pme.read.owner(),
@@ -99,7 +102,11 @@ async function main() {
     mmSpotShock: await pme.read.mmSpotShock(),
     imVolShock: await pme.read.imVolShock(),
     mmVolShock: await pme.read.mmVolShock(),
-  });
+    vault: await pme.read.vault(),
+  }
+
+  logInfo("pme", data);
+
 
   // ── 3. Override stress shocks (optional) ────────────────────────────────
   if (overrideShocks) {
@@ -126,10 +133,10 @@ async function main() {
   }
 
   // ── 4. Register product engines on PME (optional) ───────────────────────
-  if (PERPS_DEX_ADDRESS) {
-    logInfo("PME.setPerps", { perpsDex: PERPS_DEX_ADDRESS });
+  if (PERPS_ADDRESS) {
+    logInfo("PME.addLinearMarket (perps)", { market: PERPS_ADDRESS });
     await logPrompt("Proceed?");
-    const sim = await pme.simulate.setPerps([PERPS_DEX_ADDRESS]);
+    const sim = await pme.simulate.addLinearMarket([PERPS_ADDRESS]);
     const receipt = await writeAndWait(deployer, sim);
     logStep("Done", txUrl(pc, receipt.transactionHash));
   }
@@ -141,9 +148,24 @@ async function main() {
     logStep("Done", txUrl(pc, receipt.transactionHash));
   }
   if (FUTURES_ADDRESS) {
-    logInfo("PME.setFutures", { futures: FUTURES_ADDRESS });
+    logInfo("PME.addLinearMarket (futures)", { market: FUTURES_ADDRESS });
     await logPrompt("Proceed?");
-    const sim = await pme.simulate.setFutures([FUTURES_ADDRESS]);
+    const sim = await pme.simulate.addLinearMarket([FUTURES_ADDRESS]);
+    const receipt = await writeAndWait(deployer, sim);
+    logStep("Done", txUrl(pc, receipt.transactionHash));
+  }
+  if (PRICE_ORACLE_ADDRESS) {
+    logInfo("PME.setOracle", { oracle: PRICE_ORACLE_ADDRESS });
+    await logPrompt("Proceed?");
+    const sim = await pme.simulate.setOracle([PRICE_ORACLE_ADDRESS]);
+    const receipt = await writeAndWait(deployer, sim);
+    logStep("Done", txUrl(pc, receipt.transactionHash));
+  }
+
+  if (getAddress(data.vault) !== getAddress(VAULT_ADDRESS)) {
+    logInfo("PME.setVault", { vault: VAULT_ADDRESS });
+    await logPrompt("Proceed?");
+    const sim = await pme.simulate.setVault([VAULT_ADDRESS]);
     const receipt = await writeAndWait(deployer, sim);
     logStep("Done", txUrl(pc, receipt.transactionHash));
   }
@@ -153,7 +175,7 @@ async function main() {
   // we surface the calldata that the current owner (typically a Safe) must
   // execute manually.
   const engines: { label: string; addr: Address }[] = [];
-  if (PERPS_DEX_ADDRESS) engines.push({ label: "perps", addr: PERPS_DEX_ADDRESS });
+  if (PERPS_ADDRESS) engines.push({ label: "perps", addr: PERPS_ADDRESS });
   if (OPTIONS_ENGINE_ADDRESS) engines.push({ label: "options", addr: OPTIONS_ENGINE_ADDRESS });
   if (FUTURES_ADDRESS) engines.push({ label: "futures", addr: FUTURES_ADDRESS });
 

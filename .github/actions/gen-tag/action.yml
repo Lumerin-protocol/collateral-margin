@@ -1,0 +1,147 @@
+name: 'Generate Version Tag'
+description: 'Generates component-based version tags for monorepo deployments'
+
+inputs:
+  component:
+    description: 'Component name (folder name, e.g., indexer, ui, oracle-update)'
+    required: true
+  major_version:
+    description: 'Target major version (triggers major bump if greater than current)'
+    required: false
+    default: '3'
+  environment_override:
+    description: 'Override environment (for workflow_dispatch). Leave empty for branch-based detection.'
+    required: false
+    default: ''
+
+outputs:
+  tag_name:
+    description: 'Full tag name (e.g., indexer-v2.0.5-dev)'
+    value: ${{ steps.gen_tag.outputs.tag_name }}
+  vtag:
+    description: 'Version tag (same as tag_name)'
+    value: ${{ steps.gen_tag.outputs.vtag }}
+  version:
+    description: 'Version string with v prefix (e.g., v2.0.5-dev)'
+    value: ${{ steps.gen_tag.outputs.version }}
+  vfull:
+    description: 'Semantic version without prefix (e.g., 2.0.5)'
+    value: ${{ steps.gen_tag.outputs.vfull }}
+  environment:
+    description: 'Deployment environment (dev, stg, main)'
+    value: ${{ steps.determine_env.outputs.environment }}
+  should_create_release:
+    description: 'Whether to create a GitHub release (true for main)'
+    value: ${{ steps.determine_env.outputs.should_create_release }}
+  is_cicd_branch:
+    description: 'Whether this is a CI/CD test branch'
+    value: ${{ steps.determine_env.outputs.is_cicd_branch }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Determine environment
+      id: determine_env
+      shell: bash
+      run: |
+        ENV_OVERRIDE="${{ inputs.environment_override }}"
+        IS_CICD="false"
+        
+        if [ -n "$ENV_OVERRIDE" ]; then
+          # Use override from workflow_dispatch
+          ENV="$ENV_OVERRIDE"
+          CREATE_RELEASE="false"
+          [ "$ENV" == "main" ] && CREATE_RELEASE="true"
+        else
+          # Detect from branch name
+          BRANCH="${{ github.ref_name }}"
+          if [ "$BRANCH" == "main" ]; then
+            ENV="main"
+            CREATE_RELEASE="true"
+          elif [ "$BRANCH" == "stg" ]; then
+            ENV="stg"
+            CREATE_RELEASE="false"
+          elif [[ "$BRANCH" == cicd/* ]]; then
+            ENV="dev"
+            CREATE_RELEASE="false"
+            IS_CICD="true"
+            echo "🔧 CI/CD test branch detected - will skip build/deploy"
+          else
+            ENV="dev"
+            CREATE_RELEASE="false"
+          fi
+        fi
+        echo "environment=${ENV}" >> $GITHUB_OUTPUT
+        echo "should_create_release=${CREATE_RELEASE}" >> $GITHUB_OUTPUT
+        echo "is_cicd_branch=${IS_CICD}" >> $GITHUB_OUTPUT
+
+    - name: Generate version tag
+      id: gen_tag
+      shell: bash
+      run: |
+        # Component-based versioning for monorepo
+        # Pattern: <component>-v<major>.<minor>.<patch>[-env]
+        COMPONENT="${{ inputs.component }}"
+        VMAJ_NEW=${{ inputs.major_version }}
+        VMIN_NEW=0
+        VPAT_NEW=0
+        
+        set +o pipefail
+        
+        # Find the last production tag for this component (without -dev/-stg suffix)
+        # Use git tag -l with sort to find latest, not git describe (which requires reachability)
+        VLAST=$(git tag -l "${COMPONENT}-v[0-9]*" | grep -E "^${COMPONENT}-v[0-9]+\.[0-9]+\.[0-9]+$" | sort -V | tail -n 1 | sed "s/${COMPONENT}-v//" || echo "")
+        
+        if [ -n "$VLAST" ]; then
+            # Parse existing version
+            eval $(echo "$VLAST" | awk -F '.' '{print "VMAJ="$1" VMIN="$2" VPAT="$3}')
+        else
+            # No existing tags - start fresh
+            VMAJ=$VMAJ_NEW
+            VMIN=0
+            VPAT=0
+        fi
+        
+        ENV="${{ steps.determine_env.outputs.environment }}"
+        
+        if [ "$ENV" = "main" ]; then
+            # Production release - increment version
+            if [ "$VMAJ_NEW" -gt "$VMAJ" ]; then
+                # Major version bump requested
+                VMAJ=$VMAJ_NEW
+                VMIN=$VMIN_NEW
+                VPAT=$VPAT_NEW
+            else
+                # Increment minor version, reset patch
+                VMIN=$((VMIN+1))
+                VPAT=0
+            fi
+            VFULL=${VMAJ}.${VMIN}.${VPAT}
+            VTAG=${COMPONENT}-v${VFULL}
+            VERSION="v${VFULL}"
+        else
+            # Non-production - use commit count as patch for uniqueness
+            MB=$(git merge-base refs/remotes/origin/main HEAD 2>/dev/null || git rev-parse HEAD)
+            VPAT=$(git rev-list --count --no-merges ${MB}..HEAD 2>/dev/null || echo "0")
+            VFULL=${VMAJ}.${VMIN}.${VPAT}
+            RNAME=${GITHUB_REF_NAME##*/}
+            [ "$GITHUB_EVENT_NAME" = "pull_request" ] && RNAME=pr${GITHUB_REF_NAME%/merge}
+            VTAG=${COMPONENT}-v${VFULL}-${RNAME}
+            VERSION="v${VFULL}-${RNAME}"
+        fi
+        
+        # Output variables
+        echo "tag_name=${VTAG}" >> $GITHUB_OUTPUT
+        echo "vtag=${VTAG}" >> $GITHUB_OUTPUT
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        echo "vfull=${VFULL}" >> $GITHUB_OUTPUT
+        
+        # Summary
+        echo "📦 Component: ${COMPONENT}" >> $GITHUB_STEP_SUMMARY
+        echo "🌍 Environment: ${ENV}" >> $GITHUB_STEP_SUMMARY
+        echo "✅ Proposed Tag: ${VTAG} (will be created after successful deployment)" >> $GITHUB_STEP_SUMMARY
+        if [ -n "$VLAST" ]; then
+          echo "📋 Last Production Tag: ${COMPONENT}-v${VLAST}" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "📋 Last Production Tag: (none - first deployment)" >> $GITHUB_STEP_SUMMARY
+        fi

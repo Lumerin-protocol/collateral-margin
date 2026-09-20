@@ -1,0 +1,118 @@
+name: Keeper Tests
+
+on:
+  push:
+    branches: [main, dev, stg]
+    paths:
+      - "keeper/**"
+      - ".github/workflows/keeper-test.yml"
+
+  pull_request:
+    paths:
+      - "keeper/**"
+      - ".github/workflows/keeper-test.yml"
+
+  workflow_dispatch:
+
+concurrency:
+  group: keeper-test-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout collateral-margin
+        uses: actions/checkout@v5
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: keeper/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: keeper/pnpm-lock.yaml
+
+      - name: Install keeper dependencies
+        working-directory: ./keeper
+        run: pnpm install --frozen-lockfile
+
+      # Keep the generated HashPowerFutures artifact vendored with the keeper
+      # until the upstream ABI package publishes the renamed module.
+      - name: Verify vendored HashPowerFutures ABI
+        working-directory: ./keeper
+        run: |
+          set -euo pipefail
+          abi="src/abi/HashPowerFutures.ts"
+          if [[ ! -f "$abi" ]]; then
+            echo "::error::$abi is missing"
+            exit 1
+          fi
+          if ! grep -q 'export const HashPowerFuturesAbi' "$abi"; then
+            echo "::error::$abi does not export HashPowerFuturesAbi"
+            exit 1
+          fi
+          echo "Vendored HashPowerFutures ABI present"
+
+      - name: Lint
+        working-directory: ./keeper
+        run: pnpm lint
+
+      - name: TypeCheck
+        working-directory: ./keeper
+        run: pnpm typecheck
+
+      - name: Unit tests
+        working-directory: ./keeper
+        run: pnpm test
+
+      - name: Install contracts dependencies
+        working-directory: ./contracts
+        run: pnpm install --frozen-lockfile
+
+      - name: Checkout derivatives-marketplace (perps contracts)
+        uses: actions/checkout@v5
+        with:
+          repository: Lumerin-protocol/derivatives-marketplace
+          # Signed netEntryValue on the position tuple; implements this branch's
+          # engine interface (PR #97).
+          ref: 316be14c529071df4d2ff71321ab4a6fbedcfaaf
+          path: perps
+
+      - name: Checkout futures-marketplace
+        uses: actions/checkout@v5
+        with:
+          repository: Lumerin-protocol/futures-marketplace
+          # HashPowerFutures rename and per-delivery order reads; implements this
+          # branch's engine interface (PR #258).
+          ref: 5a543ae0c59c651790bc99a8550da9a2ffd30c2b
+          path: futures-marketplace
+
+      - name: Install perps contracts dependencies
+        working-directory: perps/contracts
+        run: pnpm install --frozen-lockfile
+
+      - name: Install futures contracts dependencies
+        working-directory: futures-marketplace/contracts
+        run: pnpm install --frozen-lockfile
+
+      - name: Integration tests
+        working-directory: ./keeper
+        env:
+          PERPS_REPO: ${{ github.workspace }}/perps
+          FUTURES_REPO: ${{ github.workspace }}/futures-marketplace
+        run: pnpm test:integration

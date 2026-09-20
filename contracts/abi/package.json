@@ -1,0 +1,7 @@
+{
+  "name": "collateral-margin-abi",
+  "type": "module",
+  "exports": {
+    "./*": "./*"
+  }
+}

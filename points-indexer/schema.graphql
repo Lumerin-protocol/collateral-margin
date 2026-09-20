@@ -1,0 +1,86 @@
+# Points leaderboard + mint mirror.
+#
+# The POINTS (HP) ERC20 is the canonical balance. This subgraph is NOT the source
+# of truth; it serves two purposes (design §7):
+#   1. Live leaderboard — query `UserPoints(orderBy: total, orderDirection: desc)`.
+#   2. Mirror — `total` / `totalSupply` track the on-chain HP `Transfer` mints/burns
+#      exactly. Every mint (`from == 0x0`) is also counted (`mintCount`) and recorded
+#      as a `PointsMint`. The accrual formula lives entirely in `PointsHook`; the
+#      subgraph only mirrors its `mint` side-effects, so it never re-derives points.
+
+# ── Program root entity (singleton, id = "0") ───────────────────────────────
+type PointsProgram @entity(immutable: false) {
+  "Singleton entity, id is always the literal string \"0\"."
+  id: String!
+
+  # Contract identity
+  pointsToken: Bytes!
+  redeemer: Bytes!
+
+  # Canonical mirror (from HP Transfer events)
+  totalPoints: BigInt! # current circulating HP (mirrors totalSupply)
+  totalMinted: BigInt! # cumulative HP ever minted
+  totalBurned: BigInt! # cumulative HP burned via redemption
+  finalized: Boolean! # true once HP.finalize() has frozen minting
+
+  # Redemption (from PointsRedeemer events)
+  totalRedeemedPoints: BigInt!
+  totalGovDistributed: BigInt!
+
+  # Counters
+  totalUsers: Int!
+  mintCount: Int! # number of mint events across all users
+  redemptionCount: Int!
+
+  lastUpdatedAt: BigInt!
+}
+
+# ── Per-user leaderboard row ────────────────────────────────────────────────
+type UserPoints @entity(immutable: false) {
+  id: Bytes! # user address
+  address: Bytes!
+
+  "Current HP balance (mirrors `points.balanceOf(address)`); the leaderboard sort key."
+  total: BigInt!
+  "Cumulative HP ever minted to this account (does not decrease on redemption)."
+  totalEarned: BigInt!
+
+  # Redemption
+  redeemedPoints: BigInt!
+  govReceived: BigInt!
+
+  # Counters
+  mintCount: Int! # number of mints credited to this account
+
+  # Relations
+  mints: [PointsMint!]! @derivedFrom(field: "user")
+  redemptions: [PointsRedemption!]! @derivedFrom(field: "user")
+
+  firstSeenAt: BigInt!
+  lastActivityAt: BigInt!
+}
+
+# ── Individual mint (HP Transfer with from == 0x0) ──────────────────────────
+type PointsMint @entity(immutable: true) {
+  id: Bytes! # tx hash + log index
+  user: UserPoints!
+  amount: BigInt!
+
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+# ── Redemption (PointsRedeemer Swapped) ─────────────────────────────────────
+type PointsRedemption @entity(immutable: true) {
+  id: Bytes! # tx hash + log index
+  user: UserPoints!
+  pointsBurned: BigInt!
+  govAmount: BigInt!
+  liquidAmount: BigInt!
+  escrowAmount: BigInt!
+
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}

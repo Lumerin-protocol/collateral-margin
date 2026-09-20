@@ -1,0 +1,1562 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Titan Market Maker - Portfolio config",
+  "additionalProperties": false,
+  "description": "Titan Market Maker — unified portfolio app config.",
+  "type": "object",
+  "required": [
+    "nodeEnv",
+    "commitHash",
+    "logLevel",
+    "dryRun",
+    "cancelOrdersOnShutdown",
+    "wallets",
+    "wallet",
+    "network",
+    "venues",
+    "risk",
+    "gas",
+    "collateral",
+    "oracle",
+    "timing",
+    "health",
+    "rollCheckIntervalSec",
+    "sharedStalenessGraceSec",
+    "readBatchSize",
+    "writeBatchSize"
+  ],
+  "properties": {
+    "nodeEnv": {
+      "default": "development",
+      "type": "string"
+    },
+    "commitHash": {
+      "default": "unknown",
+      "type": "string"
+    },
+    "logLevel": {
+      "default": "info",
+      "type": "string"
+    },
+    "dryRun": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+          "description": "Environment variable interpolation (resolved at startup)"
+        }
+      ],
+      "default": false
+    },
+    "cancelOrdersOnShutdown": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+          "description": "Environment variable interpolation (resolved at startup)"
+        }
+      ],
+      "default": true
+    },
+    "wallets": {
+      "description": "Named signer wallets; `wallet` selects the portfolio signer.",
+      "type": "object",
+      "patternProperties": {
+        "^(.*)$": {
+          "additionalProperties": false,
+          "description": "Named signer wallet. Referenced by venue.wallet.",
+          "type": "object",
+          "required": [
+            "privateKey"
+          ],
+          "properties": {
+            "privateKey": {
+              "anyOf": [
+                {
+                  "pattern": "^0x[a-fA-F0-9]+$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ],
+              "description": "Hex-encoded ECDSA private key for the signer."
+            }
+          }
+        }
+      }
+    },
+    "wallet": {
+      "description": "Key in `wallets` for the single shared signer. All venues submit through this one account/nonce.",
+      "type": "string"
+    },
+    "network": {
+      "additionalProperties": false,
+      "description": "Network connection settings.",
+      "type": "object",
+      "required": [
+        "name",
+        "rpcUrl"
+      ],
+      "properties": {
+        "name": {
+          "description": "Chain id (hardhat, base-sepolia, base, arbitrum). Resolves the viem chain object.",
+          "type": "string"
+        },
+        "rpcUrl": {
+          "description": "JSON-RPC endpoint URL for reads and tx submission.",
+          "type": "string"
+        },
+        "ethPriceFeed": {
+          "description": "Optional Chainlink ETH/USD aggregator. Required for USD-denominated gas budgets; leave empty for local hardhat.",
+          "anyOf": [
+            {
+              "const": "",
+              "type": "string"
+            },
+            {
+              "anyOf": [
+                {
+                  "pattern": "^0x[a-fA-F0-9]{40}$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "venues": {
+      "minItems": 1,
+      "description": "Venues to run in this process (perps and/or futures).",
+      "type": "array",
+      "items": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "description": "Perps venue in the portfolio.",
+            "type": "object",
+            "required": [
+              "kind",
+              "address",
+              "maxPositionSize",
+              "pricing",
+              "sizing"
+            ],
+            "properties": {
+              "kind": {
+                "const": "perps",
+                "type": "string"
+              },
+              "address": {
+                "anyOf": [
+                  {
+                    "pattern": "^0x[a-fA-F0-9]{40}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                    "description": "Environment variable interpolation (resolved at startup)"
+                  }
+                ],
+                "description": "Deployed HashPowerPerpsDEX address."
+              },
+              "maxPositionSize": {
+                "description": "USD. Per-venue net position cap for perps.",
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "pattern": "^-?\\d+(\\.\\d+)?$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                        "description": "Environment variable interpolation (resolved at startup)"
+                      }
+                    ]
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                        "description": "Environment variable interpolation (resolved at startup)"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "pricing": {
+                "additionalProperties": false,
+                "description": "Effective-spread pricing parameters.",
+                "type": "object",
+                "required": [
+                  "strategy",
+                  "minSpreadBps",
+                  "volatilityMultiplier",
+                  "inventorySkewGamma",
+                  "maxSkewTicks"
+                ],
+                "properties": {
+                  "strategy": {
+                    "description": "Pricing strategy. Perps lock to 'effective-spread' (symmetric mid-spread).",
+                    "const": "effective-spread",
+                    "type": "string"
+                  },
+                  "minSpreadBps": {
+                    "anyOf": [
+                      {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                        "description": "Environment variable interpolation (resolved at startup)"
+                      }
+                    ],
+                    "description": "Floor on the half-spread in bps. Quotes never tighten below this."
+                  },
+                  "volatilityMultiplier": {
+                    "anyOf": [
+                      {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                        "description": "Environment variable interpolation (resolved at startup)"
+                      }
+                    ],
+                    "description": "Multiplier applied to realized volatility when widening the spread."
+                  },
+                  "inventorySkewGamma": {
+                    "anyOf": [
+                      {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                        "description": "Environment variable interpolation (resolved at startup)"
+                      }
+                    ],
+                    "description": "Inventory skew coefficient. Quotes shift by γ × (netPos / maxPos) ticks toward unwinding."
+                  },
+                  "maxSkewTicks": {
+                    "anyOf": [
+                      {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                        "description": "Environment variable interpolation (resolved at startup)"
+                      }
+                    ],
+                    "description": "Cap on absolute ticks a level can be skewed from the symmetric mid."
+                  }
+                }
+              },
+              "sizing": {
+                "additionalProperties": false,
+                "description": "Geometric-taper sizing parameters.",
+                "type": "object",
+                "required": [
+                  "strategy",
+                  "baseQuantity",
+                  "numLevelsPerSide",
+                  "taperRatio"
+                ],
+                "properties": {
+                  "strategy": {
+                    "description": "Sizing strategy. Perps lock to 'geometric-taper' (front level largest, decays by taperRatio).",
+                    "const": "geometric-taper",
+                    "type": "string"
+                  },
+                  "baseQuantity": {
+                    "description": "Per-level size unit in venue-native units (perps: hashrate base). Total per-side budget is baseQuantity × numLevelsPerSide, distributed via taperRatio. Use a string for values > 2^53.",
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "pattern": "^\\d+$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                            "description": "Environment variable interpolation (resolved at startup)"
+                          }
+                        ]
+                      },
+                      {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                            "description": "Environment variable interpolation (resolved at startup)"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "numLevelsPerSide": {
+                    "anyOf": [
+                      {
+                        "minimum": 1,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                        "description": "Environment variable interpolation (resolved at startup)"
+                      }
+                    ],
+                    "description": "Number of price levels quoted per side."
+                  },
+                  "taperRatio": {
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "exclusiveMaximum": 1,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                        "description": "Environment variable interpolation (resolved at startup)"
+                      }
+                    ],
+                    "description": "Geometric decay ratio in (0, 1). Each subsequent level is taperRatio × the previous."
+                  }
+                }
+              }
+            }
+          },
+          {
+            "additionalProperties": false,
+            "description": "Futures venue (one market per selected expiry).",
+            "type": "object",
+            "required": [
+              "kind",
+              "address",
+              "maxPositionSize",
+              "pricing",
+              "sizing"
+            ],
+            "properties": {
+              "kind": {
+                "const": "futures",
+                "type": "string"
+              },
+              "address": {
+                "anyOf": [
+                  {
+                    "pattern": "^0x[a-fA-F0-9]{40}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                    "description": "Environment variable interpolation (resolved at startup)"
+                  }
+                ],
+                "description": "Deployed Futures address."
+              },
+              "maxPositionSize": {
+                "description": "USD. Per-expiry net position cap for futures markets.",
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "pattern": "^-?\\d+(\\.\\d+)?$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                        "description": "Environment variable interpolation (resolved at startup)"
+                      }
+                    ]
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                        "description": "Environment variable interpolation (resolved at startup)"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "marketSelection": {
+                "description": "Which futures expiries to quote: 'nearest' N dates, or explicit 'indices' into the nearest-first window.",
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "type": "object",
+                    "required": [
+                      "mode"
+                    ],
+                    "properties": {
+                      "mode": {
+                        "const": "nearest",
+                        "type": "string"
+                      },
+                      "count": {
+                        "anyOf": [
+                          {
+                            "minimum": 1,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                            "description": "Environment variable interpolation (resolved at startup)"
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    "additionalProperties": false,
+                    "type": "object",
+                    "required": [
+                      "mode",
+                      "indices"
+                    ],
+                    "properties": {
+                      "mode": {
+                        "const": "indices",
+                        "type": "string"
+                      },
+                      "indices": {
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "minimum": 0,
+                              "type": "integer"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                              "description": "Environment variable interpolation (resolved at startup)"
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                ]
+              },
+              "pricing": {
+                "additionalProperties": false,
+                "description": "Reservation-price pricing parameters.",
+                "type": "object",
+                "required": [
+                  "strategy",
+                  "riskAversion",
+                  "marginCallTimeSec",
+                  "minSpreadBps",
+                  "volatilityMultiplier",
+                  "maxSkewTicks"
+                ],
+                "properties": {
+                  "strategy": {
+                    "description": "Pricing strategy. Futures lock to 'reservation-price' (Avellaneda–Stoikov inventory skew).",
+                    "const": "reservation-price",
+                    "type": "string"
+                  },
+                  "riskAversion": {
+                    "anyOf": [
+                      {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                        "description": "Environment variable interpolation (resolved at startup)"
+                      }
+                    ],
+                    "description": "Avellaneda–Stoikov risk aversion γ. Higher = stronger inventory skew."
+                  },
+                  "marginCallTimeSec": {
+                    "anyOf": [
+                      {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                        "description": "Environment variable interpolation (resolved at startup)"
+                      }
+                    ],
+                    "description": "Seconds. Fallback time-to-margin-call when InstrumentContext.expirationAt is unavailable."
+                  },
+                  "minSpreadBps": {
+                    "anyOf": [
+                      {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                        "description": "Environment variable interpolation (resolved at startup)"
+                      }
+                    ],
+                    "description": "Floor on the half-spread in bps. Quotes never tighten below this."
+                  },
+                  "volatilityMultiplier": {
+                    "anyOf": [
+                      {
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                        "description": "Environment variable interpolation (resolved at startup)"
+                      }
+                    ],
+                    "description": "Multiplier applied to realized volatility when widening the spread."
+                  },
+                  "maxSkewTicks": {
+                    "const": 0,
+                    "default": 0,
+                    "description": "Pinned to 0 — under reservation-price the skew is encoded in r itself.",
+                    "type": "number"
+                  }
+                }
+              },
+              "sizing": {
+                "additionalProperties": false,
+                "description": "Geometric-taper sizing parameters.",
+                "type": "object",
+                "required": [
+                  "strategy",
+                  "baseQuantity",
+                  "numLevelsPerSide",
+                  "taperRatio"
+                ],
+                "properties": {
+                  "strategy": {
+                    "description": "Sizing strategy. Futures lock to 'geometric-taper' (front level largest, decays by taperRatio).",
+                    "const": "geometric-taper",
+                    "type": "string"
+                  },
+                  "baseQuantity": {
+                    "description": "Total per-side budget in venue-native units (futures: contract base units). Distributed via taperRatio. Use a string for values > 2^53.",
+                    "anyOf": [
+                      {
+                        "anyOf": [
+                          {
+                            "pattern": "^\\d+$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                            "description": "Environment variable interpolation (resolved at startup)"
+                          }
+                        ]
+                      },
+                      {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "string",
+                            "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                            "description": "Environment variable interpolation (resolved at startup)"
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  "numLevelsPerSide": {
+                    "anyOf": [
+                      {
+                        "minimum": 1,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                        "description": "Environment variable interpolation (resolved at startup)"
+                      }
+                    ],
+                    "description": "Number of price levels quoted per side."
+                  },
+                  "taperRatio": {
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "exclusiveMaximum": 1,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                        "description": "Environment variable interpolation (resolved at startup)"
+                      }
+                    ],
+                    "description": "Geometric decay ratio in (0, 1). Each subsequent level is taperRatio × the previous."
+                  },
+                  "expirySizeDecay": {
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "maximum": 1,
+                        "type": "number"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                        "description": "Environment variable interpolation (resolved at startup)"
+                      }
+                    ],
+                    "description": "Per-expiry size multiplier for further delivery dates (nearest-first). Expiry i gets baseQuantity × expirySizeDecay^i. 1 disables. Portfolio-only effect when multiple expiries are quoted.",
+                    "default": 0.6
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "risk": {
+      "additionalProperties": false,
+      "description": "Risk caps, circuit-breakers, and gas-price guards.",
+      "type": "object",
+      "required": [
+        "maxPositionSize",
+        "maxUtilizationPct",
+        "minCollateralBalance",
+        "maxDailyLossUsd",
+        "maxGasBudgetPerHourUsd",
+        "maxGasBudgetPerDayUsd",
+        "gasSpikeThresholdPct",
+        "gasPenaltyBps",
+        "urgentRequoteThresholdTicks"
+      ],
+      "properties": {
+        "maxPositionSize": {
+          "description": "USD. Hard cap on |net position notional|. Beyond this, only risk-reducing quotes are placed.",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^-?\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        },
+        "maxUtilizationPct": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "maximum": 100,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Margin utilization (used IM / vault balance) above which only risk-reducing quotes are placed.",
+          "default": 80
+        },
+        "minCollateralBalance": {
+          "description": "USD. Operational floor; halts quoting when vault balance falls below this.",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^-?\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        },
+        "maxDailyLossUsd": {
+          "description": "USD. Daily PnL circuit-breaker. Halts quoting when realized loss + gas exceeds this since 00:00 UTC.",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^-?\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        },
+        "maxGasBudgetPerHourUsd": {
+          "default": 50,
+          "description": "USD. Soft throttle: when hourly gas spend exceeds this, requote cooldown triples.",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^-?\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        },
+        "maxGasBudgetPerDayUsd": {
+          "default": 500,
+          "description": "USD. Hard halt: stops requoting once daily gas spend exceeds this.",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^-?\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        },
+        "gasSpikeThresholdPct": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Percent of baseline. Quotes pause when current gas price exceeds (baseline × pct/100).",
+          "default": 200
+        },
+        "gasPenaltyBps": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Bps to widen spreads by per unit of gas-cost-as-fraction-of-notional (compensates for fill economics).",
+          "default": 5
+        },
+        "urgentRequoteThresholdTicks": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Tick distance from oracle at which a stale order is requoted immediately, ignoring cooldown.",
+          "default": 10
+        }
+      }
+    },
+    "gas": {
+      "additionalProperties": false,
+      "description": "Gas-pricing knobs.",
+      "type": "object",
+      "required": [
+        "gasCapMultiplier"
+      ],
+      "properties": {
+        "gasCapMultiplier": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Multiplier on viem-suggested gas price for the maxFeePerGas cap. Higher = more reliable inclusion at higher cost.",
+          "default": 2
+        }
+      }
+    },
+    "collateral": {
+      "additionalProperties": false,
+      "description": "Collateral vault behaviour.",
+      "type": "object",
+      "required": [
+        "autoDeposit",
+        "autoDepositMinAmount"
+      ],
+      "properties": {
+        "autoDeposit": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "If true, sweeps wallet token balance into the vault on each loop iteration (subject to min/max).",
+          "default": false
+        },
+        "autoDepositMinAmount": {
+          "default": 0,
+          "description": "USD. Trigger threshold: deposit fires only when wallet balance ≥ this. Dust filter to avoid wasting gas on tiny sweeps.",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^-?\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        },
+        "maxCollateralAmount": {
+          "description": "USD. Optional ceiling on the total vault balance held by this MM. Each auto-deposit brings the vault up to (but not above) this value; the wallet retains anything beyond it. Omit for no ceiling.",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^-?\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "oracle": {
+      "additionalProperties": false,
+      "description": "OracleTracker / volatility-window configuration.",
+      "type": "object",
+      "required": [
+        "windowSize",
+        "precisionBits",
+        "historyLookbackMultiplier"
+      ],
+      "properties": {
+        "windowSize": {
+          "anyOf": [
+            {
+              "minimum": 3,
+              "type": "integer"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Number of de-duplicated price samples retained for realized-vol estimation. 60 is enough for a ±9% standard error on σ; tune up for smoother σ at the cost of slower regime tracking.",
+          "default": 60
+        },
+        "precisionBits": {
+          "anyOf": [
+            {
+              "minimum": 16,
+              "maximum": 256,
+              "type": "integer"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Bits of fractional precision for the bigint ln/sqrt approximations underpinning σ. 48 is plenty for vol math; raise only if a strategy demonstrably needs more.",
+          "default": 48
+        },
+        "historyLookbackMultiplier": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Backfill fetches `windowSize × multiplier × pollInterval` of history from the subgraph, then trims duplicates. Multiplier > 1 absorbs Chainlink's slow update cadence so the window arrives full.",
+          "default": 4
+        },
+        "history": {
+          "additionalProperties": false,
+          "description": "Historical price source for σ window backfill.",
+          "type": "object",
+          "required": [
+            "subgraphUrl"
+          ],
+          "properties": {
+            "subgraphUrl": {
+              "description": "GraphQL endpoint for the hashprice-oracle subgraph (queries the HashpriceUsd time-series). Empty string is treated as 'no source' so YAML can use ${VAR:-} patterns; omit the entire `history` block for the same effect.",
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "timing": {
+      "additionalProperties": false,
+      "description": "Loop cadences and requote thresholds.",
+      "type": "object",
+      "required": [
+        "pollIntervalSec",
+        "requoteCooldownSec",
+        "resyncIntervalSec",
+        "levelSpacingTicks",
+        "staleBandAllowanceUsd",
+        "staleSizeAllowanceUsd"
+      ],
+      "properties": {
+        "pollIntervalSec": {
+          "default": 3,
+          "description": "Seconds between main-loop iterations (snapshot, quote, execute).",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "minimum": 0.1,
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        },
+        "requoteCooldownSec": {
+          "default": 1,
+          "description": "Seconds between requote bursts. Tripled when risk is throttled.",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        },
+        "resyncIntervalSec": {
+          "default": 60,
+          "description": "Seconds between full BookTracker snapshot refetches (event deltas in between).",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        },
+        "levelSpacingTicks": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Ticks between successive quote levels. 1 = quote every tick, 5 = every fifth.",
+          "default": 1
+        },
+        "staleBandAllowanceUsd": {
+          "default": 0.03,
+          "description": "USD price distance outside the worst desired bid/ask that still counts as in-band (kept). Independent of venue tick size. 0 = strict worst-desired edge. Default 0.03 ≈ 3 ticks when tick = $0.01.",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^-?\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        },
+        "staleSizeAllowanceUsd": {
+          "default": 50,
+          "description": "USD notional size allowance (reduce and top-up). Converted to venue-native qty at the level price (nearest unit; perps 1e6 scale, futures whole contracts) and compared to |have−want|. 0 = exact size match. Default 50 (~1 futures contract at ~$95).",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^-?\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "health": {
+      "additionalProperties": false,
+      "description": "Health-check HTTP server.",
+      "type": "object",
+      "required": [
+        "port"
+      ],
+      "properties": {
+        "port": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "TCP port for the /healthz HTTP endpoint.",
+          "default": 3001
+        }
+      }
+    },
+    "txCoordinator": {
+      "additionalProperties": false,
+      "default": {},
+      "description": "Centralized submission / nonce recovery.",
+      "type": "object",
+      "required": [
+        "confirmationTimeoutSec",
+        "maxReplacements",
+        "replacementFeeBumpPct",
+        "maxNonceResyncs"
+      ],
+      "properties": {
+        "confirmationTimeoutSec": {
+          "default": 60,
+          "description": "Seconds to wait for a tx receipt before replacing by fee.",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        },
+        "maxReplacements": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Replacement-by-fee attempts before escalating to a cancel-tx.",
+          "default": 2
+        },
+        "replacementFeeBumpPct": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Fee bump per replacement attempt, percent.",
+          "default": 15
+        },
+        "maxNonceResyncs": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Per-submit retries that re-read the chain nonce when another party (e.g. a keeper sharing this wallet) advances it. Workaround for a shared signer.",
+          "default": 5
+        }
+      }
+    },
+    "circuitBreaker": {
+      "additionalProperties": false,
+      "default": {},
+      "description": "Per-market circuit-breaker tuning.",
+      "type": "object",
+      "required": [
+        "quarantineThreshold",
+        "baseBackoffSec",
+        "maxBackoffSec"
+      ],
+      "properties": {
+        "quarantineThreshold": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Consecutive market errors before quarantine.",
+          "default": 3
+        },
+        "baseBackoffSec": {
+          "default": 5,
+          "description": "Base quarantine backoff (seconds).",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        },
+        "maxBackoffSec": {
+          "default": 180,
+          "description": "Backoff ceiling (seconds).",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "rollCheckIntervalSec": {
+      "default": 300,
+      "description": "Seconds between futures roll re-checks (add/drop expiries).",
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "pattern": "^\\d+(\\.\\d+)?$",
+              "type": "string"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ]
+        },
+        {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ]
+        }
+      ]
+    },
+    "sharedStalenessGraceSec": {
+      "default": 30,
+      "description": "Seconds shared inputs may be stale before new placements are paused (existing orders kept).",
+      "anyOf": [
+        {
+          "anyOf": [
+            {
+              "pattern": "^\\d+(\\.\\d+)?$",
+              "type": "string"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ]
+        },
+        {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ]
+        }
+      ]
+    },
+    "readBatchSize": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+          "description": "Environment variable interpolation (resolved at startup)"
+        }
+      ],
+      "default": 10
+    },
+    "writeBatchSize": {
+      "anyOf": [
+        {
+          "minimum": 1,
+          "type": "number"
+        },
+        {
+          "type": "string",
+          "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+          "description": "Environment variable interpolation (resolved at startup)"
+        }
+      ],
+      "default": 100
+    }
+  }
+}

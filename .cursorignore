@@ -1,3 +1,11 @@
 .env
 .env.*
 !.env.example
+# Terraform / Terragrunt
+.terraform
+.terraform.lock.hcl
+.terragrunt-cache
+*.out
+*.plan
+secret.tfvars
+secret.*

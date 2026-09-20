@@ -1,0 +1,6 @@
+# pnpm 11 keys allowBuilds by exact resolution, so the matchstick entries must be
+# updated whenever the git specs move to a different commit.
+allowBuilds:
+  esbuild: false
+  hardhat-matchstick-ts@https://codeload.github.com/lsheva/matchstick-ts/tar.gz/d613d674898f6d0d01a880dd4e1b514f707b93b9#path:packages/hardhat-matchstick-ts: true
+  matchstick-ts@https://codeload.github.com/lsheva/matchstick-ts/tar.gz/d613d674898f6d0d01a880dd4e1b514f707b93b9#path:packages/matchstick-ts: true
