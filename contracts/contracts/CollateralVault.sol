@@ -6,6 +6,7 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Versionable} from "./interfaces/Versionable.sol";
 import {ICollateralVault} from "./interfaces/ICollateralVault.sol";
@@ -29,6 +30,11 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     error NotAuthorized();
     error ZeroAddress();
     error FunctionDisabled();
+    /// @notice The margin engine aggregates a different vault than this one.
+    error VaultMismatch();
+    /// @dev A dependency did not answer a call the vault depends on: no code at the address,
+    ///      or the call reverted. Which dependency is bad is implied by the setter that reverted.
+    error InvalidDependency();
 
     // ── Events ──────────────────────────────────────────────────────────────
 
@@ -46,7 +52,7 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     ///      Balance is normal vault receipt tokens; authorized callers credit it via
     ///      `transfer` / `credit` / `depositFor`. Owner withdraws via `withdrawInsuranceFund`.
     address public constant INSURANCE_FUND_ADDR = 0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa;
-    string public constant VERSION = "1.0.1";
+    string public constant VERSION = "1.1.0";
 
     IERC20 public collateralToken;
     mapping(address => bool) public authorizedCallers;
@@ -99,15 +105,51 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
 
     // ── Admin ───────────────────────────────────────────────────────────────
 
+    function _authorizeUpgrade(address) internal override onlyOwner {}
+
     function setAuthorizedCaller(address caller, bool authorized) external onlyOwner {
         if (caller == address(0)) revert ZeroAddress();
         authorizedCallers[caller] = authorized;
         emit AuthorizedCallerSet(caller, authorized);
     }
 
+    /// @notice Set the margin engine that gates withdrawals. Pass `address(0)` to ungate them.
+    /// @dev Clearing is left open deliberately: it is the escape hatch if a broken engine would
+    ///      otherwise trap every balance in the vault. A non-zero engine must aggregate *this*
+    ///      vault — `computePortfolioIM` sizes the gate, so an engine reading another ledger
+    ///      would report margin for positions this vault never collateralizes and wave the
+    ///      withdrawal through. That failure is silent, unlike a wrong address, which reverts.
     function setMarginEngine(address _marginEngine) external onlyOwner {
+        if (_marginEngine != address(0)) {
+          _validateMarginEngine(_marginEngine);
+        }
+
         marginEngine = _marginEngine;
         emit MarginEngineSet(_marginEngine);
+    }
+
+    /// @dev `catch` only fires on a revert raised by the callee, so this check ahead of it is
+    ///      load-bearing: a call to an address holding no code succeeds with empty return data
+    ///      and fails later in this contract's decoder, out of the catch block's reach.
+    function _requireContract(address target) private view {
+        if (target.code.length == 0) revert InvalidDependency();
+    }
+
+    function _validateMarginEngine(address _marginEngine) private view {
+      _requireContract(_marginEngine);
+
+      // Probe a plain storage read rather than `computePortfolioIM`: the margin path needs
+      // the engine's own oracle, and wiring the vault must not depend on that being set yet.
+      try IPortfolioMarginEngine(_marginEngine).imSpotShock() returns (uint256) { }
+      catch {
+          revert InvalidDependency();
+      }
+
+      try IPortfolioMarginEngine(_marginEngine).vault() returns (ICollateralVault pinned) {
+          if (address(pinned) != address(this)) revert VaultMismatch();
+      } catch {
+          revert InvalidDependency();
+      }
     }
 
     /// @notice Deposit collateral into the insurance fund from `source`, minting its receipt tokens.
@@ -129,13 +171,26 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
         _depositFor(_msgSender(), _msgSender(), amount);
     }
 
+    /// @notice Deposit collateral tokens using an ERC-2612 permit (approve + deposit in one tx).
+    /// @param amount   Amount of collateral to deposit.
+    /// @param deadline Permit signature deadline.
+    /// @param v        Permit signature v.
+    /// @param r        Permit signature r.
+    /// @param s        Permit signature s.
+    function depositForPermit(address recipient, uint256 amount, uint256 deadline, uint8 v, bytes32 r, bytes32 s)
+        external
+    {
+        IERC20Permit(address(collateralToken)).permit(_msgSender(), address(this), amount, deadline, v, r, s);
+        _depositFor(_msgSender(), recipient, amount);
+    }
+
     /// @notice Withdraw collateral tokens; burns receipt tokens.
     ///         Reverts if the withdrawal would breach portfolio margin requirements.
     function withdraw(uint256 amount) external {
         _withdrawTo(_msgSender(), _msgSender(), amount);
     }
 
-    function depositFor(address recipient, uint256 amount) external onlyAuthorized {
+    function depositFor(address recipient, uint256 amount) external {
         _depositFor(_msgSender(), recipient, amount);
     }
 
@@ -198,8 +253,4 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     function decimals() public view override returns (uint8) {
         return _decimals;
     }
-
-    // ── Upgrade ─────────────────────────────────────────────────────────────
-
-    function _authorizeUpgrade(address) internal override onlyOwner {}
 }

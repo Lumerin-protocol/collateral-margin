@@ -7,15 +7,18 @@
       "!!**/build",
       "!!**/node_modules",
       "!!**/coverage",
+      "!!**/cache",
       "!!**/artifacts",
-      "!!**/cache"
+      "!!**/dist"
     ]
   },
   "overrides": [
     {
       "includes": [
         "indexer/src/**",
-        "indexer/tests/**"
+        "indexer/tests/**",
+        "points-indexer/src/**",
+        "points-indexer/tests/**"
       ],
       "linter": {
         "rules": {
@@ -23,6 +26,7 @@
             "noForEach": "off"
           },
           "correctness": {
+            "noConstantCondition": "off",
             "noUnusedImports": "warn"
           },
           "style": {

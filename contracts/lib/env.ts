@@ -16,8 +16,9 @@ export function requireEnvsSet<T extends string>(
 export function tryLoadEnvFile(path: string): void {
   try {
     loadEnvFile(path);
+    console.info(`Loaded env file ${path}`);
   } catch (err: unknown) {
-    console.info(`Failed to load env file ${path}:\n${(err as Error).message}`);
+    console.info(`Env file ${path} not loaded: ${(err as Error).message}`);
   }
 }
 

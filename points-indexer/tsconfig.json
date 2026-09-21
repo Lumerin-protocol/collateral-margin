@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "alwaysStrict": true,
+    "noImplicitAny": true,
+    "noImplicitReturns": true,
+    "noImplicitThis": true,
+    "noEmitOnError": true,
+    "strictNullChecks": true,
+    "experimentalDecorators": true,
+    "target": "esnext",
+    "module": "commonjs",
+    "noLib": true,
+    "allowJs": false,
+    "skipLibCheck": true,
+    "typeRoots": ["./node_modules/assemblyscript/std/types"],
+    "types": ["assembly"],
+    "paths": {
+      "*": ["./node_modules/assemblyscript/std/types/assembly/*"]
+    }
+  },
+  "include": ["src", "tests"],
+  "exclude": ["node_modules", "generated", "build"]
+}

@@ -1,0 +1,22 @@
+{
+  "package": "@hashpower/collateral-abi",
+  "environments": {
+    "testnet": {
+      "chainId": 84532,
+      "network": "base-sepolia",
+      "contracts": {
+        "CollateralVault": "0x54A79e2a5C60ACe37b280eBbCda51b4E903d25F0",
+        "PortfolioMarginEngine": "0x3899e429Ef47140eC46c6E23F04253C24F221b69",
+        "Points": "0x153F6cb4386d717AD94791E6Ee8ae37f80315972",
+        "CollateralToken": "0xDd15eED84065A58c9E9ff9E95fb996be0fff22AA"
+      },
+      "subgraphs": {}
+    },
+    "mainnet": {
+      "chainId": 8453,
+      "network": "base",
+      "contracts": {},
+      "subgraphs": {}
+    }
+  }
+}
