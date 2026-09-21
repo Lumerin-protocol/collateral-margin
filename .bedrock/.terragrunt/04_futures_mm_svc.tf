@@ -3,7 +3,8 @@
 ################################################################################
 # Mirror of 04_perps_mm_svc.tf for MAKER_APP=futures. Same CI/CD-owned
 # personality model: Terraform builds infra, deploy-col-mar-mm.yml owns
-# image / env vars / secrets / desired_count after first apply.
+# image / public env vars / desired_count after first apply.
+# PRIVATE_KEY and ALCHEMY_API_KEY are injected from Secrets Manager.
 #
 # Replaces the legacy futures market-maker Lambda (futures-marketplace,
 # 10_market_maker_lambda.tf). DNS name `futuresmm.{env}.hashpower.exchange`
@@ -273,6 +274,17 @@ resource "aws_ecs_task_definition" "futures_mm_use1" {
           containerPort = tonumber(var.futures_mm_service.cnt_port)
           hostPort      = tonumber(var.futures_mm_service.cnt_port)
           protocol      = "tcp"
+        }
+      ]
+
+      secrets = [
+        {
+          name      = "PRIVATE_KEY"
+          valueFrom = "${aws_secretsmanager_secret.futures_mm[0].arn}:private_key::"
+        },
+        {
+          name      = "ALCHEMY_API_KEY"
+          valueFrom = "${aws_secretsmanager_secret.futures_mm[0].arn}:alchemy_api_key::"
         }
       ]
 

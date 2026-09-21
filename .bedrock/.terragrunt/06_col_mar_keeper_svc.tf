@@ -4,8 +4,9 @@
 # Replaces derivatives-marketplace perps-keeper (svc-perps-keeper-*).
 # One long-running task liquidates across vault, PME, perps, and futures.
 #
-# deploy-keeper.yml owns image, env vars, secrets, and desired_count after
-# the first CI/CD deploy. Terraform ships ALB + Route53 at keeper.{env}.*
+# deploy-keeper.yml owns image, public env vars, and desired_count after
+# the first CI/CD deploy. Private keys are injected from Secrets Manager.
+# Terraform ships ALB + Route53 at keeper.{env}.*
 # (same hostname as the legacy perps keeper once that stack is destroyed).
 ################################################################################
 
@@ -269,6 +270,21 @@ resource "aws_ecs_task_definition" "keeper_use1" {
           containerPort = tonumber(var.keeper_service.cnt_port)
           hostPort      = tonumber(var.keeper_service.cnt_port)
           protocol      = "tcp"
+        }
+      ]
+
+      secrets = [
+        {
+          name      = "LIQUIDATOR_PRIVATE_KEY"
+          valueFrom = "${aws_secretsmanager_secret.keeper[0].arn}:liquidator_private_key::"
+        },
+        {
+          name      = "ALCHEMY_API_KEY"
+          valueFrom = "${aws_secretsmanager_secret.keeper[0].arn}:alchemy_api_key::"
+        },
+        {
+          name      = "WEBHOOK_SECRET"
+          valueFrom = "${aws_secretsmanager_secret.keeper[0].arn}:webhook_secret::"
         }
       ]
 
