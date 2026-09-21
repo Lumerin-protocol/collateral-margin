@@ -9,9 +9,10 @@
 
 create_core = true
 
-# Perps Market Maker. derivatives-marketplace LMN MM is off; STG MM torn down.
+# Unused. Quoting runs on the futures MM service. Leave false so LMN does not
+# build the empty perps service, its ALB, or perpsmm.hashpower.exchange.
 perps_mm_service = {
-  create          = true
+  create          = false
   task_worker_qty = 1
   cnt_port        = 3001
   task_cpu        = 256

@@ -9,10 +9,10 @@
 
 create_core = true
 
-# Perps Market Maker - active. Legacy derivatives perps MM was decommissioned
-# in 2026-Q2; perpsmm.dev.hashpower.exchange now points at this stack's ALB.
+# Unused. Quoting runs on the futures MM service (portfolio app). create=false
+# removes this empty ECS service, its internal ALB, and perpsmm.dev.hashpower.exchange.
 perps_mm_service = {
-  create          = true
+  create          = false
   task_worker_qty = 1 # initial; CI/CD owns desired_count after first deploy
   cnt_port        = 3001
   task_cpu        = 256
