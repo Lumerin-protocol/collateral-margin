@@ -298,6 +298,17 @@ resource "aws_ecs_task_definition" "perps_mm_use1" {
         }
       ]
 
+      secrets = [
+        {
+          name      = "PRIVATE_KEY"
+          valueFrom = "${aws_secretsmanager_secret.perps_mm[0].arn}:private_key::"
+        },
+        {
+          name      = "ALCHEMY_API_KEY"
+          valueFrom = "${aws_secretsmanager_secret.perps_mm[0].arn}:alchemy_api_key::"
+        }
+      ]
+
       logConfiguration = {
         logDriver = "awslogs"
         options = {

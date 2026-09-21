@@ -1,14 +1,15 @@
 ########################################
 # Service Toggles - SCAFFOLDING ONLY
 ########################################
-# Runtime config (image, env vars, secrets, addresses) is owned by the
-# deploy-col-mar-mm.yml workflow via GitHub Variables / GitHub Secrets.
+# Public runtime config is config/prd.env. Private keys and the Alchemy key
+# are Secrets Manager, seeded from gitignored secret.auto.tfvars:
+#   alchemy_api_key, liquidator_private_key, futures_mm_private_key,
+#   perps_mm_private_key, and optional webhook_secret.
 ########################################
 
 create_core = true
 
-# Perps Market Maker - DNS NOTE: perpsmm.hashpower.exchange currently
-# belongs to derivatives-marketplace. Leave create=false until cutover.
+# Perps Market Maker. derivatives-marketplace LMN MM is off; STG MM torn down.
 perps_mm_service = {
   create          = true
   task_worker_qty = 1
@@ -27,7 +28,7 @@ futures_mm_service = {
 }
 
 keeper_service = {
-  create          = false
+  create          = true
   task_worker_qty = 1
   cnt_port        = 3000
   task_cpu        = 256
