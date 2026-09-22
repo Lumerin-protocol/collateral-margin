@@ -106,6 +106,9 @@ export class PortfolioHealthCheck {
     const body = JSON.stringify(
       {
         app: this.opts.appName,
+        imageTag: typeof this.opts.configSummary.imageTag === "string"
+          ? this.opts.configSummary.imageTag
+          : "unknown",
         status: this.status,
         walletAddress: this.walletAddress,
         lastError: this.lastError,
@@ -161,6 +164,9 @@ export class PortfolioHealthCheck {
     const body = JSON.stringify(
       {
         app: this.opts.appName,
+        imageTag: typeof this.opts.configSummary.imageTag === "string"
+          ? this.opts.configSummary.imageTag
+          : "unknown",
         status: this.status,
         walletAddress: this.walletAddress,
         lastError: this.lastError,

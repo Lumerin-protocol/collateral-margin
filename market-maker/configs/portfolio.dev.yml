@@ -10,6 +10,7 @@
 
 nodeEnv: development
 commitHash: ${COMMIT_HASH:-unknown}
+imageTag: ${IMAGE_TAG:-unknown}
 logLevel: ${MAKER_LOG_LEVEL:-debug}
 dryRun: ${MAKER_DRY_RUN:-false}
 # Dev iterates fast; leave resting orders on base-sepolia on Ctrl-C so we

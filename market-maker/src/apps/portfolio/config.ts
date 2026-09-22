@@ -158,6 +158,11 @@ export const portfolioRootSchema = Type.Object(
   {
     nodeEnv: Type.String({ default: "development" }),
     commitHash: Type.String({ default: "unknown" }),
+    imageTag: Type.String({
+      default: "unknown",
+      description:
+        "Image tag this process was deployed as (for example v1.4.0). Surfaced on /health so deploy verification can reject a rollback.",
+    }),
     logLevel: Type.String({ default: "info" }),
     dryRun: Type.Boolean({ default: false }),
     cancelOrdersOnShutdown: Type.Boolean({
