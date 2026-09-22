@@ -10,10 +10,14 @@
  * `HashpriceUsd` time-series entity, so a single shared source serves both
  * apps.
  *
- * Log returns `ln(p_i / p_{i-1})` are scale-invariant, so we deliberately
- * skip rebasing subgraph prices to token decimals — the rolling window only
- * needs the *ratios*, and avoiding the rebase keeps this module independent
- * of the venue adapters.
+ * Prices come back in whatever fixed-point scale the subgraph stores, which
+ * is the aggregator's own decimals — not the token decimals that live oracle
+ * reads are rebased to. Ratios *within* this series are unaffected, so the
+ * raw scale is kept here and the module stays independent of the venue
+ * adapters. The series is not interchangeable with live samples, though:
+ * `OracleTracker.initialize` rebases it onto the live scale before pushing,
+ * because a window holding both scales at once produces a log return the
+ * size of the decimal difference at the join.
  */
 
 import type pino from "pino";
@@ -21,17 +25,30 @@ import type pino from "pino";
 export interface PricePoint {
   /** Unix timestamp in seconds. */
   timestampSec: number;
-  /** Raw price as stored by the source (units irrelevant — log returns are scale-free). */
+  /** Price in the series' declared fixed-point scale; consumers rebase it. */
   price: bigint;
+}
+
+/** A historical series together with the feed and scale it describes. */
+export interface HistoricalPriceSeries {
+  /** Aggregator the source indexed, for cross-checking against the live oracle. */
+  address: `0x${string}`;
+  /** Fixed-point decimals every `points[].price` is expressed in. */
+  decimals: number;
+  /** Samples, oldest first. */
+  points: PricePoint[];
 }
 
 export interface HistoricalPriceSource {
   /**
-   * Returns up to `maxPoints` price samples within the last `lookbackSec`
-   * seconds, oldest first. Implementations should silently truncate if the
-   * source has fewer matching points; callers tolerate short results.
+   * Returns the newest `maxPoints` samples that are no older than
+   * `maxAgeSec`, oldest first. Implementations should silently truncate if
+   * the source has fewer matching points; callers tolerate short results.
+   *
+   * Implementations must report the feed and scale the samples belong to
+   * rather than leaving the caller to infer them — see `HistoricalPriceSeries`.
    */
-  fetch(opts: { lookbackSec: number; maxPoints: number }): Promise<PricePoint[]>;
+  fetch(opts: { maxAgeSec: number; maxPoints: number }): Promise<HistoricalPriceSeries>;
 }
 
 /**
@@ -55,8 +72,8 @@ export class HashpriceOracleSubgraphSource implements HistoricalPriceSource {
     this.fetchImpl = opts.fetchImpl ?? fetch;
   }
 
-  async fetch(opts: { lookbackSec: number; maxPoints: number }): Promise<PricePoint[]> {
-    const sinceSec = Math.floor(Date.now() / 1000) - Math.max(0, Math.floor(opts.lookbackSec));
+  async fetch(opts: { maxAgeSec: number; maxPoints: number }): Promise<HistoricalPriceSeries> {
+    const sinceSec = Math.floor(Date.now() / 1000) - Math.max(0, Math.floor(opts.maxAgeSec));
     // The Graph's `Timestamp` scalar is **microseconds since Unix epoch**, not
     // seconds. Both the `where: { timestamp_gte: ... }` filter and the returned
     // field use µs. We rescale at the boundary so the rest of the codebase
@@ -73,8 +90,15 @@ export class HashpriceOracleSubgraphSource implements HistoricalPriceSource {
     // number gets rejected with `Invalid value provided for argument "since":
     // Int(Number(...))`. Verified against the goldsky gateway with
     // introspection + a probe.
+    // `hashpriceMeta` carries the aggregator the subgraph indexed and the
+    // decimals it stores `price` in. Both are needed to line the series up
+    // with live oracle reads, so they travel with it in one round trip.
     const query = `
       query HashpriceHistory($since: Timestamp!, $first: Int!) {
+        hashpriceMetas(first: 1) {
+          hashpriceUsdAddress
+          hashpriceUsdDecimals
+        }
         hashpriceUsds(
           where: { timestamp_gte: $since }
           orderBy: timestamp
@@ -102,13 +126,23 @@ export class HashpriceOracleSubgraphSource implements HistoricalPriceSource {
       );
     }
     const json = (await res.json()) as {
-      data?: { hashpriceUsds?: Array<{ timestamp: string | number; price: string }> };
+      data?: {
+        hashpriceMetas?: Array<{ hashpriceUsdAddress: string; hashpriceUsdDecimals: string | number }>;
+        hashpriceUsds?: Array<{ timestamp: string | number; price: string }>;
+      };
       errors?: Array<{ message: string }>;
     };
     if (json.errors && json.errors.length > 0) {
       throw new Error(
         `hashprice-subgraph: GraphQL errors: ${json.errors.map((e) => e.message).join("; ")}`,
       );
+    }
+
+    const meta = json.data?.hashpriceMetas?.[0];
+    if (!meta) {
+      // Without the meta row the series cannot declare its feed or scale, and
+      // guessing either is what this whole path exists to avoid.
+      throw new Error(`hashprice-subgraph: no HashpriceMeta row at ${this.url}`);
     }
 
     const rows = json.data?.hashpriceUsds ?? [];
@@ -123,10 +157,18 @@ export class HashpriceOracleSubgraphSource implements HistoricalPriceSource {
     // Subgraph returned newest-first; flip so callers can push in chronological order.
     points.reverse();
 
+    const address = meta.hashpriceUsdAddress.toLowerCase() as `0x${string}`;
+    const decimals = Number(meta.hashpriceUsdDecimals);
+    if (!Number.isInteger(decimals) || decimals < 0) {
+      throw new Error(
+        `hashprice-subgraph: invalid hashpriceUsdDecimals "${meta.hashpriceUsdDecimals}"`,
+      );
+    }
+
     this.logger.debug(
-      { url: this.url, requested: first, got: points.length, sinceSec },
+      { url: this.url, requested: first, got: points.length, sinceSec, address, decimals },
       "fetched hashprice history",
     );
-    return points;
+    return { address, decimals, points };
   }
 }

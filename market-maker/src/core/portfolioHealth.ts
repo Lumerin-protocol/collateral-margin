@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import type { Server, ServerResponse } from "node:http";
 import type pino from "pino";
-import type Fraction from "fraction.js";
+import { fractionToNumber } from "./math.ts";
 import type { CollateralTracker } from "./collateralTracker.ts";
 import type { GasTracker } from "./gasTracker.ts";
 import type { RiskManager } from "./riskManager.ts";
@@ -244,10 +244,6 @@ export class PortfolioHealthCheck {
   }
 }
 
-function fractionToNumber(value: Fraction): number {
-  const v = value.simplify(1e-12);
-  return (Number(v.s) * Number(v.n)) / Number(v.d);
-}
 
 function bigIntReplacer(_key: string, value: unknown): unknown {
   return typeof value === "bigint" ? value.toString() : value;

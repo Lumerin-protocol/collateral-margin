@@ -186,16 +186,32 @@ resource "aws_alb_listener" "futures_mm_int_443_use1" {
   )
 }
 
+# Public alias in the Hashpower zone. Dev zones live in the workload account.
+# LMN writes hashpower.exchange in titanio-net (aws.titanio-net).
 resource "aws_route53_record" "futures_mm_int_use1" {
-  count    = var.futures_mm_service.create ? 1 : 0
+  count    = var.futures_mm_service.create && !local.is_lmn ? 1 : 0
   provider = aws.use1
   zone_id  = local.hp_dns["exc"].zone_id
   name     = "futuresmm.${local.hp_dns["exc"].name}"
   type     = "A"
 
   alias {
-    name                   = aws_alb.futures_mm_int_use1[count.index].dns_name
-    zone_id                = aws_alb.futures_mm_int_use1[count.index].zone_id
+    name                   = aws_alb.futures_mm_int_use1[0].dns_name
+    zone_id                = aws_alb.futures_mm_int_use1[0].zone_id
+    evaluate_target_health = true
+  }
+}
+
+resource "aws_route53_record" "futures_mm_int_lmn" {
+  count    = var.futures_mm_service.create && local.is_lmn ? 1 : 0
+  provider = aws.titanio-net
+  zone_id  = local.hp_dns["exc"].zone_id
+  name     = "futuresmm.${local.hp_dns["exc"].name}"
+  type     = "A"
+
+  alias {
+    name                   = aws_alb.futures_mm_int_use1[0].dns_name
+    zone_id                = aws_alb.futures_mm_int_use1[0].zone_id
     evaluate_target_health = true
   }
 }

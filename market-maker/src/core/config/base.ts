@@ -123,7 +123,11 @@ export const riskSchema = Type.Object(
         "Tick distance from oracle at which a stale order is requoted immediately, ignoring cooldown.",
     }),
   },
-  { ...Closed, description: "Risk caps, circuit-breakers, and gas-price guards." },
+  {
+    ...Closed,
+    description:
+      "Risk caps, circuit-breakers, and gas-price guards. One shared budget spanning every market in the process, not a per-venue allowance.",
+  },
 );
 
 export const gasSchema = Type.Object(
@@ -226,7 +230,7 @@ export const oracleSchema = Type.Object(
       minimum: 3,
       default: 60,
       description:
-        "Number of de-duplicated price samples retained for realized-vol estimation. 60 is enough for a ±9% standard error on σ; tune up for smoother σ at the cost of slower regime tracking.",
+        "Number of de-duplicated price samples retained for realized-vol estimation. The window counts oracle updates rather than wall-clock, so how far back it reaches follows the feed's own cadence. That is deliberate: when a feed slows, a count-based window still fills (just reaching further back), whereas a fixed duration would thin out precisely when σ matters most — `historyMaxAgeSec` is the backstop against reaching into a stale regime. 60 gives roughly a ±9% standard error on σ; tune up for smoother σ at the cost of slower regime tracking.",
     }),
     precisionBits: Type.Integer({
       minimum: 16,
@@ -235,11 +239,11 @@ export const oracleSchema = Type.Object(
       description:
         "Bits of fractional precision for the bigint ln/sqrt approximations underpinning σ. 48 is plenty for vol math; raise only if a strategy demonstrably needs more.",
     }),
-    historyLookbackMultiplier: Type.Number({
+    historyMaxAgeSec: Type.Integer({
       minimum: 1,
-      default: 4,
+      default: 86400,
       description:
-        "Backfill fetches `windowSize × multiplier × pollInterval` of history from the subgraph, then trims duplicates. Multiplier > 1 absorbs Chainlink's slow update cadence so the window arrives full.",
+        "Backfill discards samples older than this. It asks the subgraph for the newest `windowSize` oracle updates, so how far back the window reaches is set by the feed's own cadence, not by any setting here — this is only an upper bound so a stale price regime can't seed σ. Set it well above `windowSize × the feed's typical update interval`, leaving room for the feed slowing down: hashprice normally spaces updates ~3 min apart (60 samples ≈ 4h), but that tripled during an observed degraded stretch. Too low and backfill returns short, leaving σ at 0 until live polls warm the window.",
     }),
     history: Type.Optional(
       Type.Object(
@@ -324,7 +328,7 @@ export interface ParsedCollateralConfig {
 export interface ParsedOracleConfig {
   windowSize: number;
   precisionBits: number;
-  historyLookbackMultiplier: number;
+  historyMaxAgeSec: number;
   /** Undefined when `history` is omitted; backfill is then skipped. */
   history?: { subgraphUrl: string };
 }
@@ -356,7 +360,7 @@ interface RawCollateral {
 interface RawOracle {
   windowSize: number;
   precisionBits: number;
-  historyLookbackMultiplier: number;
+  historyMaxAgeSec: number;
   history?: { subgraphUrl: string };
 }
 
@@ -424,7 +428,7 @@ export function parseOracleConfig(raw: RawOracle): ParsedOracleConfig {
   return {
     windowSize: raw.windowSize,
     precisionBits: raw.precisionBits,
-    historyLookbackMultiplier: raw.historyLookbackMultiplier,
+    historyMaxAgeSec: raw.historyMaxAgeSec,
     history: url ? { subgraphUrl: url } : undefined,
   };
 }

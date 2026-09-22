@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import type { Server, ServerResponse } from "node:http";
 import type pino from "pino";
-import type Fraction from "fraction.js";
+import { fractionToNumber } from "./math.ts";
 import type { OracleTracker } from "./oracleTracker.ts";
 import type { InventoryManager } from "./inventoryManager.ts";
 import type { CollateralTracker } from "./collateralTracker.ts";
@@ -282,15 +282,6 @@ export class HealthCheck {
   }
 }
 
-function fractionToNumber(value: Fraction): number {
-  // diagnostic only — never used in trading math.
-  // Realized-vol Fractions can have 1000+ bit numerators/denominators (sqrt at
-  // 48-bit precision over a 60-sample window), so a naive Number cast overflows
-  // both sides to Infinity and JSON-serialises as `null`. Simplify first to
-  // collapse the magnitude before the cast.
-  const v = value.simplify(1e-12);
-  return (Number(v.s) * Number(v.n)) / Number(v.d);
-}
 
 function bigIntReplacer(_key: string, value: unknown): unknown {
   return typeof value === "bigint" ? value.toString() : value;

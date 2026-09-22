@@ -60,9 +60,8 @@ async function main(): Promise<void> {
   const oracle = new OracleTracker(instrument, logger, {
     windowSize: config.oracle.windowSize,
     precisionBits: config.oracle.precisionBits,
-    historyLookbackMultiplier: config.oracle.historyLookbackMultiplier,
+    historyMaxAgeSec: config.oracle.historyMaxAgeSec,
     history,
-    pollIntervalMs: config.timing.pollIntervalMs,
   });
   const gas = new GasTracker(
     network.publicClient,
@@ -87,6 +86,7 @@ async function main(): Promise<void> {
       autoDeposit: config.collateral.autoDeposit,
       autoDepositMinAmount: config.collateral.autoDepositMinAmount,
       maxCollateralAmount: config.collateral.maxCollateralAmount,
+      dryRun: config.dryRun,
     },
     logger,
   );
