@@ -4,8 +4,10 @@
 //           The base is the `dev` tag, or the highest published 0.x if that
 //           tag does not exist yet. Never moves `latest`.
 //   main -> dist-tag `latest`. The first publish whose mainnet block has
-//           addresses is 1.0.0. After that, an ABI break bumps major, an
-//           ABI addition bumps minor, and a mainnet address change bumps patch.
+//           addresses is 3.0.0, or the next free major if that version was
+//           already published (npm will not reuse an unpublished version).
+//           After that, an ABI break bumps major, an ABI addition bumps
+//           minor, and a mainnet address change bumps patch.
 //
 // Writes package.json's version in the working copy (npm holds the version
 // of record; nothing is committed). Set DRY_RUN=1 to print the decision only.
@@ -54,6 +56,24 @@ function versionsOf() {
   } catch {
     return [];
   }
+}
+
+// `npm view versions` hides unpublished releases. `time` still lists them,
+// and npm rejects a publish that reuses one of those version numbers.
+function takenVersions() {
+  try {
+    const time = npmJson(["view", pkg, "time", "--json"]);
+    return new Set(Object.keys(time).filter((key) => /^\d+\.\d+\.\d+$/.test(key)));
+  } catch {
+    return new Set(versionsOf());
+  }
+}
+
+function firstMainnetVersion() {
+  const taken = takenVersions();
+  let major = 3;
+  while (taken.has(`${major}.0.0`)) major += 1;
+  return `${major}.0.0`;
 }
 
 function parts(version) {
@@ -123,7 +143,7 @@ if (channel === "main" && !hasAddresses(current.environments?.mainnet)) {
 }
 
 if (!tags.latest) {
-  const version = channel === "main" ? "1.0.0" : JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")).version;
+  const version = channel === "main" ? firstMainnetVersion() : JSON.parse(readFileSync(path.join(root, "package.json"), "utf8")).version;
   setVersion(version);
   console.log(`First publish ${pkg}@${version} (${distTag})`);
   emit({ level: "first", version, dist_tag: distTag });
@@ -135,9 +155,10 @@ if (channel === "main") {
   try {
     const published = JSON.parse(readFileSync(path.join(latest.pkgRoot, "deployments.json"), "utf8"));
     if (!hasAddresses(published.environments?.mainnet)) {
-      setVersion("1.0.0");
-      console.log(`First mainnet manifest — publishing ${pkg}@1.0.0 on latest`);
-      emit({ level: "mainnet", version: "1.0.0", dist_tag: distTag });
+      const version = firstMainnetVersion();
+      setVersion(version);
+      console.log(`First mainnet manifest — publishing ${pkg}@${version} on latest`);
+      emit({ level: "mainnet", version, dist_tag: distTag });
       process.exit(0);
     }
   } finally {
