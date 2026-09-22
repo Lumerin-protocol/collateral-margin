@@ -1,12 +1,12 @@
 name: Publish @hashpower/collateral-abi
 
-# Publishes the ABI package to npm whenever the generated ABIs or the
-# deployments manifest change on main. Versioning is automatic and
-# semver-correct: the ABI *is* the package's public API, so CI diffs the
-# built ABI surface against the last published version to compute the bump
-# (removed/changed entry -> major, added entry -> minor, metadata -> patch)
-# — demoted while the published major is 0, per semver's 0.x convention
-# (breaking -> minor, additive -> patch) — and publishes with that version. Nothing is committed back — the branch is
+# Publishes the ABI package to npm. `dev` writes environments.testnet from
+# config/dev.env, keeps the mainnet block from the `latest` tag, publishes
+# on the npm dist-tag `dev`, and bumps the minor. `main` writes
+# environments.mainnet from config/prd.env, keeps the testnet block from
+# the `dev` tag, and publishes on `latest`. The first mainnet cut is
+# 1.0.0; later mainnet address changes are patches, and an ABI break on
+# main bumps the major. Nothing is committed back — the branch is
 # protected — so the version of record lives on npm and each release is
 # marked with a git tag (collateral-abi-vX.Y.Z) on the source commit.
 #
@@ -26,6 +26,8 @@ on:
       - main
     paths:
       - "contracts/abi/**"
+      - "config/dev.env"
+      - "config/prd.env"
       - "collateral-abi/**"
       - ".github/workflows/publish-collateral-abi.yml"
   # Manual runs from any branch for testing the pipeline. `version` publishes
@@ -69,8 +71,10 @@ jobs:
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
-          cache: "pnpm"
-          cache-dependency-path: collateral-abi/pnpm-lock.yaml
+          # No pnpm cache. setup-node's post step fails the whole job with
+          # "Path Validation Error" when the store path it recorded is gone,
+          # including after a skipped publish. This package has one
+          # devDependency, so the cache is not worth a red release.
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -78,70 +82,23 @@ jobs:
       - name: Build package
         run: pnpm build
 
-      - name: Compute semver bump from ABI diff
+      - name: Compose deployments manifest
+        env:
+          CHANNEL: ${{ github.ref_name }}
+        run: node scripts/compose-deployments.mjs
+
+      - name: Compute version and dist-tag
         id: bump
         env:
+          CHANNEL: ${{ github.ref_name }}
           FORCED_VERSION: ${{ inputs.version || '' }}
-        run: |
-          if [ -n "$FORCED_VERSION" ]; then
-            npm version "$FORCED_VERSION" --no-git-tag-version --allow-same-version
-            echo "Forced version: $FORCED_VERSION (semver diff skipped)"
-            echo "level=forced" >> "$GITHUB_OUTPUT"
-            echo "version=$FORCED_VERSION" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          PKG=$(node -p "require('./package.json').name")
-          PUBLISHED=$(npm view "$PKG" version 2>/dev/null || echo "none")
-
-          if [ "$PUBLISHED" = "none" ]; then
-            echo "First publish — using version from package.json as-is"
-            echo "level=first" >> "$GITHUB_OUTPUT"
-            echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Fetch the published tarball and diff its ABI surface against the fresh build
-          TARBALL=$(npm pack "$PKG@$PUBLISHED" --silent | tail -1)
-          mkdir -p /tmp/published
-          tar -xzf "$TARBALL" -C /tmp/published
-          rm "$TARBALL"
-
-          LEVEL=$(node scripts/semver-diff.mjs /tmp/published/package .)
-          echo "Published: $PUBLISHED — ABI diff requires: $LEVEL"
-
-          # Pre-1.0 the package is explicitly unstable (semver 0.x rules), so
-          # demote: breaking -> minor, additive -> patch. Cutting 1.0.0 at GA
-          # (from main) ends the demotion automatically.
-          if [ "${PUBLISHED%%.*}" = "0" ]; then
-            case "$LEVEL" in
-              major) LEVEL=minor ;;
-              minor) LEVEL=patch ;;
-            esac
-            echo "0.x pre-release line — demoted bump to: $LEVEL"
-          fi
-          echo "level=$LEVEL" >> "$GITHUB_OUTPUT"
-
-          if [ "$LEVEL" = "none" ]; then
-            echo "No ABI or metadata changes — skipping publish"
-            echo "version=$PUBLISHED" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # Baseline on the published version, then apply the computed bump.
-          # Working-copy only: dev is protected (PRs required) so CI never
-          # pushes commits. npm holds the version of record.
-          npm version "$PUBLISHED" --no-git-tag-version --allow-same-version
-          npm version "$LEVEL" --no-git-tag-version
-          NEW=$(node -p "require('./package.json').version")
-          echo "version=$NEW" >> "$GITHUB_OUTPUT"
-          echo "Version: $NEW ($LEVEL bump from $PUBLISHED)"
+        run: node scripts/plan-release.mjs
 
       - name: Publish
         if: steps.bump.outputs.level != 'none'
-        # --tag latest is explicit so a forced lower version (reset/rollback)
-        # can still take the latest tag; npm forbids that implicitly.
-        run: npm publish --access public --provenance --tag latest
+        # `dev` publishes must not move `latest`. A forced version follows
+        # the same dist-tag as the branch it was dispatched from.
+        run: npm publish --access public --provenance --tag ${{ steps.bump.outputs.dist_tag }}
 
       - name: Tag release
         if: steps.bump.outputs.level != 'none'

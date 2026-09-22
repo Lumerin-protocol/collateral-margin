@@ -1,0 +1,16 @@
+{
+  "envs": {
+    "testnet": { "file": "../config/dev.env", "chainId": 84532, "network": "base-sepolia" },
+    "mainnet": { "file": "../config/prd.env", "chainId": 8453, "network": "base" }
+  },
+  "contracts": {
+    "CollateralVault": "VAULT_ADDRESS",
+    "PortfolioMarginEngine": "PME_ADDRESS",
+    "Points": "POINTS_ADDRESS",
+    "CollateralToken": "COLLATERAL_TOKEN_ADDRESS"
+  },
+  "subgraphs": {
+    "vault": "VAULT_SUBGRAPH_URL",
+    "points": "POINTS_SUBGRAPH_URL"
+  }
+}

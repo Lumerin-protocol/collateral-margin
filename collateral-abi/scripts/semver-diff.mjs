@@ -1,21 +1,35 @@
 // Computes the required semver bump by diffing the ABI surface of the
 // last-published package against the freshly built one.
 //
-//   Usage: node scripts/semver-diff.mjs <publishedPkgRoot> <currentPkgRoot>
+//   Usage: node scripts/semver-diff.mjs <publishedPkgRoot> <currentPkgRoot> [ownedEnv]
 //   Prints one of: major | minor | patch | none
+//
+// ownedEnv ("testnet" or "mainnet") limits the deployments.json
+// comparison to that environment, so copying the other network forward
+// does not count as a change.
 //
 // Rules — the ABI *is* the public API, so the level is computable:
 //   - ABI entry removed or modified, or a contract file removed  -> major
 //   - New ABI entry or new contract file                         -> minor
-//   - Only metadata changed (deployments.json, README, ...)      -> patch
+//   - Only the owned environment or README changed               -> patch
 //   - Nothing changed                                            -> none
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
-const [publishedRoot, currentRoot] = process.argv.slice(2);
+const [publishedRoot, currentRoot, ownedEnv] = process.argv.slice(2);
 if (!publishedRoot || !currentRoot) {
-  console.error("Usage: semver-diff.mjs <publishedPkgRoot> <currentPkgRoot>");
+  console.error("Usage: semver-diff.mjs <publishedPkgRoot> <currentPkgRoot> [ownedEnv]");
   process.exit(1);
+}
+
+function canonDeploy(value) {
+  if (typeof value === "string" && /^0x[0-9a-fA-F]{40}$/.test(value)) return value.toLowerCase();
+  if (Array.isArray(value)) return `[${value.map(canonDeploy).join(",")}]`;
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonDeploy(value[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 // Canonical stringify (sorted keys) so formatting differences don't matter
@@ -69,12 +83,16 @@ if (removedOrChanged) {
 } else if (added) {
   console.log("minor");
 } else {
-  // ABI surface identical — check whether package metadata changed
-  const metaChanged = ["deployments.json", "README.md"].some((file) => {
+  const readmeChanged = ["README.md"].some((file) => {
     const oldPath = path.join(publishedRoot, file);
     const newPath = path.join(currentRoot, file);
     if (!existsSync(oldPath) || !existsSync(newPath)) return true;
     return readFileSync(oldPath, "utf8") !== readFileSync(newPath, "utf8");
   });
-  console.log(metaChanged ? "patch" : "none");
+  const oldDoc = JSON.parse(readFileSync(path.join(publishedRoot, "deployments.json"), "utf8"));
+  const newDoc = JSON.parse(readFileSync(path.join(currentRoot, "deployments.json"), "utf8"));
+  const oldSlice = ownedEnv ? oldDoc.environments?.[ownedEnv] : oldDoc;
+  const newSlice = ownedEnv ? newDoc.environments?.[ownedEnv] : newDoc;
+  const deploymentsChanged = canonDeploy(oldSlice) !== canonDeploy(newSlice);
+  console.log(deploymentsChanged || readmeChanged ? "patch" : "none");
 }
