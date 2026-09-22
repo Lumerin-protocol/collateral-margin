@@ -87,9 +87,23 @@ export const bigMin = (a: bigint, b: bigint) => (a < b ? a : b);
 export const bigMax = (a: bigint, b: bigint) => (a > b ? a : b);
 
 /**
+ * Collapse a Fraction to a JS number for logging and health output.
+ *
+ * Diagnostic only — never use in trading math. Realized-vol Fractions carry
+ * 1000+ bit numerators and denominators (`sqrt` at 48-bit precision over a
+ * 60-sample window), so a naive `valueOf()` overflows both sides to Infinity
+ * and yields NaN, which JSON-serialises as `null`. Simplifying first collapses
+ * the magnitude before the cast.
+ */
+export function fractionToNumber(value: Fraction): number {
+  const v = value.simplify(1e-12);
+  return (Number(v.s) * Number(v.n)) / Number(v.d);
+}
+
+/**
  * Rolling window of bigint samples. Computes:
  *   - per-step realized volatility = stddev of log returns (Fraction-precise)
- *   - per-second realized volatility = stddev of time-normalised log returns
+ *   - per-second realized volatility = √(Σ r² / Σ Δt)
  *     (requires timestamps on every push)
  *   - median (bigint)
  *
@@ -102,15 +116,26 @@ export const bigMax = (a: bigint, b: bigint) => (a > b ? a : b);
  *
  * # Per-second volatility math
  *
- * Each step covers a possibly-variable Δt_i seconds. For a Brownian process
- * with per-second stddev σ_s, Var(r_i) = σ_s² · Δt_i, so the time-normalised
- * return x_i = r_i / √Δt_i has constant variance σ_s². Then σ_s is the sample
- * stddev of {x_i}:
+ * Steps cover variable Δt_i, so we pool squared returns against total elapsed
+ * time — the realized-variance estimator for irregularly spaced observations:
  *
  *   Δt_i = t_i − t_{i-1}
- *   x_i  = r_i / √Δt_i
- *   σ_s² = Σ (x_i − μ)² / (N − 1)
+ *   σ_s² = Σ r_i² / Σ Δt_i
  *   σ_s  = sqrt(σ_s²)             (units: dimensionless × s^-1/2)
+ *
+ * The tempting alternative — normalising each return individually as
+ * x_i = r_i/√Δt_i and taking the sample stddev — assumes the feed samples a
+ * Brownian process at times unrelated to its moves. Our oracles publish on a
+ * deviation threshold instead, so |r_i| is roughly constant and independent of
+ * Δt_i (measured corr(log Δt, log|r|) ≈ −0.13 on hashprice). Dividing by √Δt
+ * then injects a spurious 1/√Δt term, and clustered updates inflate σ: the
+ * per-sample form reads ~1.7× high in steady state, and its spread across a
+ * rolling window blew out to 20× (vs 4× here) during a period of bursty
+ * updates. Pooling is both unbiased under threshold publication and far more
+ * robust to those bursts.
+ *
+ * Realized variance is deliberately not mean-centred; over these horizons
+ * drift is negligible and subtracting an estimated mean only adds noise.
  *
  * Notes:
  *   - We compute log returns as `ln(curr/prev)`, NOT `ln(curr) − ln(prev)` as
@@ -177,14 +202,17 @@ export class RollingWindow {
   }
 
   /**
-   * Realized per-second volatility (stddev of √Δt-normalised log returns).
-   * 0 if fewer than 3 samples or if any required timestamp is missing /
-   * non-monotonic. Units: dimensionless × s^-1/2.
+   * Realized per-second volatility: √(Σ r² / Σ Δt) over the window. Pairs with
+   * a missing / non-monotonic timestamp are skipped. Returns 0 if fewer than 3
+   * samples or fewer than 2 usable pairs. Units: dimensionless × s^-1/2.
    */
   volatilityPerSecond(): Fraction {
     if (this.samples.length < 3) return new Fraction(0n);
 
-    const xs: Fraction[] = [];
+    let sumSqReturns = new Fraction(0n);
+    let sumDtSec = new Fraction(0n);
+    let pairs = 0;
+
     for (let i = 1; i < this.samples.length; i++) {
       const prev = this.samples[i - 1];
       const curr = this.samples[i];
@@ -194,15 +222,15 @@ export class RollingWindow {
       if (!Number.isFinite(dtSec) || dtSec <= 0) continue;
 
       const r = ln(new Fraction(curr, prev), this.precisionBits);
+      sumSqReturns = sumSqReturns.add(r.mul(r));
       // Encode Δt as a Fraction with millisecond resolution; sub-ms precision
       // is irrelevant given the ≤2^-precisionBits truncation in `sqrt`.
-      const dt = new Fraction(BigInt(Math.round(dtSec * 1000)), 1000n);
-      const x = r.div(sqrt(dt, this.precisionBits));
-      xs.push(x);
+      sumDtSec = sumDtSec.add(new Fraction(BigInt(Math.round(dtSec * 1000)), 1000n));
+      pairs++;
     }
 
-    if (xs.length < 2) return new Fraction(0n);
-    return sampleStddev(xs, this.precisionBits);
+    if (pairs < 2) return new Fraction(0n);
+    return sqrt(sumSqReturns.div(sumDtSec), this.precisionBits);
   }
 
   /** Median of samples (bigint). */

@@ -7,6 +7,7 @@ import type {
   CollateralSnapshot,
   InstrumentAdapter,
   MarginReadPlan,
+  OracleScale,
   VenueAdapter,
   VenueEvents,
   WalletContext,
@@ -145,6 +146,7 @@ export class FuturesVenueAdapter implements VenueAdapter {
         return {
           oracle,
           divisor: 10n ** BigInt(oracleDecimals - tokenDecimals),
+          tokenDecimals,
         };
       },
     });
@@ -318,6 +320,11 @@ export class FuturesVenueAdapter implements VenueAdapter {
    */
   getRawMarketPrice(): Promise<bigint> {
     return this.rawOracle.read();
+  }
+
+  /** Aggregator and fixed-point scale behind `getRawMarketPrice()`. */
+  getOracleScale(): Promise<OracleScale> {
+    return this.rawOracle.scale();
   }
 
   /**

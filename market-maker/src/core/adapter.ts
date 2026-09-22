@@ -316,6 +316,14 @@ export interface WalletContext {
 
 // ─── Instrument adapter ─────────────────────────────────────────────────────
 
+/** Identity and fixed-point scale of the price feed an instrument quotes against. */
+export interface OracleScale {
+  /** Aggregator address the index price is read from. */
+  address: `0x${string}`;
+  /** Decimals `getIndexPrice()` returns its answer in (the collateral token's). */
+  decimals: number;
+}
+
 /**
  * Per-instrument interface. Perps and futures return a singleton from
  * `VenueAdapter.getInstrument()`; an options venue would expose many.
@@ -327,6 +335,13 @@ export interface InstrumentAdapter {
   readonly ownOrders: OwnOrderSource;
 
   getIndexPrice(): Promise<bigint>;
+  /**
+   * The aggregator behind `getIndexPrice()` and the fixed-point scale its
+   * answers come back in. Lets consumers that mix in prices from elsewhere
+   * (the σ-window backfill) prove both sides describe the same feed on the
+   * same scale instead of inferring it from magnitudes.
+   */
+  getOracleScale(): Promise<OracleScale>;
   getPosition(): Promise<Position>;
   getContext(): Promise<InstrumentContext>;
 

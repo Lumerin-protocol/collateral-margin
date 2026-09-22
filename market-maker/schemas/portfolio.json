@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Titan Market Maker - Portfolio config",
   "additionalProperties": false,
-  "description": "Titan Market Maker — unified portfolio app config.",
+  "description": "Titan Market Maker — unified portfolio app config. One process, one signer, one shared collateral vault: perps and every selected futures expiry quote together, the TxCoordinator sequences their txs on a single nonce, and each market is isolated behind its own circuit breaker.",
   "type": "object",
   "required": [
     "nodeEnv",
@@ -62,6 +62,7 @@
           "description": "Environment variable interpolation (resolved at startup)"
         }
       ],
+      "description": "Cancel resting orders on SIGINT/SIGTERM. Set false for hot-restart deploys where you'd rather absorb the brief stale-quote risk than pay cancel gas.",
       "default": true
     },
     "wallets": {
@@ -234,7 +235,7 @@
                         "description": "Environment variable interpolation (resolved at startup)"
                       }
                     ],
-                    "description": "Floor on the half-spread in bps. Quotes never tighten below this."
+                    "description": "Floor on the half-spread in bps. Quotes never tighten below this. Note the MM prices off the unrounded oracle answer (PerpsVenue.getRawMarketPrice), so the mid normally falls between ticks and rounding alone already separates bid from ask by one tick; a non-zero floor is insurance for the rare case the mid lands exactly on a tick."
                   },
                   "volatilityMultiplier": {
                     "anyOf": [
@@ -420,7 +421,7 @@
                 ]
               },
               "marketSelection": {
-                "description": "Which futures expiries to quote: 'nearest' N dates, or explicit 'indices' into the nearest-first window.",
+                "description": "Which futures expiries to quote: 'nearest' N dates, or explicit 'indices' into the nearest-first window. Re-evaluated every `rollCheckIntervalSec`, so markets are added and dropped automatically as delivery dates mature.",
                 "anyOf": [
                   {
                     "additionalProperties": false,
@@ -579,7 +580,7 @@
                     "type": "string"
                   },
                   "baseQuantity": {
-                    "description": "Total per-side budget in venue-native units (futures: contract base units). Distributed via taperRatio. Use a string for values > 2^53.",
+                    "description": "Total per-side budget in venue-native units (futures: contract base units). Distributed via taperRatio. One contract ≈ 1.0 perps qty (1e6 perps base units), which is how the two venues are kept at comparable notional: futures baseQuantity × numLevelsPerSide × quoted expiries should land near the perps per-side total. Resting order count is 2 × numLevelsPerSide × quoted expiries. Use a string for values > 2^53.",
                     "anyOf": [
                       {
                         "anyOf": [
@@ -662,7 +663,7 @@
     },
     "risk": {
       "additionalProperties": false,
-      "description": "Risk caps, circuit-breakers, and gas-price guards.",
+      "description": "Risk caps, circuit-breakers, and gas-price guards. One shared budget spanning every market in the process, not a per-venue allowance.",
       "type": "object",
       "required": [
         "maxPositionSize",
@@ -1005,7 +1006,7 @@
       "required": [
         "windowSize",
         "precisionBits",
-        "historyLookbackMultiplier"
+        "historyMaxAgeSec"
       ],
       "properties": {
         "windowSize": {
@@ -1020,7 +1021,7 @@
               "description": "Environment variable interpolation (resolved at startup)"
             }
           ],
-          "description": "Number of de-duplicated price samples retained for realized-vol estimation. 60 is enough for a ±9% standard error on σ; tune up for smoother σ at the cost of slower regime tracking.",
+          "description": "Number of de-duplicated price samples retained for realized-vol estimation. The window counts oracle updates rather than wall-clock, so how far back it reaches follows the feed's own cadence. That is deliberate: when a feed slows, a count-based window still fills (just reaching further back), whereas a fixed duration would thin out precisely when σ matters most — `historyMaxAgeSec` is the backstop against reaching into a stale regime. 60 gives roughly a ±9% standard error on σ; tune up for smoother σ at the cost of slower regime tracking.",
           "default": 60
         },
         "precisionBits": {
@@ -1039,11 +1040,11 @@
           "description": "Bits of fractional precision for the bigint ln/sqrt approximations underpinning σ. 48 is plenty for vol math; raise only if a strategy demonstrably needs more.",
           "default": 48
         },
-        "historyLookbackMultiplier": {
+        "historyMaxAgeSec": {
           "anyOf": [
             {
               "minimum": 1,
-              "type": "number"
+              "type": "integer"
             },
             {
               "type": "string",
@@ -1051,8 +1052,8 @@
               "description": "Environment variable interpolation (resolved at startup)"
             }
           ],
-          "description": "Backfill fetches `windowSize × multiplier × pollInterval` of history from the subgraph, then trims duplicates. Multiplier > 1 absorbs Chainlink's slow update cadence so the window arrives full.",
-          "default": 4
+          "description": "Backfill discards samples older than this. It asks the subgraph for the newest `windowSize` oracle updates, so how far back the window reaches is set by the feed's own cadence, not by any setting here — this is only an upper bound so a stale price regime can't seed σ. Set it well above `windowSize × the feed's typical update interval`, leaving room for the feed slowing down: hashprice normally spaces updates ~3 min apart (60 samples ≈ 4h), but that tripled during an observed degraded stretch. Too low and backfill returns short, leaving σ at 0 until live polls warm the window.",
+          "default": 86400
         },
         "history": {
           "additionalProperties": false,
@@ -1377,7 +1378,7 @@
     "circuitBreaker": {
       "additionalProperties": false,
       "default": {},
-      "description": "Per-market circuit-breaker tuning.",
+      "description": "Per-market circuit-breaker tuning; isolates one market's faults from the rest.",
       "type": "object",
       "required": [
         "quarantineThreshold",

@@ -1,17 +1,18 @@
 ########################################
 # Service Toggles - SCAFFOLDING ONLY
 ########################################
-# Runtime config (image, env vars, secrets, addresses) is owned by the
-# deploy-col-mar-mm.yml workflow via GitHub Variables / GitHub Secrets.
-# The maps below configure ONLY the immutable infrastructure shell.
+# Public runtime config is config/dev.env. Private keys and the Alchemy key
+# are Secrets Manager, seeded from gitignored secret.auto.tfvars:
+#   alchemy_api_key, liquidator_private_key, futures_mm_private_key,
+#   perps_mm_private_key, and optional webhook_secret.
 ########################################
 
 create_core = true
 
-# Perps Market Maker - active. Legacy derivatives perps MM was decommissioned
-# in 2026-Q2; perpsmm.dev.hashpower.exchange now points at this stack's ALB.
+# Unused. Quoting runs on the futures MM service (portfolio app). create=false
+# removes this empty ECS service, its internal ALB, and perpsmm.dev.hashpower.exchange.
 perps_mm_service = {
-  create          = true
+  create          = false
   task_worker_qty = 1 # initial; CI/CD owns desired_count after first deploy
   cnt_port        = 3001
   task_cpu        = 256

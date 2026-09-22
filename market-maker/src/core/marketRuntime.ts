@@ -1,5 +1,5 @@
 import type pino from "pino";
-import type Fraction from "fraction.js";
+import { fractionToNumber } from "./math.ts";
 import type { InstrumentAdapter } from "./adapter.ts";
 import type { BookTracker } from "./bookTracker.ts";
 import type { InventoryManager } from "./inventoryManager.ts";
@@ -174,7 +174,3 @@ export class MarketRuntime {
   }
 }
 
-function fractionToNumber(value: Fraction): number {
-  const v = value.simplify(1e-12);
-  return (Number(v.s) * Number(v.n)) / Number(v.d);
-}

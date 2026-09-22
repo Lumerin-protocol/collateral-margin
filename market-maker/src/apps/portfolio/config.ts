@@ -71,7 +71,7 @@ const marketSelectionSchema = Type.Union(
   ],
   {
     description:
-      "Which futures expiries to quote: 'nearest' N dates, or explicit 'indices' into the nearest-first window.",
+      "Which futures expiries to quote: 'nearest' N dates, or explicit 'indices' into the nearest-first window. Re-evaluated every `rollCheckIntervalSec`, so markets are added and dropped automatically as delivery dates mature.",
   },
 );
 
@@ -147,7 +147,11 @@ const circuitBreakerSchema = Type.Object(
       description: "Backoff ceiling (seconds).",
     }),
   },
-  { ...Closed, default: {}, description: "Per-market circuit-breaker tuning." },
+  {
+    ...Closed,
+    default: {},
+    description: "Per-market circuit-breaker tuning; isolates one market's faults from the rest.",
+  },
 );
 
 export const portfolioRootSchema = Type.Object(
@@ -156,7 +160,11 @@ export const portfolioRootSchema = Type.Object(
     commitHash: Type.String({ default: "unknown" }),
     logLevel: Type.String({ default: "info" }),
     dryRun: Type.Boolean({ default: false }),
-    cancelOrdersOnShutdown: Type.Boolean({ default: true }),
+    cancelOrdersOnShutdown: Type.Boolean({
+      default: true,
+      description:
+        "Cancel resting orders on SIGINT/SIGTERM. Set false for hot-restart deploys where you'd rather absorb the brief stale-quote risk than pay cancel gas.",
+    }),
     wallets: Type.Record(Type.String(), walletSchema, {
       description: "Named signer wallets; `wallet` selects the portfolio signer.",
     }),
@@ -191,7 +199,11 @@ export const portfolioRootSchema = Type.Object(
     readBatchSize: Type.Number({ minimum: 1, default: 10 }),
     writeBatchSize: Type.Number({ minimum: 1, default: 100 }),
   },
-  { ...Closed, description: "Titan Market Maker — unified portfolio app config." },
+  {
+    ...Closed,
+    description:
+      "Titan Market Maker — unified portfolio app config. One process, one signer, one shared collateral vault: perps and every selected futures expiry quote together, the TxCoordinator sequences their txs on a single nonce, and each market is isolated behind its own circuit breaker.",
+  },
 );
 
 /**

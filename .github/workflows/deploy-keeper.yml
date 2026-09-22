@@ -6,7 +6,10 @@ name: Deploy Collateral Margin Keeper
 # Terraform (.bedrock/.terragrunt/06_col_mar_keeper_svc.tf) builds ECS shell,
 # internal ALB, Route53 keeper.{env}.hashpower.exchange, and log group.
 # This workflow builds the image, pushes to GHCR, and registers task-def
-# revisions with the runtime config from config/<env>.env plus secrets.
+# revisions with the public runtime config from config/<env>.env.
+# LIQUIDATOR_PRIVATE_KEY, ALCHEMY_API_KEY, and WEBHOOK_SECRET are injected
+# by ECS from Secrets Manager (valueFrom). This workflow only resolves the
+# secret ARN.
 #
 # Container config (NETWORK, contract addresses, log level, intervals, …) is
 # NOT declared here. It comes from config/dev.env and config/prd.env, which are
@@ -17,10 +20,9 @@ name: Deploy Collateral Margin Keeper
 #   KEEPER_DESIRED_COUNT              default "1" (set "0" to halt) — deploy
 #                                     orchestration, not container config
 #
-# GitHub Secrets (per environment):
-#   ALCHEMY_API_KEY                   RPC (or set ETH_NODE_ADDRESS in config)
-#   LIQUIDATOR_PRIVATE_KEY            same wallet as legacy perps keeper
-#   WEBHOOK_SECRET                    optional — Goldsky bearer token
+# GitHub Secrets (per environment): none for the keeper process.
+#   Alchemy, the liquidator key, and WEBHOOK_SECRET live in Secrets Manager
+#   (`col-mar-keeper-secrets-v3-<dev|lmn>`), seeded from secret.auto.tfvars.
 #
 # Repository secrets (all environments):
 #   AWS_ROLE_ARN_DEV / _LMN           from terragrunt output github_actions_role_arn
@@ -223,14 +225,12 @@ jobs:
           REGION: ${{ needs.build.outputs.aws_region }}
           IMAGE: ${{ env.GHCR_IMAGE }}:${{ needs.build.outputs.version }}
           CONFIG_ENV: ${{ needs.build.outputs.config_env }}
+          ENV_SUFFIX: ${{ needs.build.outputs.env_suffix }}
 
-          # Everything public lives in config/<env>.env. Only secrets and
-          # values computed by this run are declared here.
+          # Public config comes from config/<env>.env. Computed values only
+          # here. Signer, Alchemy, and webhook come from Secrets Manager.
           KEEPER_VERSION: ${{ needs.build.outputs.version }}
           KEEPER_DESIRED_COUNT: ${{ vars.KEEPER_DESIRED_COUNT }}
-          ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
-          LIQUIDATOR_PRIVATE_KEY: ${{ secrets.LIQUIDATOR_PRIVATE_KEY }}
-          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
         run: |
           set -euo pipefail
           CONFIG="config/${CONFIG_ENV}.env"
@@ -256,15 +256,13 @@ jobs:
                 .compatibilities, .registeredAt, .registeredBy)
           ' task-def.json > new-task-def.json
 
-          # The container environment is every key declared in config/<env>.env
-          # plus the secrets and computed values from the step env above.
-          # Sourcing cannot clobber a secret, because no secret is named in the
-          # config file. jq then reads values straight out of the environment,
-          # so each key is written exactly once: in the config file.
+          # Public keys from config/<env>.env plus KEEPER_VERSION. Secret names
+          # are stripped so they cannot land in the task definition environment.
           set -a && . "$CONFIG" && set +a
 
           KEYS=$( { sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$CONFIG"; \
-                    printf '%s\n' KEEPER_VERSION ALCHEMY_API_KEY LIQUIDATOR_PRIVATE_KEY WEBHOOK_SECRET; } )
+                    printf '%s\n' KEEPER_VERSION; } \
+                  | grep -vxE 'ALCHEMY_API_KEY|LIQUIDATOR_PRIVATE_KEY|WEBHOOK_SECRET|PRIVATE_KEY' || true )
 
           # Empty values are dropped so the keeper applies its own defaults
           # instead of parsing an empty string.
@@ -279,9 +277,20 @@ jobs:
 
           echo "   Container env keys: $(jq -r '[.[].name] | join(", ")' env-block.json)"
 
-          jq --slurpfile env env-block.json '
+          SECRET_ARN=$(aws secretsmanager describe-secret \
+            --secret-id "col-mar-keeper-secrets-v3-${ENV_SUFFIX}" \
+            --region "${REGION}" \
+            --query ARN --output text)
+          echo "   Secrets from: col-mar-keeper-secrets-v3-${ENV_SUFFIX}"
+
+          jq --slurpfile env env-block.json --arg arn "$SECRET_ARN" '
             .containerDefinitions[0].environment = $env[0] |
-            del(.containerDefinitions[0].secrets, .containerDefinitions[0].command, .containerDefinitions[0].entryPoint)
+            .containerDefinitions[0].secrets = [
+              {"name":"LIQUIDATOR_PRIVATE_KEY","valueFrom":($arn + ":liquidator_private_key::")},
+              {"name":"ALCHEMY_API_KEY","valueFrom":($arn + ":alchemy_api_key::")},
+              {"name":"WEBHOOK_SECRET","valueFrom":($arn + ":webhook_secret::")}
+            ] |
+            del(.containerDefinitions[0].command, .containerDefinitions[0].entryPoint)
           ' new-task-def.json > final-task-def.json
 
           NEW_TASK_DEF=$(aws ecs register-task-definition \

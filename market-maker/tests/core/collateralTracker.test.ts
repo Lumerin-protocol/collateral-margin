@@ -73,6 +73,20 @@ describe("CollateralTracker.maybeTopUp", () => {
     assert.deepStrictEqual(env.deposits, [50_000_000n]);
   });
 
+  it("does not deposit in dry run", async () => {
+    // Deposits are the only wallet write outside the order path, so dryRun
+    // has to stop them here or "dry run" still moves funds.
+    env.setBalance(50_000_000n);
+    const t = new CollateralTracker(
+      env.account,
+      { autoDeposit: true, autoDepositMinAmount: 1_000_000n, dryRun: true },
+      logger,
+    );
+    await t.update();
+    await t.maybeTopUp();
+    assert.deepStrictEqual(env.deposits, []);
+  });
+
   it("caps deposit so the vault balance does not exceed maxCollateralAmount", async () => {
     env = makeAccount({ vaultBalance: 30_000_000n }); // 30 USDC already in vault
     env.setBalance(500_000_000n); // 500 USDC in wallet

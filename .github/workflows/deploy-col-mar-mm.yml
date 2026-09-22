@@ -10,8 +10,8 @@ name: Deploy Collateral Margin Market Maker
 #
 #   1. Builds one Docker image from market-maker/ and pushes to GHCR
 #   2. Renders a new task-def revision for the portfolio app (MAKER_APP=portfolio)
-#      with image + public config from config/<env>.env + GitHub Secrets
-#      (no AWS Secrets Manager)
+#      with image + public config from config/<env>.env. PRIVATE_KEY and
+#      ALCHEMY_API_KEY are injected by ECS from Secrets Manager (valueFrom).
 #   3. Calls ecs:UpdateService to point the service at the new revision
 #      and to scale it to the operator-chosen desired_count
 #
@@ -27,9 +27,9 @@ name: Deploy Collateral Margin Market Maker
 #
 # GitHub Secrets (configure per-environment):
 #   AWS_ROLE_ARN_DEV / _LMN           OIDC role ARNs from the TF output github_actions_role_arn
-#   ALCHEMY_API_KEY                   shared Alchemy project key (composes the RPC URL)
-#   FUTURES_MM_PRIVATE_KEY            shared portfolio signer private key (both venues)
 #   SLACK_WEBHOOK_URL                 (org or repo level) for slack-notify
+# Signer and Alchemy keys live in Secrets Manager
+# (`col-mar-futures-mm-secrets-v3-<dev|lmn>`), seeded from secret.auto.tfvars.
 
 on:
   push:
@@ -235,18 +235,12 @@ jobs:
           TASK_FAMILY: ${{ needs.build.outputs.task_family }}
           REGION: ${{ needs.build.outputs.aws_region }}
           IMAGE: ${{ env.GHCR_IMAGE }}:${{ needs.build.outputs.version }}
+          ENV_SUFFIX: ${{ needs.build.outputs.env_suffix }}
 
           # Deploy orchestration (not container config)
           MAKER_DESIRED_COUNT: ${{ vars.MAKER_DESIRED_COUNT }}
 
-          # Per-environment GitHub Secrets (encrypted personality). Secrets
-          # only flow into this step's process env; they are never written to
-          # step outputs or to disk on the runner. One shared signer runs both
-          # venues; we reuse the futures wallet key.
-          ALCHEMY_API_KEY: ${{ secrets.ALCHEMY_API_KEY }}
-          PRIVATE_KEY: ${{ secrets.FUTURES_MM_PRIVATE_KEY }}
-
-          # Computed
+          # Computed. Signer and Alchemy come from Secrets Manager.
           MAKER_APP: portfolio
           MAKER_ENV: ${{ needs.build.outputs.maker_env }}
           COMMIT_HASH: ${{ github.sha }}
@@ -278,19 +272,14 @@ jobs:
                 .compatibilities, .registeredAt, .registeredBy)
           ' task-def.json > new-task-def.json
 
-          # Build the full env block from scratch. Personality lives ONLY here;
-          # the Terraform stub deliberately ships zero env vars.
-          #
-          # The block is every key declared in config/<env>.env plus the
-          # secrets and computed values from the step env above. Sourcing
-          # cannot clobber a secret, because no secret is named in the config
-          # file. jq then reads values straight out of the environment, so each
-          # key is written exactly once: in the config file.
-          echo "🔧 Injecting environment from ${CONFIG} + GitHub Secrets..."
+          # Public keys from config/<env>.env plus values computed by this run.
+          # Secret names are stripped so they cannot land in the environment block.
+          echo "🔧 Injecting environment from ${CONFIG}..."
           set -a && . "$CONFIG" && set +a
 
           KEYS=$( { sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$CONFIG"; \
-                    printf '%s\n' MAKER_APP MAKER_ENV COMMIT_HASH ALCHEMY_API_KEY PRIVATE_KEY; } )
+                    printf '%s\n' MAKER_APP MAKER_ENV COMMIT_HASH; } \
+                  | grep -vxE 'ALCHEMY_API_KEY|LIQUIDATOR_PRIVATE_KEY|WEBHOOK_SECRET|PRIVATE_KEY|FUTURES_MM_PRIVATE_KEY|PERPS_MM_PRIVATE_KEY' || true )
 
           # Empty values are dropped so the maker applies its own defaults
           # instead of parsing an empty string.
@@ -305,11 +294,18 @@ jobs:
 
           echo "   Container env keys: $(jq -r '[.[].name] | join(", ")' env-block.json)"
 
-          # Replace the entire env block; also drop any stale `secrets` block
-          # (we no longer use Secrets Manager).
-          jq --slurpfile env env-block.json '
+          SECRET_ARN=$(aws secretsmanager describe-secret \
+            --secret-id "col-mar-futures-mm-secrets-v3-${ENV_SUFFIX}" \
+            --region "${REGION}" \
+            --query ARN --output text)
+          echo "   Secrets from: col-mar-futures-mm-secrets-v3-${ENV_SUFFIX}"
+
+          jq --slurpfile env env-block.json --arg arn "$SECRET_ARN" '
             .containerDefinitions[0].environment = $env[0] |
-            del(.containerDefinitions[0].secrets)
+            .containerDefinitions[0].secrets = [
+              {"name":"PRIVATE_KEY","valueFrom":($arn + ":private_key::")},
+              {"name":"ALCHEMY_API_KEY","valueFrom":($arn + ":alchemy_api_key::")}
+            ]
           ' new-task-def.json > final-task-def.json
           mv final-task-def.json new-task-def.json
 

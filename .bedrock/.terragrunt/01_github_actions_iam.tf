@@ -6,10 +6,9 @@
 #   - update ECS services to point at the new revisions
 #   - PassRole the existing bedrock-foundation-role into ECS tasks
 #
-# All runtime config (env vars, secrets, contract addresses, RPC keys) is
-# managed in GitHub Variables / Secrets and baked into each task-def
-# revision by the workflow. There are no AWS Secrets Manager resources to
-# read here.
+# Public runtime config is baked into each task-def revision by the workflow
+# from config/<env>.env. Private keys are not. CI may DescribeSecret so it
+# can write valueFrom ARNs; GetSecretValue stays on bedrock-foundation-role.
 #
 # OIDC provider bootstrap (run once per account if not already present):
 #   aws iam create-open-id-connect-provider \
@@ -178,6 +177,16 @@ resource "aws_iam_role_policy" "github_ecs_update_futures_mm" {
           "ecs:DescribeClusters"
         ]
         Resource = "*"
+      },
+      {
+        Sid    = "DescribeFuturesMmSecret"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:DescribeSecret"
+        ]
+        Resource = [
+          aws_secretsmanager_secret.futures_mm[0].arn
+        ]
       }
     ]
   })
@@ -238,6 +247,16 @@ resource "aws_iam_role_policy" "github_ecs_update_keeper" {
           "ecs:DescribeClusters"
         ]
         Resource = "*"
+      },
+      {
+        Sid    = "DescribeKeeperSecret"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:DescribeSecret"
+        ]
+        Resource = [
+          aws_secretsmanager_secret.keeper[0].arn
+        ]
       }
     ]
   })

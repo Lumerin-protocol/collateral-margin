@@ -48,9 +48,8 @@ function buildOracle(instrument: InstrumentAdapter, ctx: BuildContext): OracleTr
   return new OracleTracker(instrument, ctx.logger, {
     windowSize: ctx.config.oracle.windowSize,
     precisionBits: ctx.config.oracle.precisionBits,
-    historyLookbackMultiplier: ctx.config.oracle.historyLookbackMultiplier,
+    historyMaxAgeSec: ctx.config.oracle.historyMaxAgeSec,
     history,
-    pollIntervalMs: ctx.config.timing.pollIntervalMs,
   });
 }
 
@@ -242,6 +241,7 @@ async function main(): Promise<void> {
       autoDeposit: config.collateral.autoDeposit,
       autoDepositMinAmount: config.collateral.autoDepositMinAmount,
       maxCollateralAmount: config.collateral.maxCollateralAmount,
+      dryRun: config.dryRun,
     },
     logger,
   );

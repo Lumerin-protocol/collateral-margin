@@ -12,11 +12,11 @@ variable "create_core" {
 # the scaffolding (security groups, ALB, target group, listener, Route53,
 # log group, service shell, initial task-def stub).
 #
-# Personality (image, env vars, secrets) is owned by the deploy-col-mar-mm.yml
-# workflow, which builds the image, pushes to GHCR, and registers a new
-# task-def revision per deploy. Both ECS service.task_definition and ECS
-# task_definition.container_definitions are in lifecycle.ignore_changes;
-# Terraform never updates them after first apply.
+# Personality (image, public env vars, desired count) is owned by
+# deploy-col-mar-mm.yml. Private keys and the Alchemy key live in Secrets
+# Manager (01_secrets_manager.tf) and are injected with ECS valueFrom.
+# Both ECS service.task_definition and container_definitions are in
+# lifecycle.ignore_changes; Terraform never updates them after first apply.
 #
 # Service map fields (all scaffolding):
 #   create           bool   - toggle the entire service stack
@@ -66,8 +66,9 @@ variable "futures_mm_service" {
 # UNIFIED MARGIN KEEPER - SCAFFOLDING ONLY
 ################################################################################
 # Single ECS service for coordinated perps + futures liquidation (replaces
-# derivatives-marketplace svc-perps-keeper-*). Runtime config is owned by
-# deploy-keeper.yml via GitHub Variables / Secrets.
+# derivatives-marketplace svc-perps-keeper-*). Public runtime config is owned
+# by deploy-keeper.yml from config/<env>.env. The liquidator key, Alchemy key,
+# and webhook secret are injected from Secrets Manager.
 ################################################################################
 
 variable "keeper_service" {
@@ -117,4 +118,45 @@ variable "foundation_tags" {
 }
 variable "provider_profile" {
   description = "AWS profile name used by the default provider"
+}
+
+################################################################################
+# Secrets Manager (gitignored secret.auto.tfvars — never commit values)
+################################################################################
+# Same shape in 02-dev and 04-lmn:
+#   alchemy_api_key         = "..."
+#   liquidator_private_key  = "0x..."
+#   futures_mm_private_key  = "0x..."
+#   perps_mm_private_key    = "0x..."
+#   webhook_secret          = ""   # optional; keeper WEBHOOK_SECRET
+
+variable "alchemy_api_key" {
+  description = "Alchemy API key injected into the keeper and both market makers"
+  type        = string
+  sensitive   = true
+}
+
+variable "liquidator_private_key" {
+  description = "Keeper signer. Injected as LIQUIDATOR_PRIVATE_KEY"
+  type        = string
+  sensitive   = true
+}
+
+variable "futures_mm_private_key" {
+  description = "Portfolio market-maker signer on the futures ECS service. Injected as PRIVATE_KEY"
+  type        = string
+  sensitive   = true
+}
+
+variable "perps_mm_private_key" {
+  description = "Perps market-maker signer. Injected as PRIVATE_KEY on the perps ECS service. CI does not roll that service."
+  type        = string
+  sensitive   = true
+}
+
+variable "webhook_secret" {
+  description = "Optional keeper WEBHOOK_SECRET. Empty string injects an empty value."
+  type        = string
+  sensitive   = true
+  default     = ""
 }

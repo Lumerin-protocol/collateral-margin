@@ -3,7 +3,8 @@
 ################################################################################
 # Mirror of 04_perps_mm_svc.tf for MAKER_APP=futures. Same CI/CD-owned
 # personality model: Terraform builds infra, deploy-col-mar-mm.yml owns
-# image / env vars / secrets / desired_count after first apply.
+# image / public env vars / desired_count after first apply.
+# PRIVATE_KEY and ALCHEMY_API_KEY are injected from Secrets Manager.
 #
 # Replaces the legacy futures market-maker Lambda (futures-marketplace,
 # 10_market_maker_lambda.tf). DNS name `futuresmm.{env}.hashpower.exchange`
@@ -185,16 +186,32 @@ resource "aws_alb_listener" "futures_mm_int_443_use1" {
   )
 }
 
+# Public alias in the Hashpower zone. Dev zones live in the workload account.
+# LMN writes hashpower.exchange in titanio-net (aws.titanio-net).
 resource "aws_route53_record" "futures_mm_int_use1" {
-  count    = var.futures_mm_service.create ? 1 : 0
+  count    = var.futures_mm_service.create && !local.is_lmn ? 1 : 0
   provider = aws.use1
   zone_id  = local.hp_dns["exc"].zone_id
   name     = "futuresmm.${local.hp_dns["exc"].name}"
   type     = "A"
 
   alias {
-    name                   = aws_alb.futures_mm_int_use1[count.index].dns_name
-    zone_id                = aws_alb.futures_mm_int_use1[count.index].zone_id
+    name                   = aws_alb.futures_mm_int_use1[0].dns_name
+    zone_id                = aws_alb.futures_mm_int_use1[0].zone_id
+    evaluate_target_health = true
+  }
+}
+
+resource "aws_route53_record" "futures_mm_int_lmn" {
+  count    = var.futures_mm_service.create && local.is_lmn ? 1 : 0
+  provider = aws.titanio-net
+  zone_id  = local.hp_dns["exc"].zone_id
+  name     = "futuresmm.${local.hp_dns["exc"].name}"
+  type     = "A"
+
+  alias {
+    name                   = aws_alb.futures_mm_int_use1[0].dns_name
+    zone_id                = aws_alb.futures_mm_int_use1[0].zone_id
     evaluate_target_health = true
   }
 }
@@ -273,6 +290,17 @@ resource "aws_ecs_task_definition" "futures_mm_use1" {
           containerPort = tonumber(var.futures_mm_service.cnt_port)
           hostPort      = tonumber(var.futures_mm_service.cnt_port)
           protocol      = "tcp"
+        }
+      ]
+
+      secrets = [
+        {
+          name      = "PRIVATE_KEY"
+          valueFrom = "${aws_secretsmanager_secret.futures_mm[0].arn}:private_key::"
+        },
+        {
+          name      = "ALCHEMY_API_KEY"
+          valueFrom = "${aws_secretsmanager_secret.futures_mm[0].arn}:alchemy_api_key::"
         }
       ]
 

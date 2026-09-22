@@ -1,7 +1,6 @@
 {
   "yaml.schemas": {
-    "./schemas/perps.json": "configs/perps.*.yml",
-    "./schemas/futures.json": "configs/futures.*.yml"
+    "./schemas/portfolio.json": "configs/portfolio.*.yml"
   },
   "yaml.format.enable": true,
   "yaml.validate": true,

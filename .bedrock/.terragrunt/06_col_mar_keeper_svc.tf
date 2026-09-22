@@ -4,8 +4,9 @@
 # Replaces derivatives-marketplace perps-keeper (svc-perps-keeper-*).
 # One long-running task liquidates across vault, PME, perps, and futures.
 #
-# deploy-keeper.yml owns image, env vars, secrets, and desired_count after
-# the first CI/CD deploy. Terraform ships ALB + Route53 at keeper.{env}.*
+# deploy-keeper.yml owns image, public env vars, and desired_count after
+# the first CI/CD deploy. Private keys are injected from Secrets Manager.
+# Terraform ships ALB + Route53 at keeper.{env}.*
 # (same hostname as the legacy perps keeper once that stack is destroyed).
 ################################################################################
 
@@ -183,16 +184,32 @@ resource "aws_alb_listener" "keeper_int_443_use1" {
   )
 }
 
+# Public alias in the Hashpower zone. Dev zones live in the workload account.
+# LMN writes hashpower.exchange in titanio-net (aws.titanio-net).
 resource "aws_route53_record" "keeper_int_use1" {
-  count    = var.keeper_service.create ? 1 : 0
+  count    = var.keeper_service.create && !local.is_lmn ? 1 : 0
   provider = aws.use1
   zone_id  = local.hp_dns["exc"].zone_id
   name     = "keeper.${local.hp_dns["exc"].name}"
   type     = "A"
 
   alias {
-    name                   = aws_alb.keeper_int_use1[count.index].dns_name
-    zone_id                = aws_alb.keeper_int_use1[count.index].zone_id
+    name                   = aws_alb.keeper_int_use1[0].dns_name
+    zone_id                = aws_alb.keeper_int_use1[0].zone_id
+    evaluate_target_health = true
+  }
+}
+
+resource "aws_route53_record" "keeper_int_lmn" {
+  count    = var.keeper_service.create && local.is_lmn ? 1 : 0
+  provider = aws.titanio-net
+  zone_id  = local.hp_dns["exc"].zone_id
+  name     = "keeper.${local.hp_dns["exc"].name}"
+  type     = "A"
+
+  alias {
+    name                   = aws_alb.keeper_int_use1[0].dns_name
+    zone_id                = aws_alb.keeper_int_use1[0].zone_id
     evaluate_target_health = true
   }
 }
@@ -269,6 +286,21 @@ resource "aws_ecs_task_definition" "keeper_use1" {
           containerPort = tonumber(var.keeper_service.cnt_port)
           hostPort      = tonumber(var.keeper_service.cnt_port)
           protocol      = "tcp"
+        }
+      ]
+
+      secrets = [
+        {
+          name      = "LIQUIDATOR_PRIVATE_KEY"
+          valueFrom = "${aws_secretsmanager_secret.keeper[0].arn}:liquidator_private_key::"
+        },
+        {
+          name      = "ALCHEMY_API_KEY"
+          valueFrom = "${aws_secretsmanager_secret.keeper[0].arn}:alchemy_api_key::"
+        },
+        {
+          name      = "WEBHOOK_SECRET"
+          valueFrom = "${aws_secretsmanager_secret.keeper[0].arn}:webhook_secret::"
         }
       ]
 
