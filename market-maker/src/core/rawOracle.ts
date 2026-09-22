@@ -20,6 +20,7 @@
  */
 
 import type { PublicClient } from "viem";
+import type { OracleScale } from "./adapter.ts";
 
 /** Chainlink AggregatorV3Interface — read-only slice we need for the raw mid. */
 export const chainlinkAggregatorAbi = [
@@ -49,6 +50,8 @@ export interface RawOracleConfig {
   oracle: `0x${string}`;
   /** 10^(oracle.decimals − token.decimals); used to rebase the answer to token decimals. */
   divisor: bigint;
+  /** Token decimals — the scale `read()` returns answers in, after the divisor. */
+  tokenDecimals: number;
 }
 
 export class RawOracleReader {
@@ -87,6 +90,14 @@ export class RawOracleReader {
     // Mirror the venue's `getMarketPrice()` decimal rebase (no unit factor).
     this.lastAnswer = answer / this.cache.divisor;
     return this.lastAnswer;
+  }
+
+  /** Aggregator identity and the scale `read()` returns answers in. */
+  async scale(): Promise<OracleScale> {
+    if (this.cache === null) {
+      this.cache = await this.resolve();
+    }
+    return { address: this.cache.oracle, decimals: this.cache.tokenDecimals };
   }
 
   /**

@@ -8,6 +8,7 @@ import type {
   ExecuteOrdersResult,
   InstrumentAdapter,
   InstrumentContext,
+  OracleScale,
   OrderBookSnapshot,
   OrderIntent,
   OwnOrder,
@@ -46,6 +47,10 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
     // mid lets `roundDownToTick(r) → bidMid` and `roundUpToTick(r) → askMid`
     // produce a 1-tick spread naturally.
     return await this.venue.getRawMarketPrice();
+  }
+
+  getOracleScale(): Promise<OracleScale> {
+    return this.venue.getOracleScale();
   }
 
   async getPosition(): Promise<Position> {

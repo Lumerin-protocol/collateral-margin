@@ -102,7 +102,7 @@ export const futuresSizingSchema = Type.Object(
       [Type.String({ pattern: "^\\d+$" }), Type.Number()],
       {
         description:
-          "Total per-side budget in venue-native units (futures: contract base units). Distributed via taperRatio. Use a string for values > 2^53.",
+          "Total per-side budget in venue-native units (futures: contract base units). Distributed via taperRatio. One contract ≈ 1.0 perps qty (1e6 perps base units), which is how the two venues are kept at comparable notional: futures baseQuantity × numLevelsPerSide × quoted expiries should land near the perps per-side total. Resting order count is 2 × numLevelsPerSide × quoted expiries. Use a string for values > 2^53.",
       },
     ),
     numLevelsPerSide: Type.Number({

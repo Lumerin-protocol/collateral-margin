@@ -63,7 +63,7 @@ export const perpsPricingSchema = Type.Object(
     minSpreadBps: Type.Number({
       minimum: 0,
       description:
-        "Floor on the half-spread in bps. Quotes never tighten below this.",
+        "Floor on the half-spread in bps. Quotes never tighten below this. Note the MM prices off the unrounded oracle answer (PerpsVenue.getRawMarketPrice), so the mid normally falls between ticks and rounding alone already separates bid from ask by one tick; a non-zero floor is insurance for the rare case the mid lands exactly on a tick.",
     }),
     volatilityMultiplier: Type.Number({
       minimum: 0,

@@ -203,7 +203,7 @@
               "description": "Environment variable interpolation (resolved at startup)"
             }
           ],
-          "description": "Floor on the half-spread in bps. Quotes never tighten below this."
+          "description": "Floor on the half-spread in bps. Quotes never tighten below this. Note the MM prices off the unrounded oracle answer (PerpsVenue.getRawMarketPrice), so the mid normally falls between ticks and rounding alone already separates bid from ask by one tick; a non-zero floor is insurance for the rare case the mid lands exactly on a tick."
         },
         "volatilityMultiplier": {
           "anyOf": [
@@ -328,7 +328,7 @@
     },
     "risk": {
       "additionalProperties": false,
-      "description": "Risk caps, circuit-breakers, and gas-price guards.",
+      "description": "Risk caps, circuit-breakers, and gas-price guards. One shared budget spanning every market in the process, not a per-venue allowance.",
       "type": "object",
       "required": [
         "maxPositionSize",
@@ -671,7 +671,7 @@
       "required": [
         "windowSize",
         "precisionBits",
-        "historyLookbackMultiplier"
+        "historyMaxAgeSec"
       ],
       "properties": {
         "windowSize": {
@@ -686,7 +686,7 @@
               "description": "Environment variable interpolation (resolved at startup)"
             }
           ],
-          "description": "Number of de-duplicated price samples retained for realized-vol estimation. 60 is enough for a ±9% standard error on σ; tune up for smoother σ at the cost of slower regime tracking.",
+          "description": "Number of de-duplicated price samples retained for realized-vol estimation. The window counts oracle updates rather than wall-clock, so how far back it reaches follows the feed's own cadence. That is deliberate: when a feed slows, a count-based window still fills (just reaching further back), whereas a fixed duration would thin out precisely when σ matters most — `historyMaxAgeSec` is the backstop against reaching into a stale regime. 60 gives roughly a ±9% standard error on σ; tune up for smoother σ at the cost of slower regime tracking.",
           "default": 60
         },
         "precisionBits": {
@@ -705,11 +705,11 @@
           "description": "Bits of fractional precision for the bigint ln/sqrt approximations underpinning σ. 48 is plenty for vol math; raise only if a strategy demonstrably needs more.",
           "default": 48
         },
-        "historyLookbackMultiplier": {
+        "historyMaxAgeSec": {
           "anyOf": [
             {
               "minimum": 1,
-              "type": "number"
+              "type": "integer"
             },
             {
               "type": "string",
@@ -717,8 +717,8 @@
               "description": "Environment variable interpolation (resolved at startup)"
             }
           ],
-          "description": "Backfill fetches `windowSize × multiplier × pollInterval` of history from the subgraph, then trims duplicates. Multiplier > 1 absorbs Chainlink's slow update cadence so the window arrives full.",
-          "default": 4
+          "description": "Backfill discards samples older than this. It asks the subgraph for the newest `windowSize` oracle updates, so how far back the window reaches is set by the feed's own cadence, not by any setting here — this is only an upper bound so a stale price regime can't seed σ. Set it well above `windowSize × the feed's typical update interval`, leaving room for the feed slowing down: hashprice normally spaces updates ~3 min apart (60 samples ≈ 4h), but that tripled during an observed degraded stretch. Too low and backfill returns short, leaving σ at 0 until live polls warm the window.",
+          "default": 86400
         },
         "history": {
           "additionalProperties": false,
