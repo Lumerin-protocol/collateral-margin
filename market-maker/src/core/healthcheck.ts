@@ -98,7 +98,7 @@ export class HealthCheck {
 
       const logger = this.opts.logger;
       const port = this.opts.port;
-      this.server.listen(port, () => {
+      this.server.listen(port, "0.0.0.0", () => {
         logger.info(
           {
             human: `http://localhost:${port}/health`,

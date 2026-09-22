@@ -34,6 +34,11 @@
       "default": "unknown",
       "type": "string"
     },
+    "imageTag": {
+      "default": "unknown",
+      "type": "string",
+      "description": "Image tag this process was deployed as. Reported on /health."
+    },
     "logLevel": {
       "default": "info",
       "type": "string"

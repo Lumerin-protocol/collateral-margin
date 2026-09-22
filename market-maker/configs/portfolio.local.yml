@@ -7,6 +7,7 @@
 
 nodeEnv: development
 commitHash: ${COMMIT_HASH:-dev}
+imageTag: ${IMAGE_TAG:-local}
 logLevel: debug
 dryRun: false
 cancelOrdersOnShutdown: false

@@ -286,6 +286,8 @@ jobs:
           MAKER_APP: portfolio
           MAKER_ENV: ${{ needs.build.outputs.maker_env }}
           COMMIT_HASH: ${{ github.sha }}
+          # Same string as the image tag. portfolio.*.yml publishes it on /health.
+          IMAGE_TAG: ${{ needs.build.outputs.version }}
         run: |
           set -euo pipefail
           CONFIG="config/${MAKER_ENV}.env"
@@ -320,7 +322,7 @@ jobs:
           set -a && . "$CONFIG" && set +a
 
           KEYS=$( { sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' "$CONFIG"; \
-                    printf '%s\n' MAKER_APP MAKER_ENV COMMIT_HASH; } \
+                    printf '%s\n' MAKER_APP MAKER_ENV COMMIT_HASH IMAGE_TAG; } \
                   | grep -vxE 'ALCHEMY_API_KEY|LIQUIDATOR_PRIVATE_KEY|WEBHOOK_SECRET|PRIVATE_KEY|FUTURES_MM_PRIVATE_KEY|PERPS_MM_PRIVATE_KEY' || true )
 
           # Empty values are dropped so the maker applies its own defaults
@@ -409,6 +411,44 @@ jobs:
             --services "$SERVICE" \
             --region "$REGION"
           echo "✅ Stable."
+
+          # services-stable also succeeds after a rollback to the previous
+          # image. The ALB is internal, so this job cannot GET /health.
+          # The running task image and its IMAGE_TAG env are what /health
+          # reports as imageTag.
+          EXPECTED_IMAGE="${{ env.GHCR_IMAGE }}:${{ needs.build.outputs.version }}"
+          EXPECTED_TAG="${{ needs.build.outputs.version }}"
+          TASK_ARN=$(aws ecs list-tasks \
+            --cluster "$CLUSTER" \
+            --service-name "$SERVICE" \
+            --desired-status RUNNING \
+            --region "$REGION" \
+            --query 'taskArns[0]' \
+            --output text)
+          if [ -z "$TASK_ARN" ] || [ "$TASK_ARN" = "None" ]; then
+            echo "::error::No running task for $SERVICE after it reported stable."
+            exit 1
+          fi
+          read -r ACTUAL_IMAGE TASK_DEF < <(aws ecs describe-tasks \
+            --cluster "$CLUSTER" \
+            --tasks "$TASK_ARN" \
+            --region "$REGION" \
+            --query 'tasks[0].[containers[0].image,taskDefinitionArn]' \
+            --output text)
+          ACTUAL_TAG=$(aws ecs describe-task-definition \
+            --task-definition "$TASK_DEF" \
+            --region "$REGION" \
+            --query "taskDefinition.containerDefinitions[0].environment[?name=='IMAGE_TAG'].value | [0]" \
+            --output text)
+          echo "Expected image: $EXPECTED_IMAGE"
+          echo "Running image:  $ACTUAL_IMAGE"
+          echo "Expected /health imageTag: $EXPECTED_TAG"
+          echo "Task IMAGE_TAG:            $ACTUAL_TAG"
+          if [ "$ACTUAL_IMAGE" != "$EXPECTED_IMAGE" ] || [ "$ACTUAL_TAG" != "$EXPECTED_TAG" ]; then
+            echo "::error::Service stabilized on ${ACTUAL_IMAGE} (imageTag ${ACTUAL_TAG}), not ${EXPECTED_IMAGE}."
+            exit 1
+          fi
+          echo "✅ Running task is ${ACTUAL_IMAGE}"
 
   cleanup:
     name: 🧹 Cleanup
