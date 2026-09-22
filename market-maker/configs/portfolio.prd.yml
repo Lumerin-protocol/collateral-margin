@@ -10,6 +10,7 @@
 
 nodeEnv: production
 commitHash: ${COMMIT_HASH:-unknown}
+imageTag: ${IMAGE_TAG:-unknown}
 logLevel: ${MAKER_LOG_LEVEL:-info}
 dryRun: ${MAKER_DRY_RUN:-false}
 cancelOrdersOnShutdown: ${MAKER_CANCEL_ORDERS_ON_SHUTDOWN:-true}
