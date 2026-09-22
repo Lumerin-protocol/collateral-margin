@@ -19,6 +19,12 @@ export interface CollateralTrackerConfig {
    * wallet balance.
    */
   maxCollateralAmount?: bigint;
+  /**
+   * When true, log the deposit that would have been made and broadcast
+   * nothing. Deposits are the only wallet write outside the order path, so
+   * this has to be honoured here for `dryRun` to mean "sends no transactions".
+   */
+  dryRun?: boolean;
 }
 
 /**
@@ -80,15 +86,17 @@ export class CollateralTracker {
       if (headroom === 0n) return;
       if (amount > headroom) amount = headroom;
     }
-    this.logger.info(
-      {
-        amount: amount.toString(),
-        wallet: this.walletTokenBalance.toString(),
-        vault: this.vaultBalance.toString(),
-        max: max?.toString(),
-      },
-      "depositing wallet balance into vault",
-    );
+    const detail = {
+      amount: amount.toString(),
+      wallet: this.walletTokenBalance.toString(),
+      vault: this.vaultBalance.toString(),
+      max: max?.toString(),
+    };
+    if (this.cfg.dryRun) {
+      this.logger.info(detail, "dry run: skipping vault deposit");
+      return;
+    }
+    this.logger.info(detail, "depositing wallet balance into vault");
     await this.account.deposit(amount);
     await this.update();
   }

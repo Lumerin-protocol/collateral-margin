@@ -8,6 +8,7 @@ import type {
   ExecuteOrdersResult,
   InstrumentAdapter,
   InstrumentContext,
+  OracleScale,
   OrderBookSnapshot,
   OrderIntent,
   Position,
@@ -58,6 +59,10 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
     // futures expiries share the same per-day hashprice oracle, so the index
     // is identical across markets; only time-to-expiry (T) differs downstream.
     return await this.venue.getRawMarketPrice();
+  }
+
+  getOracleScale(): Promise<OracleScale> {
+    return this.venue.getOracleScale();
   }
 
   async getPosition(): Promise<Position> {

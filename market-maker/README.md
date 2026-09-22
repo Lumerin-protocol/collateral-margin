@@ -125,35 +125,35 @@ on the book for hot restarts.
 
 ## Configuration
 
-Each app ships per-environment YAML configs under `configs/`:
+Per-environment YAML configs live under `configs/`. One shared
+portfolio config per environment covers perps and every futures expiry
+in a single process:
 
 | File | Network |
 |---|---|
-| `perps.local.yml`   / `futures.local.yml`   | hardhat |
-| `perps.dev.yml`     / `futures.dev.yml`     | base-sepolia |
-| `perps.stg.yml`     / `futures.stg.yml`     | base-mainnet |
-| `perps.prd.yml`     / `futures.prd.yml`     | base-mainnet |
+| `portfolio.local.yml` | hardhat |
+| `portfolio.dev.yml`   | base-sepolia |
+| `portfolio.prd.yml`   | base-mainnet |
 
 Pick one with `--config <path>` (CLI flag), `MAKER_CONFIG=<path>` (env
-variable), or `MAKER_ENV=<local|dev|stg|prd>` inside the docker
+variable), or `MAKER_ENV=<local|dev|prd>` inside the docker
 entrypoint. Precedence is `--config` > `MAKER_CONFIG` > docker
 `MAKER_ENV` lookup.
 
 The YAMLs are validated against generated JSON Schemas (autocomplete
 and type-checking work in any editor with the YAML extension). They
 interpolate `${VAR}` tokens from environment variables. On startup
-both apps load `.env` from `market-maker/` and from the parent
+the app loads `.env` from `market-maker/` and from the parent
 `collateral-margin/` (in that priority order); live `process.env`
 always wins over file contents.
 
 ```bash
-pnpm local:perps      # node … --config configs/perps.local.yml | pino-pretty
-pnpm dev:futures      # node … --config configs/futures.dev.yml  | pino-pretty
-pnpm stg:perps        # node … --config configs/perps.stg.yml
-pnpm prd:futures      # node … --config configs/futures.prd.yml
+pnpm local:portfolio  # node … --config configs/portfolio.local.yml | pino-pretty
+pnpm dev:portfolio    # node … --config configs/portfolio.dev.yml   | pino-pretty
+pnpm prd:portfolio    # node … --config configs/portfolio.prd.yml
 
 # One-off / custom path:
-node src/apps/perps/main.ts --config /tmp/my-perps.yml
+node src/apps/portfolio/main.ts --config /tmp/my-portfolio.yml
 ```
 
 All operational tuning (sizes, spreads, risk caps, gas budgets,
@@ -168,13 +168,15 @@ else lives in YAML.
 | Variable | Required by | Description |
 |---|---|---|
 | `PRIVATE_KEY` | all | Hex-encoded private key for the MM wallet |
-| `ALCHEMY_API_KEY` | dev / stg / prd | Used by the bundled YAMLs to compose the RPC URL |
-| `PERPS_ADDRESS` | perps app | Deployed `HashPowerPerpsDEX` proxy address |
-| `FUTURES_ADDRESS` | futures app | Deployed `Futures` proxy address |
+| `ALCHEMY_API_KEY` | dev / prd | Used by the bundled YAMLs to compose the RPC URL |
+| `PERPS_ADDRESS` | all | Deployed `HashPowerPerpsDEX` proxy address |
+| `FUTURES_ADDRESS` | all | Deployed `Futures` proxy address |
+| `HASHPRICE_ORACLE_SUBGRAPH_URL` | dev / prd | Hashprice-oracle subgraph, used to backfill the σ window at startup |
+| `ETH_PRICE_FEED_ADDRESS` | dev / prd | Chainlink ETH/USD aggregator; required for USD-denominated gas budgets |
 
 Custom YAMLs may reference additional `${VAR}` tokens (e.g. a
 non-Alchemy RPC URL, a chain id override). The bundled YAMLs in
-`configs/` only reference the four above plus the RPC URL.
+`configs/` only reference those above plus the RPC URL.
 
 ## Getting started
 

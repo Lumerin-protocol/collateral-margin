@@ -138,17 +138,57 @@ describe("RollingWindow per-second volatility", () => {
     assert.equal(fracVal(w.volatilityPerSecond()), 0);
   });
 
-  it("uniform Δt: σ_per_sec ≈ σ_per_step / √Δt", () => {
+  it("uniform Δt: σ_per_sec = rms(log returns) / √Δt", () => {
     const w = new RollingWindow(10);
     const prices = [100n, 102n, 98n, 101n, 99n, 103n];
     const dt = 4; // seconds between samples
     for (let i = 0; i < prices.length; i++) w.push(prices[i], i * dt);
-    const perStep = w.volatility().simplify(1e-12).valueOf();
-    const perSec = fracVal(w.volatilityPerSecond());
-    // For uniform Δt the relationship is exact: σ_step = σ_sec · √Δt.
+
+    // Realized variance pools Σr²/ΣΔt and is not mean-centred, so the
+    // reference is the root-mean-square return, not the sample stddev.
+    let sumSq = 0;
+    for (let i = 1; i < prices.length; i++) {
+      sumSq += Math.log(Number(prices[i]) / Number(prices[i - 1])) ** 2;
+    }
+    const expected = Math.sqrt(sumSq / ((prices.length - 1) * dt));
+
     assert.ok(
-      Math.abs(perStep - perSec * Math.sqrt(dt)) < 1e-9,
-      `expected σ_step=${perStep} ≈ σ_sec=${perSec} × √${dt}`,
+      Math.abs(fracVal(w.volatilityPerSecond()) - expected) < 1e-9,
+      `expected σ_sec=${expected}, got ${fracVal(w.volatilityPerSecond())}`,
+    );
+  });
+
+  it("a burst of rapid updates does not inflate σ", () => {
+    // Our oracles publish on a deviation threshold, so a cluster of fast
+    // updates carries the same move size as slow ones. Pooling Σr²/ΣΔt keeps
+    // σ flat across the burst; per-sample r/√Δt normalisation would spike it.
+    const steady = new RollingWindow(64);
+    const bursty = new RollingWindow(64);
+    const moves = [1.002, 0.998, 1.003, 0.997, 1.001, 0.999];
+
+    let t = 0;
+    let p = 1_000_000n;
+    for (let i = 0; i < 24; i++) {
+      p = BigInt(Math.round(Number(p) * moves[i % moves.length]));
+      t += 200;
+      steady.push(p, t);
+    }
+
+    // Same price path and same total elapsed time, but the middle third
+    // arrives as a 2-second burst that the tail then compensates for.
+    t = 0;
+    p = 1_000_000n;
+    for (let i = 0; i < 24; i++) {
+      p = BigInt(Math.round(Number(p) * moves[i % moves.length]));
+      t += i >= 8 && i < 16 ? 2 : 200 + (8 * 198) / 16;
+      bursty.push(p, t);
+    }
+
+    const a = fracVal(steady.volatilityPerSecond());
+    const b = fracVal(bursty.volatilityPerSecond());
+    assert.ok(
+      Math.abs(b / a - 1) < 0.05,
+      `burst should leave σ within 5%: steady=${a}, bursty=${b} (${(b / a).toFixed(2)}×)`,
     );
   });
 

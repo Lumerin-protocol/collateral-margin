@@ -1,8 +1,12 @@
 import type pino from "pino";
 import Fraction from "fraction.js";
-import type { InstrumentAdapter } from "./adapter.ts";
-import type { HistoricalPriceSource } from "./historicalPriceSource.ts";
-import { RollingWindow } from "./math.ts";
+import type { InstrumentAdapter, OracleScale } from "./adapter.ts";
+import type {
+  HistoricalPriceSeries,
+  HistoricalPriceSource,
+  PricePoint,
+} from "./historicalPriceSource.ts";
+import { fractionToNumber, RollingWindow } from "./math.ts";
 
 export interface OracleTrackerConfig {
   /** Maximum number of samples kept in the rolling window. Defaults to 60. */
@@ -16,20 +20,15 @@ export interface OracleTrackerConfig {
    */
   history?: HistoricalPriceSource;
   /**
-   * Live poll cadence in milliseconds. Used together with `windowSize` to
-   * size the historical lookback (`windowSize × pollIntervalMs`). Required
-   * when `history` is provided; otherwise ignored.
+   * Upper bound on the age of a backfilled sample, in seconds.
+   *
+   * Backfill asks for the newest `windowSize` oracle updates, so the span the
+   * window covers is decided by the feed's own cadence — this only stops a
+   * stale regime from seeding σ when the feed has been quiet. Must stay above
+   * `windowSize × the feed's update interval` or the backfill comes back
+   * short. Defaults to 24h.
    */
-  pollIntervalMs?: number;
-  /**
-   * Multiplier applied to the lookback window when fetching history. The
-   * underlying oracle (Chainlink) only updates on deviation/heartbeat, so
-   * `windowSize × pollIntervalMs` of wall-clock typically yields fewer than
-   * `windowSize` samples. Querying a wider window and trimming gets us a
-   * full window. Defaults to 4× — generous enough for slow feeds, small
-   * enough to keep the gateway response under a few hundred kB.
-   */
-  historyLookbackMultiplier?: number;
+  historyMaxAgeSec?: number;
   /**
    * Test seam for deterministic per-second σ math. Returns the current time
    * in seconds (with sub-second precision is fine). Defaults to
@@ -55,9 +54,13 @@ export interface OracleTrackerConfig {
  * # Why backfill
  *
  * Cold starts otherwise need ~`windowSize × medianUpdateInterval` of
- * wall-clock before σ is meaningful. With the subgraph-backed
- * `HistoricalPriceSource`, the window is already populated when the first
- * live tick lands.
+ * wall-clock before σ is meaningful — hours on a feed that updates every few
+ * minutes. With the subgraph-backed `HistoricalPriceSource`, the window is
+ * already populated when the first live tick lands.
+ *
+ * Note that the poll interval plays no part in sizing the backfill. The
+ * window de-duplicates, so it holds `windowSize` *oracle updates* however
+ * often we poll; asking the source for that many is the whole sizing rule.
  */
 export class OracleTracker {
   currentPrice = 0n;
@@ -71,9 +74,8 @@ export class OracleTracker {
   private readonly instrument: InstrumentAdapter;
   private readonly priceWindow: RollingWindow;
   private readonly history: HistoricalPriceSource | undefined;
-  private readonly pollIntervalMs: number | undefined;
   private readonly windowSize: number;
-  private readonly historyLookbackMultiplier: number;
+  private readonly historyMaxAgeSec: number;
   private readonly nowSec: () => number;
   private readonly logger: pino.Logger;
   private lastSampledPrice: bigint | null = null;
@@ -83,8 +85,7 @@ export class OracleTracker {
     this.windowSize = cfg.windowSize ?? 60;
     this.priceWindow = new RollingWindow(this.windowSize, cfg.precisionBits ?? 48);
     this.history = cfg.history;
-    this.pollIntervalMs = cfg.pollIntervalMs;
-    this.historyLookbackMultiplier = cfg.historyLookbackMultiplier ?? 4;
+    this.historyMaxAgeSec = cfg.historyMaxAgeSec ?? 86_400;
     this.nowSec = cfg.nowSec ?? (() => Date.now() / 1000);
     this.logger = logger.child({ component: "oracle" });
   }
@@ -95,41 +96,65 @@ export class OracleTracker {
    * are equivalent to plain `update()`.
    */
   async initialize(): Promise<void> {
-    if (this.history && this.pollIntervalMs && this.pollIntervalMs > 0) {
-      const lookbackSec = (this.windowSize * this.pollIntervalMs * this.historyLookbackMultiplier) / 1000;
+    if (this.history) {
       try {
-        const samples = await this.history.fetch({
-          lookbackSec,
-          maxPoints: this.windowSize * this.historyLookbackMultiplier,
-        });
-        let pushed = 0;
-        for (const s of samples) {
-          if (s.price <= 0n) continue;
-          if (this.lastSampledPrice !== null && s.price === this.lastSampledPrice) continue;
-          this.priceWindow.push(s.price, s.timestampSec);
-          this.lastSampledPrice = s.price;
-          pushed++;
+        const [live, series] = await Promise.all([
+          this.instrument.getOracleScale(),
+          // The window keeps `windowSize` de-duplicated samples, so that is
+          // exactly how many oracle updates to ask for; the feed decides how
+          // far back that reaches.
+          this.history.fetch({
+            maxPoints: this.windowSize,
+            maxAgeSec: this.historyMaxAgeSec,
+          }),
+        ]);
+        const mismatch = reconcileScales(series, live);
+        if (mismatch !== null) {
+          this.logger.warn(
+            {
+              reason: mismatch,
+              historyAddress: series.address,
+              historyDecimals: series.decimals,
+              oracleAddress: live.address,
+              oracleDecimals: live.decimals,
+            },
+            "historical series does not match the live oracle; skipping backfill",
+          );
+        } else {
+          const rebased = rebase(series, live.decimals);
+          let pushed = 0;
+          for (const s of rebased) {
+            if (s.price <= 0n) continue;
+            if (this.lastSampledPrice !== null && s.price === this.lastSampledPrice) continue;
+            this.priceWindow.push(s.price, s.timestampSec);
+            this.lastSampledPrice = s.price;
+            pushed++;
+          }
+          if (pushed > 0) {
+            // Compute σ now so it's already meaningful before the first live tick;
+            // `update()` only recomputes when a *new* price arrives, and the live
+            // poll often duplicates the last backfilled sample.
+            this.volatilityPerSecond = this.priceWindow.volatilityPerSecond();
+          }
+          this.logger.info(
+            {
+              fetched: series.points.length,
+              pushed,
+              windowSize: this.windowSize,
+              maxAgeSec: this.historyMaxAgeSec,
+              spanSec: sampleSpanSec(series),
+              decimalShift: series.decimals - live.decimals,
+              volatilityPerSec: fractionToNumber(this.volatilityPerSecond),
+            },
+            "backfilled volatility window from historical source",
+          );
         }
-        if (pushed > 0) {
-          // Compute σ now so it's already meaningful before the first live tick;
-          // `update()` only recomputes when a *new* price arrives, and the live
-          // poll often duplicates the last backfilled sample.
-          this.volatilityPerSecond = this.priceWindow.volatilityPerSecond();
-        }
-        this.logger.info(
-          { fetched: samples.length, pushed, windowSize: this.windowSize, lookbackSec },
-          "backfilled volatility window from historical source",
-        );
       } catch (err) {
         this.logger.warn(
-          { err, windowSize: this.windowSize, lookbackSec },
+          { err, windowSize: this.windowSize, maxAgeSec: this.historyMaxAgeSec },
           "history backfill failed; volatility will warm up from live polls",
         );
       }
-    } else if (this.history) {
-      this.logger.warn(
-        "history provided without pollIntervalMs; skipping backfill",
-      );
     }
 
     await this.update();
@@ -146,10 +171,57 @@ export class OracleTracker {
     this.logger.debug(
       {
         price: price.toString(),
-        volatilityPerSec: this.volatilityPerSecond.valueOf(),
+        volatilityPerSec: fractionToNumber(this.volatilityPerSecond),
         windowFill: this.priceWindow.length,
       },
       "oracle tick",
     );
   }
+}
+
+/**
+ * Check a historical series against the live oracle before its samples are
+ * allowed into the window. Returns `null` when they agree, otherwise a short
+ * reason for the log.
+ *
+ * Both sides declare their feed and their fixed-point scale — the aggregator
+ * address and decimals come off chain via `getOracleScale()`, and the source
+ * reports the pair it indexed. Nothing is inferred from the magnitude of the
+ * prices: a series from a different feed can look perfectly plausible next to
+ * the live one, and a decimal difference is indistinguishable from a real
+ * price move once you are only comparing numbers.
+ */
+function reconcileScales(series: HistoricalPriceSeries, live: OracleScale): string | null {
+  if (series.address.toLowerCase() !== live.address.toLowerCase()) {
+    return "aggregator address differs";
+  }
+  if (!Number.isInteger(series.decimals) || series.decimals < 0) {
+    return "history decimals are not a valid scale";
+  }
+  return null;
+}
+
+/**
+ * Restate a series on `targetDecimals`.
+ *
+ * Historical sources publish the aggregator's own answer, while live reads
+ * arrive rebased to token decimals (see `RawOracleReader`). Mixing the two
+ * unrebased fabricates a log return the size of the decimal difference at the
+ * seam, which then dominates σ.
+ */
+/** Wall-clock the fetched samples cover, for spotting a window that came back short. */
+function sampleSpanSec(series: HistoricalPriceSeries): number {
+  const { points } = series;
+  if (points.length < 2) return 0;
+  return Math.round(points[points.length - 1].timestampSec - points[0].timestampSec);
+}
+
+function rebase(series: HistoricalPriceSeries, targetDecimals: number): readonly PricePoint[] {
+  const shift = series.decimals - targetDecimals;
+  if (shift === 0) return series.points;
+  const factor = 10n ** BigInt(Math.abs(shift));
+  return series.points.map((s) => ({
+    ...s,
+    price: shift > 0 ? s.price / factor : s.price * factor,
+  }));
 }

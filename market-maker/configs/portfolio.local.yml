@@ -4,11 +4,6 @@
 #   PRIVATE_KEY             - hex private key of the single market-making wallet
 #   PERPS_ADDRESS           - HashPowerPerpsDEX address on the local chain
 #   FUTURES_ADDRESS         - Futures address on the local chain
-#
-# One process, one signer, one shared collateral vault. Perps and every
-# selected futures expiry quote together; the TxCoordinator sequences their
-# txs on a single nonce and each market is isolated behind its own circuit
-# breaker.
 
 nodeEnv: development
 commitHash: ${COMMIT_HASH:-dev}
@@ -20,7 +15,6 @@ wallets:
   primary:
     privateKey: ${PRIVATE_KEY}
 
-# Single shared signer for the whole portfolio.
 wallet: primary
 
 network:
@@ -40,14 +34,13 @@ venues:
       maxSkewTicks: 5
     sizing:
       strategy: geometric-taper
-      baseQuantity: "10000000" # venue-native (perps hashrate base units)
+      baseQuantity: "10000000"
       numLevelsPerSide: 10
       taperRatio: 0.6
 
   - kind: futures
     address: ${FUTURES_ADDRESS}
     maxPositionSize: 10
-    # Quote the three nearest expiries; the roll adds/drops markets as dates mature.
     marketSelection:
       mode: nearest
       count: 3
@@ -60,15 +53,12 @@ venues:
       maxSkewTicks: 0
     sizing:
       strategy: geometric-taper
-      # 1 futures contract ≈ 1.0 perps qty (1e6). Perps total/side =
-      # 10e6×10/1e6 = 100. Split across 3 expiries: 4×10×3 = 120.
-      baseQuantity: 4 # venue-native (contracts)
+      # Perps runs 100/side here, so 4 × 10 × 3 expiries = 120 is the nearest match.
+      baseQuantity: 4
       numLevelsPerSide: 10
       taperRatio: 0.6
-      # Nearest expiry keeps full size; each further date × this factor.
       expirySizeDecay: 0.6
 
-# Shared portfolio-wide budget across every market.
 risk:
   maxPositionSize: 10
   maxUtilizationPct: 80
@@ -98,18 +88,17 @@ collateral:
 oracle:
   windowSize: 60
   precisionBits: 48
-  historyLookbackMultiplier: 4
+  historyMaxAgeSec: 86400
 
 health:
   port: 3001
 
-# Centralized submission / nonce recovery.
 txCoordinator:
   confirmationTimeoutSec: 60
   maxReplacements: 2
   replacementFeeBumpPct: 15
+  maxNonceResyncs: 5
 
-# Per-market fault isolation.
 circuitBreaker:
   quarantineThreshold: 3
   baseBackoffSec: 5
