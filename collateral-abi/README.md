@@ -37,4 +37,4 @@ Contents are generated — do not edit by hand:
 - `src/` is copied from `../contracts/abi` (the Hardhat codegen output) by `scripts/build.mjs`, then compiled to `dist/`.
 - `deployments.json` is the canonical address manifest for this repo; it is updated when contracts are (re)deployed.
 
-Publishing happens automatically from CI when ABIs or the manifest change (see `.github/workflows/publish-collateral-abi.yml`).
+Publishing happens from CI (see `.github/workflows/publish-collateral-abi.yml`). A `dev` publish updates `environments.testnet` and is tagged `dev` (minor bump). A `main` publish updates `environments.mainnet` and is tagged `latest`; the first mainnet cut is `1.0.0`.
