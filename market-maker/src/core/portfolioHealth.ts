@@ -73,7 +73,9 @@ export class PortfolioHealthCheck {
         }
       });
       const { logger, port } = this.opts;
-      this.server.listen(port, () => {
+      // Bind IPv4 explicitly. listen(port) alone binds :: on current
+      // node:24-alpine, and the ALB health check to the task IPv4 times out.
+      this.server.listen(port, "0.0.0.0", () => {
         logger.info(
           {
             human: `http://localhost:${port}/health`,
