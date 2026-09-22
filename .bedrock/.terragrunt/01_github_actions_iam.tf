@@ -179,6 +179,21 @@ resource "aws_iam_role_policy" "github_ecs_update_futures_mm" {
         Resource = "*"
       },
       {
+        # deploy-col-mar-mm.yml verify lists the running task and reads its
+        # image. ListTasks is authorized against container-instance/<cluster>/*,
+        # including on Fargate. DescribeTasks is authorized against the task ARN.
+        Sid    = "ReadFuturesMmTasks"
+        Effect = "Allow"
+        Action = [
+          "ecs:ListTasks",
+          "ecs:DescribeTasks"
+        ]
+        Resource = [
+          "${replace(data.aws_ecs_cluster.derivatives.arn, ":cluster/", ":container-instance/")}/*",
+          "${replace(data.aws_ecs_cluster.derivatives.arn, ":cluster/", ":task/")}/*"
+        ]
+      },
+      {
         Sid    = "DescribeFuturesMmSecret"
         Effect = "Allow"
         Action = [
