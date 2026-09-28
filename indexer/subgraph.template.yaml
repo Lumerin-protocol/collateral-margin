@@ -55,10 +55,6 @@ dataSources:
           handler: handleInsuranceFundWithdrawn
         - event: BadDebt(indexed address,indexed address,uint256,indexed address)
           handler: handleBadDebt
-        - event: InsuranceDebtBorrowed(indexed address,uint256,uint256)
-          handler: handleInsuranceDebtBorrowed
-        - event: InsuranceDebtRepaid(uint256,uint256)
-          handler: handleInsuranceDebtRepaid
         - event: InsuranceDebtCapSet(uint256,uint256)
           handler: handleInsuranceDebtCapSet
         - event: VaultHalted(uint8,uint256,uint256)

@@ -61,8 +61,6 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     /// @dev Fee shortfalls (receiver is not the insurance fund) are emitted here and do not
     ///      increase `traderBadDebtTotal`.
     event BadDebt(address indexed payer, address indexed receiver, uint256 amount, address indexed venue);
-    event InsuranceDebtBorrowed(address indexed to, uint256 amount, uint256 debtAfter);
-    event InsuranceDebtRepaid(uint256 amount, uint256 debtAfter);
     event InsuranceDebtCapSet(uint256 oldCap, uint256 newCap);
     event VaultHalted(HaltReason reason, uint256 debt, uint256 effectiveCap);
     event VaultResumed(uint256 debt, uint256 effectiveCap);
@@ -287,7 +285,8 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     /// @dev Trader payer: move `min(balance, amount)`. The unpaid remainder is `BadDebt`.
     ///      It increases `traderBadDebtTotal` only when the receiver is the insurance fund.
     ///      Insurance-fund payer: pay the fund balance, mint the rest to `to`, and add it to
-    ///      `insuranceDebt`. Borrowing is uncapped so the receiver is always paid in full.
+    ///      `insuranceDebt`. That mint is the borrow record. Borrowing is uncapped so the
+    ///      receiver is always paid in full.
     ///      A borrow that leaves `insuranceDebt` above the effective cap latches `halted`
     ///      after the payout. The transaction completes; a later withdrawal in the same
     ///      transaction reverts and rolls the payout back.
@@ -306,7 +305,6 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
             uint256 shortfall = amount - bal;
             _mint(to, shortfall);
             insuranceDebt += shortfall;
-            emit InsuranceDebtBorrowed(to, shortfall, insuranceDebt);
             if (insuranceDebt > effectiveInsuranceDebtCap()) _latchHalt(HaltReason.CAP);
             return amount;
         }
@@ -331,13 +329,18 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
 
     // ── Internal helpers ────────────────────────────────────────────────────
 
-    /// @dev Pulls collateral from `source`, mints receipt tokens to `account`, and emits Deposited.
+    /// @dev Pulls collateral from `source` and mints receipt tokens to `account`.
+    ///      `Deposited` is emitted before the mint on purpose. A borrow is the same
+    ///      kind of mint, with no `Deposited` log. The indexer sees logs in order, so
+    ///      emitting this first lets it mark the following mint as a deposit instead
+    ///      of counting that mint as debt and reversing the count afterwards. The
+    ///      receipt balance itself changes on the mint that follows.
     function _depositFor(address source, address account, uint256 amount) internal {
         // recipient is checked to be non-zero in safeTransferFrom
         if (account == address(0)) revert ZeroAddress();
         collateralToken.safeTransferFrom(source, address(this), amount);
-        _mint(account, amount);
         emit Deposited(account, amount, source);
+        _mint(account, amount);
     }
 
     /// @dev Burns `amount` from `account`, checks margin, transfers collateral to `recipient`, and emits Withdrawn.
@@ -396,14 +399,13 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     }
 
     /// @dev Every credit to the insurance fund repays debt before the balance can be withdrawn.
-    ///      The repayment burn goes through `super` so it does not recurse.
+    ///      The repayment burn is the repay record. It goes through `super` so it does not recurse.
     function _update(address from, address to, uint256 value) internal override {
         super._update(from, to, value);
         if (to != INSURANCE_FUND_ADDR || insuranceDebt == 0 || value == 0) return;
         uint256 repaid = value < insuranceDebt ? value : insuranceDebt;
         super._update(INSURANCE_FUND_ADDR, address(0), repaid);
         insuranceDebt -= repaid;
-        emit InsuranceDebtRepaid(repaid, insuranceDebt);
     }
 
     function _latchHalt(HaltReason reason) internal {

@@ -348,31 +348,6 @@ export const CollateralVaultAbi = [
     "anonymous": false,
     "inputs": [
       {
-        "indexed": true,
-        "internalType": "address",
-        "name": "to",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "amount",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "debtAfter",
-        "type": "uint256"
-      }
-    ],
-    "name": "InsuranceDebtBorrowed",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
         "indexed": false,
         "internalType": "uint256",
         "name": "oldCap",
@@ -386,25 +361,6 @@ export const CollateralVaultAbi = [
       }
     ],
     "name": "InsuranceDebtCapSet",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "amount",
-        "type": "uint256"
-      },
-      {
-        "indexed": false,
-        "internalType": "uint256",
-        "name": "debtAfter",
-        "type": "uint256"
-      }
-    ],
-    "name": "InsuranceDebtRepaid",
     "type": "event"
   },
   {

@@ -39,6 +39,12 @@ type Vault @entity(immutable: false) {
   haltedSince: BigInt!
   "Block timestamp when the current debt opened. 0 when insuranceDebt is 0."
   insuranceDebtSince: BigInt!
+  "Transaction of a Deposited log whose mint has not been seen yet. Empty when nothing is pending."
+  pendingDepositTx: Bytes!
+  "Recipient of that pending deposit."
+  pendingDepositUser: Bytes!
+  "Amount of that pending deposit."
+  pendingDepositAmount: BigInt!
 
   # Timestamps
   initializedAt: BigInt!
@@ -185,6 +191,9 @@ type BadDebtEvent @entity(immutable: true) {
   transactionHash: Bytes!
 }
 
+# Derived from receipt Transfers. A user mint is a borrow unless the preceding
+# Deposited log marked it as a deposit. A burn from the insurance fund is a
+# repayment while debt is outstanding.
 type InsuranceDebtEvent @entity(immutable: true) {
   id: Bytes! # tx hash + log index
   kind: InsuranceDebtKind!

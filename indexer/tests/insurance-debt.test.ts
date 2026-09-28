@@ -10,17 +10,15 @@ import {
 } from "matchstick-as/assembly/index";
 import {
   BadDebt,
+  Deposited,
   Initialized,
-  InsuranceDebtBorrowed,
-  InsuranceDebtRepaid,
   InsuranceFundDeposited,
   Transfer,
 } from "../generated/CollateralVault/CollateralVault";
 import {
   handleBadDebt,
+  handleDeposited,
   handleInitialized,
-  handleInsuranceDebtBorrowed,
-  handleInsuranceDebtRepaid,
   handleInsuranceFundDeposited,
   handleTransfer,
 } from "../src/vault";
@@ -59,23 +57,15 @@ function transfer(from: Address, to: Address, value: i32, logIndex: i32, timesta
   handleTransfer(event);
 }
 
-function borrow(to: Address, amount: i32, debtAfter: i32, logIndex: i32, timestamp: i64): void {
-  const event = newTypedMockEventWithParams<InsuranceDebtBorrowed>([
-    paramAddr("to", to),
+function deposit(to: Address, amount: i32, logIndex: i32, timestamp: i64): void {
+  const event = newTypedMockEventWithParams<Deposited>([
+    paramAddr("user", to),
     paramUint("amount", BigInt.fromI32(amount)),
-    paramUint("debtAfter", BigInt.fromI32(debtAfter)),
+    paramAddr("sender", to),
   ]);
   stamp(event, logIndex, timestamp);
-  handleInsuranceDebtBorrowed(event);
-}
-
-function repay(amount: i32, debtAfter: i32, logIndex: i32, timestamp: i64): void {
-  const event = newTypedMockEventWithParams<InsuranceDebtRepaid>([
-    paramUint("amount", BigInt.fromI32(amount)),
-    paramUint("debtAfter", BigInt.fromI32(debtAfter)),
-  ]);
-  stamp(event, logIndex, timestamp);
-  handleInsuranceDebtRepaid(event);
+  handleDeposited(event);
+  transfer(ZERO, to, amount, logIndex + 1, timestamp);
 }
 
 function badDebt(
@@ -107,12 +97,12 @@ describe("insurance debt worked example", () => {
     const loserB = userAddress(2);
     const winnerC = userAddress(3);
 
-    // B already holds the 50 that will be paid in.
-    transfer(ZERO, loserB, 50, 1, 1000);
+    // B already holds the 50 that will be paid in. Deposited is emitted before
+    // the mint, so that mint is not insurance debt.
+    deposit(loserB, 50, 1, 1000);
 
     // 1. A closes +20 against an empty fund. The vault mints the profit.
-    transfer(ZERO, winnerA, 20, 2, 1100);
-    borrow(winnerA, 20, 20, 3, 1100);
+    transfer(ZERO, winnerA, 20, 3, 1100);
 
     assert.fieldEquals("Vault", "0", "insuranceDebt", "20");
     assert.fieldEquals("Vault", "0", "uncoveredLoss", "0");
@@ -128,8 +118,7 @@ describe("insurance debt worked example", () => {
     // in the fund; 10 is trader bad debt.
     transfer(loserB, INSURANCE_FUND_ADDRESS, 50, 4, 1200);
     transfer(INSURANCE_FUND_ADDRESS, ZERO, 20, 5, 1200);
-    repay(20, 0, 6, 1200);
-    badDebt(loserB, INSURANCE_FUND_ADDRESS, 10, 7, 1200);
+    badDebt(loserB, INSURANCE_FUND_ADDRESS, 10, 6, 1200);
 
     assert.fieldEquals("Vault", "0", "insuranceDebt", "0");
     assert.fieldEquals("Vault", "0", "insuranceDebtSince", "0");
@@ -140,12 +129,11 @@ describe("insurance debt worked example", () => {
     assert.fieldEquals("VaultUser", loserB.toHexString(), "balance", "0");
     assert.fieldEquals("VaultVenue", VENUE.toHexString(), "traderBadDebtTotal", "10");
     assert.entityCount("BadDebtEvent", 1);
-    assert.fieldEquals("BadDebtEvent", eventId(7), "kind", "RESERVE_LOSS");
+    assert.fieldEquals("BadDebtEvent", eventId(6), "kind", "RESERVE_LOSS");
 
     // 3. C closes +40. The fund pays its 30 and borrows 10.
-    transfer(INSURANCE_FUND_ADDRESS, winnerC, 30, 8, 1300);
-    transfer(ZERO, winnerC, 10, 9, 1300);
-    borrow(winnerC, 10, 10, 10, 1300);
+    transfer(INSURANCE_FUND_ADDRESS, winnerC, 30, 7, 1300);
+    transfer(ZERO, winnerC, 10, 8, 1300);
 
     assert.fieldEquals("Vault", "0", "insuranceDebt", "10");
     assert.fieldEquals("Vault", "0", "uncoveredLoss", "10");
@@ -155,15 +143,15 @@ describe("insurance debt worked example", () => {
     assert.fieldEquals("Vault", "0", "insuranceDebtBorrowedTotal", "30");
     assert.fieldEquals("VaultUser", winnerC.toHexString(), "balance", "40");
 
-    // 4. Top up 10. The mint repays the debt, then the deposit counts as capital.
-    transfer(ZERO, INSURANCE_FUND_ADDRESS, 10, 11, 1400);
-    transfer(INSURANCE_FUND_ADDRESS, ZERO, 10, 12, 1400);
-    repay(10, 0, 13, 1400);
+    // 4. Top up 10. The mint to the fund is not a borrow; the burn repays the
+    // debt, then the deposit counts as capital.
+    transfer(ZERO, INSURANCE_FUND_ADDRESS, 10, 9, 1400);
+    transfer(INSURANCE_FUND_ADDRESS, ZERO, 10, 10, 1400);
     const deposited = newTypedMockEventWithParams<InsuranceFundDeposited>([
       paramAddr("source", userAddress(4)),
       paramUint("amount", BigInt.fromI32(10)),
     ]);
-    stamp(deposited, 14, 1400);
+    stamp(deposited, 11, 1400);
     handleInsuranceFundDeposited(deposited);
 
     assert.fieldEquals("Vault", "0", "insuranceDebt", "0");

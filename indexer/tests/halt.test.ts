@@ -2,22 +2,21 @@ import { Address, BigInt, Bytes, ethereum } from "@graphprotocol/graph-ts";
 import { newTypedMockEventWithParams } from "matchstick-as/assembly/defaults";
 import { assert, beforeEach, clearStore, describe, test } from "matchstick-as/assembly/index";
 import {
-  InsuranceDebtBorrowed,
   InsuranceDebtCapSet,
-  InsuranceDebtRepaid,
   MarginEngineSet,
+  Transfer,
   VaultHalted,
   VaultResumed,
 } from "../generated/CollateralVault/CollateralVault";
 import {
-  handleInsuranceDebtBorrowed,
   handleInsuranceDebtCapSet,
-  handleInsuranceDebtRepaid,
   handleMarginEngineSet,
+  handleTransfer,
   handleVaultHalted,
   handleVaultResumed,
 } from "../src/vault";
 import {
+  INSURANCE_FUND_ADDRESS,
   paramAddr,
   paramI32,
   paramUint,
@@ -67,13 +66,13 @@ describe("halt", () => {
     assert.fieldEquals("Vault", "0", "insuranceDebtCap", "5");
     assert.fieldEquals("Vault", "0", "halted", "false");
 
-    const borrowed = newTypedMockEventWithParams<InsuranceDebtBorrowed>([
+    const borrowed = newTypedMockEventWithParams<Transfer>([
+      paramAddr("from", Address.zero()),
       paramAddr("to", winner),
-      paramUint("amount", BigInt.fromI32(20)),
-      paramUint("debtAfter", BigInt.fromI32(20)),
+      paramUint("value", BigInt.fromI32(20)),
     ]);
     stamp(borrowed, 3, 1200);
-    handleInsuranceDebtBorrowed(borrowed);
+    handleTransfer(borrowed);
 
     const halted = newTypedMockEventWithParams<VaultHalted>([
       paramI32("reason", 0),
@@ -91,13 +90,15 @@ describe("halt", () => {
     assert.fieldEquals("VaultHaltEvent", eventId(4), "reason", "CAP");
     assert.fieldEquals("VaultHaltEvent", eventId(4), "transactionHash", TX.toHexString());
 
-    // Repaying under the cap does not clear the halt.
-    const repaid = newTypedMockEventWithParams<InsuranceDebtRepaid>([
-      paramUint("amount", BigInt.fromI32(20)),
-      paramUint("debtAfter", BigInt.fromI32(0)),
+    // Repaying under the cap does not clear the halt. The repayment is the
+    // burn of the insurance fund's receipt tokens.
+    const repaid = newTypedMockEventWithParams<Transfer>([
+      paramAddr("from", INSURANCE_FUND_ADDRESS),
+      paramAddr("to", Address.zero()),
+      paramUint("value", BigInt.fromI32(20)),
     ]);
     stamp(repaid, 5, 1300);
-    handleInsuranceDebtRepaid(repaid);
+    handleTransfer(repaid);
     assert.fieldEquals("Vault", "0", "insuranceDebt", "0");
     assert.fieldEquals("Vault", "0", "halted", "true");
     assert.fieldEquals("Vault", "0", "haltedSince", "1200");

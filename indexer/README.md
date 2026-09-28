@@ -16,7 +16,7 @@ It is the **single source of truth for vault state**. Product subgraphs (`perps`
 | **VaultWithdrawal** | immutable | One per `Withdrawn` event. Tracks owner, recipient, amount. `isInsuranceFund` distinguishes `withdrawInsuranceFund` flow. |
 | **VaultInternalTransfer** | immutable | One per `Transfer` event with `from != 0x0 && to != 0x0` (i.e. `internalTransfer` / `internalTransferWithMarginCheck`). Tagged with a `callerCategory` derived from `transaction.to`. |
 | **BadDebtEvent** | immutable | A shortfall from `settleTransfer`. `RESERVE_LOSS` when a trader owes the insurance fund; `FEE` when a trader owes a venue. |
-| **InsuranceDebtEvent** | immutable | A borrow (`BORROW`) or repayment (`REPAY`) of insurance-fund debt. |
+| **InsuranceDebtEvent** | immutable | A borrow (`BORROW`) or repayment (`REPAY`) of insurance-fund debt, derived from receipt `Transfer` logs. A mint marked by a preceding `Deposited` is a deposit and is not recorded here. |
 | **InsuranceDebtCapChange** | immutable | One per `InsuranceDebtCapSet`. |
 | **VaultHaltEvent** | immutable | A `HALT` or `RESUME`. A `CAP` halt's transaction is the payout that crossed the cap. |
 | **VaultVenue** | mutable | Per-venue bad-debt totals, keyed by the venue address on `BadDebt`. |
@@ -38,21 +38,19 @@ This is accurate for "EOA → engine → vault" flows, which is the dominant pat
 | Event | What it does |
 | --- | --- |
 | `Initialized(uint64)` | Bootstraps the `Vault` singleton (collateral-token, margin-engine, decimals). Version 2 also reads `insuranceCapital()` so a balance already in the fund counts as protocol capital. |
-| `Transfer(address,address,uint256)` | **Single source of truth for balances**: mint = deposit, burn = withdrawal, internal = `VaultInternalTransfer`. Updates `VaultUser.balance`, `Vault.totalSupply`, `Vault.insuranceFundBalance`, and signed `netInternalIn` / `netFrom*` totals. |
-| `Deposited(address,uint256,address)` | Creates the `VaultDeposit` entity and bumps `VaultUser` / `Vault` deposit aggregates. |
+| `Transfer(address,address,uint256)` | **Single source of truth for balances and insurance debt.** A mint to a user is a borrow, and attributes that amount to the recipient's caller category, unless the preceding `Deposited` marked it. A burn from the insurance fund, up to the open debt, is a repayment. Other burns are withdrawals. Internal transfers update `netInternalIn` / `netFrom*` and `VaultInternalTransfer`. Also updates `VaultUser.balance`, `Vault.totalSupply`, and `Vault.insuranceFundBalance`. |
+| `Deposited(address,uint256,address)` | Creates the `VaultDeposit` entity, bumps deposit aggregates, and marks the following mint so it is not counted as a borrow. The contract emits this before the mint for that reason. |
 | `Withdrawn(address,uint256,address)` | Creates the `VaultWithdrawal` entity and bumps `VaultUser` / `Vault` withdrawal aggregates. |
 | `InsuranceFundDeposited(address,uint256)` | Bumps `Vault.insuranceFundDeposited` and `insuranceCapital`, then recomputes the debt split. (The actual `VaultDeposit` entity is created by the paired `Deposited` event with `isInsuranceFund = true`.) |
 | `InsuranceFundWithdrawn(address,uint256)` | Bumps `Vault.insuranceFundWithdrawn` and subtracts from `insuranceCapital`. |
 | `BadDebt(address,address,uint256,address)` | Records the shortfall. Reserve losses add to `traderBadDebtTotal`; fee shortfalls do not. |
-| `InsuranceDebtBorrowed(address,uint256,uint256)` | Sets `insuranceDebt`, attributes the minted amount to the recipient's caller category, and opens `insuranceDebtSince` when debt goes from 0 to positive. |
-| `InsuranceDebtRepaid(uint256,uint256)` | Sets `insuranceDebt`. Clears `insuranceDebtSince` when debt returns to 0. The burn itself is applied by the paired `Transfer`. |
 | `InsuranceDebtCapSet(uint256,uint256)` | Stores the new cap. Lowering it does not halt. |
 | `VaultHalted(uint8,uint256,uint256)` / `VaultResumed(uint256,uint256)` | Latches or clears `halted` and `haltedSince`. |
 | `MarginEngineSet(address)` | Stores the margin engine, including `address(0)` when it is unset. |
 
 ### Why both `Transfer` and `Deposited` / `Withdrawn`?
 
-`CollateralVault` extends `ERC20Upgradeable` but disables the public ERC20 surface. All balance changes still flow through `_mint` / `_burn` / `_transfer`, which emit `Transfer`. Using `Transfer` as the balance ledger is lossless and trivially correct. The `Deposited` / `Withdrawn` events carry semantic context that `Transfer` does not (the funding `sender` and the withdrawal `recipient`), so we keep them as **entity-creation handlers** while delegating balance math entirely to `Transfer`.
+`CollateralVault` extends `ERC20Upgradeable` but disables the public ERC20 surface. All balance changes still flow through `_mint` / `_burn` / `_transfer`, which emit `Transfer`. Using `Transfer` as the balance and insurance-debt ledger is lossless. `Deposited` is emitted before the mint. It carries the funding `sender` and marks that mint as a deposit, so the indexer does not count it as a borrow. `Withdrawn` carries the withdrawal `recipient`.
 
 ## Local Development
 

@@ -4,9 +4,7 @@ import {
   CollateralVault as VaultContract,
   Deposited,
   Initialized,
-  InsuranceDebtBorrowed,
   InsuranceDebtCapSet,
-  InsuranceDebtRepaid,
   InsuranceFundDeposited,
   InsuranceFundWithdrawn,
   MarginEngineSet,
@@ -106,6 +104,9 @@ function getOrCreateVault(): Vault {
     vault.halted = false;
     vault.haltedSince = BigInt.zero();
     vault.insuranceDebtSince = BigInt.zero();
+    vault.pendingDepositTx = Bytes.empty();
+    vault.pendingDepositUser = Bytes.empty();
+    vault.pendingDepositAmount = BigInt.zero();
     vault.initializedAt = BigInt.zero();
     vault.lastUpdatedAt = BigInt.zero();
     // Don't `loadVaultFromContract` here — that read happens lazily via
@@ -210,6 +211,75 @@ function noteDebtOpened(vault: Vault, previous: BigInt, debtAfter: BigInt, times
   }
 }
 
+function callerBytes(event: Transfer): Bytes {
+  const txTo = event.transaction.to;
+  return txTo !== null ? (txTo as Bytes) : Bytes.empty();
+}
+
+/**
+ * A user mint that `Deposited` did not mark is a borrow. The fund's own mint is
+ * always a deposit: `_update` may burn it back in the same call, and that burn
+ * is the repayment.
+ */
+function noteBorrow(vault: Vault, event: Transfer, recipient: Address, amount: BigInt): void {
+  const previous = vault.insuranceDebt;
+  const debtAfter = previous.plus(amount);
+  vault.insuranceDebt = debtAfter;
+  vault.insuranceDebtBorrowedTotal = vault.insuranceDebtBorrowedTotal.plus(amount);
+  noteDebtOpened(vault, previous, debtAfter, event.block.timestamp);
+  recomputeDebtSplit(vault);
+
+  bumpCategoryNet(recipient, categoryOf(callerBytes(event)), amount);
+
+  const id = createEventId(event.transaction.hash, event.logIndex);
+  const row = new InsuranceDebtEvent(id);
+  row.kind = KIND_BORROW;
+  row.to = recipient;
+  row.amount = amount;
+  row.debtAfter = debtAfter;
+  row.timestamp = event.block.timestamp;
+  row.blockNumber = event.block.number;
+  row.transactionHash = event.transaction.hash;
+  row.save();
+}
+
+/** True when this mint is the one `Deposited` just marked. Clears the mark. */
+function consumePendingDeposit(vault: Vault, event: Transfer, recipient: Address, amount: BigInt): boolean {
+  if (vault.pendingDepositTx.length == 0) return false;
+  const matches =
+    vault.pendingDepositTx.equals(event.transaction.hash) &&
+    vault.pendingDepositUser.equals(recipient) &&
+    vault.pendingDepositAmount.equals(amount);
+  if (!matches) return false;
+  vault.pendingDepositTx = Bytes.empty();
+  vault.pendingDepositUser = Bytes.empty();
+  vault.pendingDepositAmount = BigInt.zero();
+  return true;
+}
+
+/** A burn from the insurance fund, up to the open debt, is a repayment. */
+function noteRepay(vault: Vault, event: Transfer, amount: BigInt): void {
+  const previous = vault.insuranceDebt;
+  if (previous.equals(BigInt.zero()) || amount.gt(previous)) return;
+
+  const debtAfter = previous.minus(amount);
+  vault.insuranceDebt = debtAfter;
+  vault.insuranceDebtRepaidTotal = vault.insuranceDebtRepaidTotal.plus(amount);
+  noteDebtOpened(vault, previous, debtAfter, event.block.timestamp);
+  recomputeDebtSplit(vault);
+
+  const id = createEventId(event.transaction.hash, event.logIndex);
+  const row = new InsuranceDebtEvent(id);
+  row.kind = KIND_REPAY;
+  row.to = Bytes.empty();
+  row.amount = amount;
+  row.debtAfter = debtAfter;
+  row.timestamp = event.block.timestamp;
+  row.blockNumber = event.block.number;
+  row.transactionHash = event.transaction.hash;
+  row.save();
+}
+
 /**
  * Apply a signed delta to a user's combined `netInternalIn` and the matching
  * per-category bucket. `delta` is negative for the sender, positive for the
@@ -257,10 +327,12 @@ export function handleInitialized(event: Initialized): void {
 // CollateralVault inherits from ERC20Upgradeable, but its public ERC20 surface
 // (`approve`, `transfer`, `transferFrom`) is hard-disabled. Transfer events
 // only ever come from internal `_mint` / `_burn` / `_transfer`:
-//   - mint  (from = 0x0)  ⇢ paired with `Deposited`
-//   - burn  (to   = 0x0)  ⇢ paired with `Withdrawn`
-//   - internal transfer    ⇢ from `internalTransfer` / `internalTransferWithMarginCheck`
-// That makes Transfer a complete, lossless balance ledger.
+//   - mint to a user, with no preceding Deposited  ⇢ insurance-debt borrow
+//   - mint marked by a preceding Deposited         ⇢ deposit
+//   - burn from the insurance fund while debt > 0  ⇢ debt repayment
+//   - any other burn                               ⇢ withdrawal
+//   - internal transfer                            ⇢ PnL, fees, and the inflow that funds a repayment
+// That makes Transfer a complete balance ledger, and the debt ledger too.
 export function handleTransfer(event: Transfer): void {
   const from = event.params.from;
   const to = event.params.to;
@@ -324,6 +396,13 @@ export function handleTransfer(event: Transfer): void {
     vault.internalTransferCount++;
   }
 
+  if (isMint && !consumePendingDeposit(vault, event, to, amount) && !to.equals(INSURANCE_FUND_ADDR)) {
+    noteBorrow(vault, event, to, amount);
+  }
+  if (from.equals(INSURANCE_FUND_ADDR) && isBurn) {
+    noteRepay(vault, event, amount);
+  }
+
   vault.lastUpdatedAt = event.block.timestamp;
   vault.save();
 }
@@ -367,6 +446,9 @@ export function handleDeposited(event: Deposited): void {
     vault.depositCount++;
   }
   bumpUserCount(vault, isNewUser);
+  vault.pendingDepositTx = event.transaction.hash;
+  vault.pendingDepositUser = recipient;
+  vault.pendingDepositAmount = amount;
   vault.lastUpdatedAt = event.block.timestamp;
   vault.save();
 }
@@ -493,69 +575,6 @@ export function handleBadDebt(event: BadDebt): void {
   bumpUserCount(vault, isNewUser);
   vault.lastUpdatedAt = event.block.timestamp;
   vault.save();
-}
-
-export function handleInsuranceDebtBorrowed(event: InsuranceDebtBorrowed): void {
-  const amount = event.params.amount;
-  const debtAfter = event.params.debtAfter;
-  const recipient = event.params.to;
-
-  log.info("InsuranceDebtBorrowed: to {} amount {} debtAfter {}", [
-    recipient.toHexString(),
-    amount.toString(),
-    debtAfter.toString(),
-  ]);
-
-  const vault = getOrCreateVault();
-  const previous = vault.insuranceDebt;
-  vault.insuranceDebt = debtAfter;
-  vault.insuranceDebtBorrowedTotal = vault.insuranceDebtBorrowedTotal.plus(amount);
-  noteDebtOpened(vault, previous, debtAfter, event.block.timestamp);
-  recomputeDebtSplit(vault);
-  vault.lastUpdatedAt = event.block.timestamp;
-  vault.save();
-
-  // The mint Transfer updates the balance but does not attribute PnL. The borrowed
-  // amount is profit paid to this recipient by the calling venue.
-  const txTo = event.transaction.to;
-  const callerBytes: Bytes = txTo !== null ? (txTo as Bytes) : Bytes.empty();
-  bumpCategoryNet(recipient, categoryOf(callerBytes), amount);
-
-  const row = new InsuranceDebtEvent(createEventId(event.transaction.hash, event.logIndex));
-  row.kind = KIND_BORROW;
-  row.to = recipient;
-  row.amount = amount;
-  row.debtAfter = debtAfter;
-  row.timestamp = event.block.timestamp;
-  row.blockNumber = event.block.number;
-  row.transactionHash = event.transaction.hash;
-  row.save();
-}
-
-export function handleInsuranceDebtRepaid(event: InsuranceDebtRepaid): void {
-  const amount = event.params.amount;
-  const debtAfter = event.params.debtAfter;
-
-  log.info("InsuranceDebtRepaid: amount {} debtAfter {}", [amount.toString(), debtAfter.toString()]);
-
-  const vault = getOrCreateVault();
-  const previous = vault.insuranceDebt;
-  vault.insuranceDebt = debtAfter;
-  vault.insuranceDebtRepaidTotal = vault.insuranceDebtRepaidTotal.plus(amount);
-  noteDebtOpened(vault, previous, debtAfter, event.block.timestamp);
-  recomputeDebtSplit(vault);
-  vault.lastUpdatedAt = event.block.timestamp;
-  vault.save();
-
-  const row = new InsuranceDebtEvent(createEventId(event.transaction.hash, event.logIndex));
-  row.kind = KIND_REPAY;
-  row.to = Bytes.empty();
-  row.amount = amount;
-  row.debtAfter = debtAfter;
-  row.timestamp = event.block.timestamp;
-  row.blockNumber = event.block.number;
-  row.transactionHash = event.transaction.hash;
-  row.save();
 }
 
 export function handleInsuranceDebtCapSet(event: InsuranceDebtCapSet): void {

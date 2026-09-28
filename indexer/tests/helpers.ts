@@ -95,6 +95,9 @@ export function setupVault(): void {
   vault.halted = false;
   vault.haltedSince = BigInt.zero();
   vault.insuranceDebtSince = BigInt.zero();
+  vault.pendingDepositTx = Bytes.empty();
+  vault.pendingDepositUser = Bytes.empty();
+  vault.pendingDepositAmount = BigInt.zero();
   vault.initializedAt = BigInt.zero();
   vault.lastUpdatedAt = BigInt.zero();
   vault.save();
