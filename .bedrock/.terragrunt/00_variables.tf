@@ -160,3 +160,41 @@ variable "webhook_secret" {
   sensitive   = true
   default     = ""
 }
+
+################################################################################
+# INSURANCE-FUND DEBT MONITOR
+################################################################################
+# Reads the vault subgraph and one USDC balanceOf at the subgraph block.
+# notifications_enabled gates alarm actions so the dashboard can be applied
+# and watched before paging is turned on. Thresholds are percentages of the
+# on-chain cap, so changing the cap does not require an apply.
+
+variable "vault_monitoring" {
+  description = "Insurance-fund debt monitor (subgraph + one balanceOf)"
+  type = object({
+    create                   = bool
+    notifications_enabled    = bool
+    subgraph_url             = string
+    vault_address            = string
+    futures_address          = string
+    perps_address            = string
+    rate_minutes             = number
+    debt_util_warn_pct       = number
+    debt_util_crit_pct       = number
+    max_subgraph_age_minutes = number
+    oracle_metric_namespace  = string
+  })
+  default = {
+    create                   = false
+    notifications_enabled    = false
+    subgraph_url             = ""
+    vault_address            = ""
+    futures_address          = ""
+    perps_address            = ""
+    rate_minutes             = 5
+    debt_util_warn_pct       = 50
+    debt_util_crit_pct       = 80
+    max_subgraph_age_minutes = 15
+    oracle_metric_namespace  = ""
+  }
+}

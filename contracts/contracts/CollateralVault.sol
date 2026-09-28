@@ -35,6 +35,19 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     /// @dev A dependency did not answer a call the vault depends on: no code at the address,
     ///      or the call reverted. Which dependency is bad is implied by the setter that reverted.
     error InvalidDependency();
+    /// @notice Withdrawals are blocked while the vault is halted.
+    error Halted();
+    /// @notice `resume` requires `insuranceDebt` at or under the effective cap.
+    error DebtAboveCap();
+    /// @notice `resume` was called while the vault was not halted.
+    error NotHalted();
+
+    /// @notice Why trading and withdrawals were stopped.
+    enum HaltReason {
+        CAP,
+        OWNER,
+        NO_MARGIN_ENGINE
+    }
 
     // ── Events ──────────────────────────────────────────────────────────────
 
@@ -44,6 +57,15 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     event MarginEngineSet(address indexed marginEngine);
     event InsuranceFundDeposited(address indexed source, uint256 amount);
     event InsuranceFundWithdrawn(address indexed recipient, uint256 amount);
+    /// @notice A payer could not cover `amount`. `venue` is the authorized caller.
+    /// @dev Fee shortfalls (receiver is not the insurance fund) are emitted here and do not
+    ///      increase `traderBadDebtTotal`.
+    event BadDebt(address indexed payer, address indexed receiver, uint256 amount, address indexed venue);
+    event InsuranceDebtBorrowed(address indexed to, uint256 amount, uint256 debtAfter);
+    event InsuranceDebtRepaid(uint256 amount, uint256 debtAfter);
+    event InsuranceDebtCapSet(uint256 oldCap, uint256 newCap);
+    event VaultHalted(HaltReason reason, uint256 debt, uint256 effectiveCap);
+    event VaultResumed(uint256 debt, uint256 effectiveCap);
 
     // ── Storage ─────────────────────────────────────────────────────────────
 
@@ -52,7 +74,7 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     ///      Balance is normal vault receipt tokens; authorized callers credit it via
     ///      `transfer` / `credit` / `depositFor`. Owner withdraws via `withdrawInsuranceFund`.
     address public constant INSURANCE_FUND_ADDR = 0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa;
-    string public constant VERSION = "1.1.0";
+    string public constant VERSION = "1.2.0";
 
     IERC20 public collateralToken;
     mapping(address => bool) public authorizedCallers;
@@ -61,6 +83,20 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     ///      If set, withdrawals check: newBalance >= marginEngine.computePortfolioIM(user).
     address public marginEngine;
     uint8 private _decimals; // decimals of the wrapped token
+
+    /// @notice Receipts minted to pay winners when the insurance fund balance was short.
+    uint256 public insuranceDebt;
+    /// @notice Owner-configured borrow ceiling. Ignored while the margin engine is unset.
+    uint256 public insuranceDebtCap;
+    /// @notice Sum of shortfalls where a trader owed the insurance fund and could not pay.
+    /// @dev Fee shortfalls are not included. They are lost revenue, not a hole in the pool.
+    uint256 public traderBadDebtTotal;
+    /// @notice Protocol capital: `depositInsuranceFund` minus `withdrawInsuranceFund`,
+    ///         seeded by `initializeV2` from the fund balance at upgrade.
+    int256 public insuranceCapital;
+    /// @notice Latched circuit breaker. Stays on until the owner calls `resume`.
+    bool public halted;
+
     // ── Modifiers ───────────────────────────────────────────────────────────
 
     modifier onlyAuthorized() {
@@ -83,6 +119,13 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
         if (_collateralToken == address(0)) revert ZeroAddress();
         collateralToken = IERC20(_collateralToken);
         _decimals = IERC20Metadata(address(_collateralToken)).decimals();
+    }
+
+    /// @notice Count the insurance fund balance already in the vault as protocol capital.
+    /// @dev Call from `upgradeToAndCall` in the same transaction as the v1.2.0 upgrade.
+    ///      Later deposits and withdrawals maintain `insuranceCapital` themselves.
+    function initializeV2() external reinitializer(2) onlyOwner {
+        insuranceCapital = int256(balanceOf(INSURANCE_FUND_ADDR));
     }
 
     // ── Block public ERC20 transfers ────────────────────────────────────────
@@ -126,6 +169,33 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
 
         marginEngine = _marginEngine;
         emit MarginEngineSet(_marginEngine);
+        // With no margin check, nothing locks the losers' collateral, so the effective cap
+        // is 0. Any debt already outstanding has to halt until an engine is restored.
+        if (_marginEngine == address(0) && insuranceDebt > 0) {
+            _latchHalt(HaltReason.NO_MARGIN_ENGINE);
+        }
+    }
+
+    /// @notice Borrowing ceiling, in collateral units. Lowering it below the current debt
+    ///         does not halt; the next borrow will. Call `halt` to stop immediately.
+    function setInsuranceDebtCap(uint256 newCap) external onlyOwner {
+        uint256 oldCap = insuranceDebtCap;
+        insuranceDebtCap = newCap;
+        emit InsuranceDebtCapSet(oldCap, newCap);
+    }
+
+    /// @notice Stop new orders and withdrawals without waiting for the debt cap.
+    function halt() external onlyOwner {
+        _latchHalt(HaltReason.OWNER);
+    }
+
+    /// @notice Clear a halt once `insuranceDebt` is at or under the effective cap.
+    function resume() external onlyOwner {
+        uint256 cap = effectiveInsuranceDebtCap();
+        if (insuranceDebt > cap) revert DebtAboveCap();
+        if (!halted) revert NotHalted();
+        halted = false;
+        emit VaultResumed(insuranceDebt, cap);
     }
 
     /// @dev `catch` only fires on a revert raised by the callee, so this check ahead of it is
@@ -153,13 +223,18 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     }
 
     /// @notice Deposit collateral into the insurance fund from `source`, minting its receipt tokens.
+    /// @dev The deposit counts as protocol capital. Any outstanding debt is repaid first by `_update`.
     function depositInsuranceFund(uint256 amount) external {
+        insuranceCapital += int256(amount);
         _depositFor(_msgSender(), INSURANCE_FUND_ADDR, amount);
         emit InsuranceFundDeposited(_msgSender(), amount);
     }
 
     /// @notice Withdraw collateral from the insurance fund to `recipient`, burning its receipt tokens.
+    /// @dev Reverts while halted, and cannot move funds while the fund is in debt because that
+    ///      balance is zero. Subtracts from `insuranceCapital`, which may go negative.
     function withdrawInsuranceFund(address recipient, uint256 amount) external onlyOwner {
+        insuranceCapital -= int256(amount);
         _withdrawTo(INSURANCE_FUND_ADDR, recipient, amount);
         emit InsuranceFundWithdrawn(recipient, amount);
     }
@@ -201,9 +276,50 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     // ── Authorized-only mutations ───────────────────────────────────────────
 
     /// @notice Move balance between two accounts (fee/PnL settlement).
+    /// @dev Reverts when `from` cannot cover `amount`. Callers that must settle a shortfall
+    ///      use `settleTransfer`.
     function internalTransfer(address from, address to, uint256 amount) external onlyAuthorized {
         if (amount == 0) return;
         _transfer(from, to, amount);
+    }
+
+    /// @notice Settle `amount` from `from` to `to`, recording a shortfall instead of reverting.
+    /// @dev Trader payer: move `min(balance, amount)`. The unpaid remainder is `BadDebt`.
+    ///      It increases `traderBadDebtTotal` only when the receiver is the insurance fund.
+    ///      Insurance-fund payer: pay the fund balance, mint the rest to `to`, and add it to
+    ///      `insuranceDebt`. Borrowing is uncapped so the receiver is always paid in full.
+    ///      A borrow that leaves `insuranceDebt` above the effective cap latches `halted`
+    ///      after the payout. The transaction completes; a later withdrawal in the same
+    ///      transaction reverts and rolls the payout back.
+    /// @return moved Amount credited to `to`.
+    function settleTransfer(address from, address to, uint256 amount) external onlyAuthorized returns (uint256 moved) {
+        if (amount == 0) return 0;
+        if (from == address(0) || to == address(0)) revert ZeroAddress();
+
+        if (from == INSURANCE_FUND_ADDR) {
+            uint256 bal = balanceOf(from);
+            if (bal >= amount) {
+                _transfer(from, to, amount);
+                return amount;
+            }
+            if (bal > 0) _transfer(from, to, bal);
+            uint256 shortfall = amount - bal;
+            _mint(to, shortfall);
+            insuranceDebt += shortfall;
+            emit InsuranceDebtBorrowed(to, shortfall, insuranceDebt);
+            if (insuranceDebt > effectiveInsuranceDebtCap()) _latchHalt(HaltReason.CAP);
+            return amount;
+        }
+
+        uint256 available = balanceOf(from);
+        uint256 pay = available < amount ? available : amount;
+        if (pay > 0) _transfer(from, to, pay);
+        if (pay < amount) {
+            uint256 shortfall = amount - pay;
+            emit BadDebt(from, to, shortfall, _msgSender());
+            if (to == INSURANCE_FUND_ADDR) traderBadDebtTotal += shortfall;
+        }
+        return pay;
     }
 
     /// @notice Move balance between two accounts, reverting if the sender's portfolio margin is breached.
@@ -227,6 +343,7 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     /// @dev Burns `amount` from `account`, checks margin, transfers collateral to `recipient`, and emits Withdrawn.
     function _withdrawTo(address account, address recipient, uint256 amount) internal {
         // recipient is checked to be non-zero in safeTransfer
+        if (halted) revert Halted();
         if (amount == 0) revert ZeroAmount();
         _burn(account, amount);
         _checkMargin(account);
@@ -250,7 +367,48 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
         return balanceOf(INSURANCE_FUND_ADDR);
     }
 
+    /// @notice Cap that borrowing is checked against. Zero while the margin engine is unset,
+    ///         because nothing then locks the collateral that is supposed to repay the debt.
+    function effectiveInsuranceDebtCap() public view returns (uint256) {
+        if (marginEngine == address(0)) return 0;
+        return insuranceDebtCap;
+    }
+
+    /// @notice Trader shortfalls minus protocol capital. The amount a top-up must cover.
+    function uncoveredLoss() public view returns (uint256) {
+        if (insuranceCapital >= 0) {
+            uint256 capital = uint256(insuranceCapital);
+            if (traderBadDebtTotal <= capital) return 0;
+            return traderBadDebtTotal - capital;
+        }
+        return traderBadDebtTotal + uint256(-insuranceCapital);
+    }
+
+    /// @notice Open debt that is not uncovered loss: the part backed by losers still in the market.
+    function timingDebt() public view returns (uint256) {
+        uint256 uncovered = uncoveredLoss();
+        if (insuranceDebt <= uncovered) return 0;
+        return insuranceDebt - uncovered;
+    }
+
     function decimals() public view override returns (uint8) {
         return _decimals;
+    }
+
+    /// @dev Every credit to the insurance fund repays debt before the balance can be withdrawn.
+    ///      The repayment burn goes through `super` so it does not recurse.
+    function _update(address from, address to, uint256 value) internal override {
+        super._update(from, to, value);
+        if (to != INSURANCE_FUND_ADDR || insuranceDebt == 0 || value == 0) return;
+        uint256 repaid = value < insuranceDebt ? value : insuranceDebt;
+        super._update(INSURANCE_FUND_ADDR, address(0), repaid);
+        insuranceDebt -= repaid;
+        emit InsuranceDebtRepaid(repaid, insuranceDebt);
+    }
+
+    function _latchHalt(HaltReason reason) internal {
+        if (halted) return;
+        halted = true;
+        emit VaultHalted(reason, insuranceDebt, effectiveInsuranceDebtCap());
     }
 }

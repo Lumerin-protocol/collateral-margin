@@ -24,6 +24,22 @@ type Vault @entity(immutable: false) {
   withdrawalCount: Int!
   internalTransferCount: Int!
 
+  # Insurance-fund debt. Timing debt is expected; uncovered loss is a real loss.
+  insuranceDebt: BigInt!
+  insuranceDebtCap: BigInt!
+  insuranceDebtBorrowedTotal: BigInt!
+  insuranceDebtRepaidTotal: BigInt!
+  traderBadDebtTotal: BigInt!
+  "Protocol capital: insurance deposits minus withdrawals. May be negative."
+  insuranceCapital: BigInt!
+  uncoveredLoss: BigInt!
+  timingDebt: BigInt!
+  halted: Boolean!
+  "Block timestamp of the current halt. 0 when the vault is not halted."
+  haltedSince: BigInt!
+  "Block timestamp when the current debt opened. 0 when insuranceDebt is 0."
+  insuranceDebtSince: BigInt!
+
   # Timestamps
   initializedAt: BigInt!
   lastUpdatedAt: BigInt!
@@ -60,6 +76,7 @@ type VaultUser @entity(immutable: false) {
   withdrawals: [VaultWithdrawal!]! @derivedFrom(field: "user")
   internalTransfersIn: [VaultInternalTransfer!]! @derivedFrom(field: "to")
   internalTransfersOut: [VaultInternalTransfer!]! @derivedFrom(field: "from")
+  badDebts: [BadDebtEvent!]! @derivedFrom(field: "payer")
 
   # Timestamps
   createdAt: BigInt!
@@ -119,6 +136,83 @@ type VaultInternalTransfer @entity(immutable: true) {
   callerCategory: CallerCategory!
 
   # Metadata
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+enum BadDebtKind {
+  RESERVE_LOSS
+  FEE
+}
+
+enum InsuranceDebtKind {
+  BORROW
+  REPAY
+}
+
+enum HaltReason {
+  CAP
+  OWNER
+  NO_MARGIN_ENGINE
+}
+
+enum VaultHaltKind {
+  HALT
+  RESUME
+}
+
+# One row per venue that has recorded a shortfall. `id` is the venue address.
+type VaultVenue @entity(immutable: false) {
+  id: Bytes!
+  address: Bytes!
+  "Shortfalls owed to the insurance fund. These increase uncovered loss."
+  traderBadDebtTotal: BigInt!
+  "Fee shortfalls. Lost revenue; they do not increase uncovered loss."
+  feeBadDebtTotal: BigInt!
+  badDebts: [BadDebtEvent!]! @derivedFrom(field: "venue")
+}
+
+type BadDebtEvent @entity(immutable: true) {
+  id: Bytes! # tx hash + log index
+  payer: VaultUser!
+  receiver: Bytes!
+  amount: BigInt!
+  venue: VaultVenue!
+  kind: BadDebtKind!
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+type InsuranceDebtEvent @entity(immutable: true) {
+  id: Bytes! # tx hash + log index
+  kind: InsuranceDebtKind!
+  "Borrow recipient. Empty for a repayment."
+  to: Bytes!
+  amount: BigInt!
+  debtAfter: BigInt!
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+type InsuranceDebtCapChange @entity(immutable: true) {
+  id: Bytes! # tx hash + log index
+  oldCap: BigInt!
+  newCap: BigInt!
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+type VaultHaltEvent @entity(immutable: true) {
+  id: Bytes! # tx hash + log index
+  kind: VaultHaltKind!
+  "Set on HALT. Null on RESUME."
+  reason: HaltReason
+  debt: BigInt!
+  effectiveCap: BigInt!
   timestamp: BigInt!
   blockNumber: BigInt!
   transactionHash: Bytes!

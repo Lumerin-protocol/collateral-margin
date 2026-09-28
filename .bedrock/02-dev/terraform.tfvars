@@ -38,6 +38,21 @@ keeper_service = {
   task_ram        = 512
 }
 
+# Insurance-fund debt. Notifications stay off until the dashboard has been checked.
+vault_monitoring = {
+  create                   = true
+  notifications_enabled    = false
+  subgraph_url             = "https://api.goldsky.com/api/public/project_cmmz59uoa7b5201wthnkxbuqy/subgraphs/collateral-vault/dev-latest/gn"
+  vault_address            = "0x54A79e2a5C60ACe37b280eBbCda51b4E903d25F0"
+  futures_address          = "0x56d8d4a03a0f34b93B86E0b7941aFF29178D0479"
+  perps_address            = "0x0d412BC34a48e434144687Aac03b9C593F5237B6"
+  rate_minutes             = 5
+  debt_util_warn_pct       = 50
+  debt_util_crit_pct       = 80
+  max_subgraph_age_minutes = 15
+  oracle_metric_namespace  = "HashpriceOracle-DEV"
+}
+
 ########################################
 # Account metadata
 ########################################

@@ -10,11 +10,16 @@ It is the **single source of truth for vault state**. Product subgraphs (`perps`
 
 | Entity | Mutability | Description |
 | --- | --- | --- |
-| **Vault** | mutable | Singleton (id=0). Contract identity, lifetime aggregates, and current `totalSupply` / `insuranceFundBalance`. |
+| **Vault** | mutable | Singleton (id=0). Contract identity, lifetime aggregates, current `totalSupply` / `insuranceFundBalance`, and the insurance-debt split (`insuranceDebt`, `timingDebt`, `uncoveredLoss`, `halted`). |
 | **VaultUser** | mutable | Per-address account: current `balance`, lifetime deposit / withdrawal totals, and signed net of internal transfers (overall + per caller-category). |
 | **VaultDeposit** | immutable | One per `Deposited` event. Tracks recipient, amount, and the funding `sender`. `isInsuranceFund` distinguishes `depositInsuranceFund` flow. |
 | **VaultWithdrawal** | immutable | One per `Withdrawn` event. Tracks owner, recipient, amount. `isInsuranceFund` distinguishes `withdrawInsuranceFund` flow. |
 | **VaultInternalTransfer** | immutable | One per `Transfer` event with `from != 0x0 && to != 0x0` (i.e. `internalTransfer` / `internalTransferWithMarginCheck`). Tagged with a `callerCategory` derived from `transaction.to`. |
+| **BadDebtEvent** | immutable | A shortfall from `settleTransfer`. `RESERVE_LOSS` when a trader owes the insurance fund; `FEE` when a trader owes a venue. |
+| **InsuranceDebtEvent** | immutable | A borrow (`BORROW`) or repayment (`REPAY`) of insurance-fund debt. |
+| **InsuranceDebtCapChange** | immutable | One per `InsuranceDebtCapSet`. |
+| **VaultHaltEvent** | immutable | A `HALT` or `RESUME`. A `CAP` halt's transaction is the payout that crossed the cap. |
+| **VaultVenue** | mutable | Per-venue bad-debt totals, keyed by the venue address on `BadDebt`. |
 
 ### Caller attribution
 
@@ -32,12 +37,18 @@ This is accurate for "EOA → engine → vault" flows, which is the dominant pat
 
 | Event | What it does |
 | --- | --- |
-| `Initialized(uint64)` | Bootstraps the `Vault` singleton (collateral-token, margin-engine, decimals). |
+| `Initialized(uint64)` | Bootstraps the `Vault` singleton (collateral-token, margin-engine, decimals). Version 2 also reads `insuranceCapital()` so a balance already in the fund counts as protocol capital. |
 | `Transfer(address,address,uint256)` | **Single source of truth for balances**: mint = deposit, burn = withdrawal, internal = `VaultInternalTransfer`. Updates `VaultUser.balance`, `Vault.totalSupply`, `Vault.insuranceFundBalance`, and signed `netInternalIn` / `netFrom*` totals. |
 | `Deposited(address,uint256,address)` | Creates the `VaultDeposit` entity and bumps `VaultUser` / `Vault` deposit aggregates. |
 | `Withdrawn(address,uint256,address)` | Creates the `VaultWithdrawal` entity and bumps `VaultUser` / `Vault` withdrawal aggregates. |
-| `InsuranceFundDeposited(address,uint256)` | Bumps `Vault.insuranceFundDeposited`. (The actual `VaultDeposit` entity is created by the paired `Deposited` event with `isInsuranceFund = true`.) |
-| `InsuranceFundWithdrawn(address,uint256)` | Bumps `Vault.insuranceFundWithdrawn`. |
+| `InsuranceFundDeposited(address,uint256)` | Bumps `Vault.insuranceFundDeposited` and `insuranceCapital`, then recomputes the debt split. (The actual `VaultDeposit` entity is created by the paired `Deposited` event with `isInsuranceFund = true`.) |
+| `InsuranceFundWithdrawn(address,uint256)` | Bumps `Vault.insuranceFundWithdrawn` and subtracts from `insuranceCapital`. |
+| `BadDebt(address,address,uint256,address)` | Records the shortfall. Reserve losses add to `traderBadDebtTotal`; fee shortfalls do not. |
+| `InsuranceDebtBorrowed(address,uint256,uint256)` | Sets `insuranceDebt`, attributes the minted amount to the recipient's caller category, and opens `insuranceDebtSince` when debt goes from 0 to positive. |
+| `InsuranceDebtRepaid(uint256,uint256)` | Sets `insuranceDebt`. Clears `insuranceDebtSince` when debt returns to 0. The burn itself is applied by the paired `Transfer`. |
+| `InsuranceDebtCapSet(uint256,uint256)` | Stores the new cap. Lowering it does not halt. |
+| `VaultHalted(uint8,uint256,uint256)` / `VaultResumed(uint256,uint256)` | Latches or clears `halted` and `haltedSince`. |
+| `MarginEngineSet(address)` | Stores the margin engine, including `address(0)` when it is unset. |
 
 ### Why both `Transfer` and `Deposited` / `Withdrawn`?
 

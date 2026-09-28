@@ -27,6 +27,12 @@ async function main() {
     "Deployer can upgrade": deployerIsOwner ? "yes" : "no (run upgrade via current owner)",
   });
 
+  const initializeV2 = encodeFunctionData({
+    abi: vault.abi,
+    functionName: "initializeV2",
+    args: [],
+  });
+
   await logPrompt("Review the configuration above. Proceed with upgrade?");
 
   // ── 1. Deploy new implementation ────────────────────────────────────────
@@ -45,7 +51,7 @@ async function main() {
 
   if (deployerIsOwner) {
     await logPrompt("Proceed with upgradeToAndCall?");
-    const sim = await vault.simulate.upgradeToAndCall([newImpl.address, "0x"]);
+    const sim = await vault.simulate.upgradeToAndCall([newImpl.address, initializeV2]);
     const receipt = await writeAndWait(deployer, sim);
     logStep("Upgraded", txUrl(pc, receipt.transactionHash));
 
@@ -54,13 +60,13 @@ async function main() {
     const calldata = encodeFunctionData({
       abi: vault.abi,
       functionName: "upgradeToAndCall",
-      args: [newImpl.address, "0x"],
+      args: [newImpl.address, initializeV2],
     });
     logInfo("Upgrade calldata (run as proxy owner)", {
       "Proxy (to)": proxyAddress,
       "Owner (from)": owner,
     });
-    logStep(`Vault.upgradeToAndCall(${newImpl.address}, 0x)`, calldata);
+    logStep(`Vault.upgradeToAndCall(${newImpl.address}, initializeV2)`, calldata);
   }
 
   logSuccess(addrUrl(pc, proxyAddress));

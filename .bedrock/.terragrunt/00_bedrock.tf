@@ -8,6 +8,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 6.37.0" # Latest version as of 2026-01-15
     }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.7"
+    }
   }
 }
 
