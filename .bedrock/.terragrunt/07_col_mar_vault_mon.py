@@ -71,10 +71,15 @@ def rpc_label():
 
 
 def post_json(url, payload, timeout=30):
+    # Goldsky's edge rejects urllib's default User-Agent with 403.
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "col-mar-vault-mon",
+        },
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=timeout) as response:
@@ -114,6 +119,25 @@ def eth_balance(token, holder, block_number):
     raw = result.get("result")
     if not raw or raw == "0x":
         raise RuntimeError("eth_call returned empty data")
+    return int(raw, 16)
+
+
+def eth_block_timestamp(block_number):
+    # Goldsky leaves _meta.block.timestamp null. The age alarm needs the
+    # timestamp of the block the subgraph actually indexed.
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "eth_getBlockByNumber",
+        "params": [hex(block_number), False],
+        "id": 1,
+    }
+    result = post_json(ETH_RPC_URL, payload)
+    if result.get("error"):
+        raise RuntimeError("eth_getBlockByNumber: {}".format(result["error"]))
+    header = result.get("result") or {}
+    raw = header.get("timestamp")
+    if not raw:
+        raise RuntimeError("eth_getBlockByNumber returned no timestamp")
     return int(raw, 16)
 
 
@@ -169,7 +193,8 @@ def collect():
     meta = data["_meta"]
     block = meta["block"]
     block_number = int(block["number"])
-    block_timestamp = int(block["timestamp"])
+    raw_timestamp = block.get("timestamp")
+    block_timestamp = int(raw_timestamp) if raw_timestamp is not None else eth_block_timestamp(block_number)
     vault = data["vault"]
     decimals = int(vault["decimals"]) if vault.get("decimals") is not None else 6
     if decimals < 0 or decimals > 18:

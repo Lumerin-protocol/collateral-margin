@@ -46,6 +46,8 @@ vault_monitoring = {
   debt_util_crit_pct       = 80
   max_subgraph_age_minutes = 15
   oracle_metric_namespace  = "HashpriceOracle-LMN"
+  dev_alerts_topic_name    = "titanio-lmn-dev-alerts"    # Slack
+  devops_alerts_topic_name = "titanio-lmn-devops-alerts" # Phone
 }
 
 ########################################
