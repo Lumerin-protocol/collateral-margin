@@ -39,7 +39,8 @@ on:
       - "cicd/**"
     paths:
       - "market-maker/**"
-      - "config/*.env"
+      - "config/dev.env"
+      - "config/prd.env"
       - ".github/workflows/deploy-col-mar-mm.yml"
   workflow_dispatch:
     inputs:

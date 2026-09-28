@@ -4,7 +4,18 @@ on:
   pull_request:
     paths:
       - "points-indexer/**"
-      - "contracts/**"
+      - "contracts/contracts/Points.sol"
+      - "contracts/contracts/PointsHook.sol"
+      - "contracts/contracts/PointsRedeemer.sol"
+      - "contracts/contracts/interfaces/IPoints.sol"
+      - "contracts/contracts/interfaces/IPointsHook.sol"
+      - "contracts/abi/Points.json"
+      - "contracts/abi/PointsRedeemer.json"
+      - "contracts/tests/pointsIntegrationFixtures.ts"
+      - "contracts/tsconfig.json"
+      - "contracts/package.json"
+      - "contracts/pnpm-lock.yaml"
+      - "contracts/hardhat.config.ts"
       - ".github/workflows/points-indexer-tests.yml"
   push:
     branches:
@@ -13,7 +24,18 @@ on:
       - dev
     paths:
       - "points-indexer/**"
-      - "contracts/**"
+      - "contracts/contracts/Points.sol"
+      - "contracts/contracts/PointsHook.sol"
+      - "contracts/contracts/PointsRedeemer.sol"
+      - "contracts/contracts/interfaces/IPoints.sol"
+      - "contracts/contracts/interfaces/IPointsHook.sol"
+      - "contracts/abi/Points.json"
+      - "contracts/abi/PointsRedeemer.json"
+      - "contracts/tests/pointsIntegrationFixtures.ts"
+      - "contracts/tsconfig.json"
+      - "contracts/package.json"
+      - "contracts/pnpm-lock.yaml"
+      - "contracts/hardhat.config.ts"
       - ".github/workflows/points-indexer-tests.yml"
 
 jobs:

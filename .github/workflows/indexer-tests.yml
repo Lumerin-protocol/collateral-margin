@@ -4,7 +4,15 @@ on:
   pull_request:
     paths:
       - "indexer/**"
-      - "contracts/**"
+      - "contracts/contracts/CollateralVault.sol"
+      - "contracts/contracts/interfaces/ICollateralVault.sol"
+      - "contracts/contracts/mocks/USDCMock.sol"
+      - "contracts/contracts/mocks/MarginEngineMock.sol"
+      - "contracts/abi/CollateralVault.json"
+      - "contracts/abi/ICollateralVault.json"
+      - "contracts/package.json"
+      - "contracts/pnpm-lock.yaml"
+      - "contracts/hardhat.config.ts"
       - ".github/workflows/indexer-tests.yml"
   push:
     branches:
@@ -13,7 +21,15 @@ on:
       - dev
     paths:
       - "indexer/**"
-      - "contracts/**"
+      - "contracts/contracts/CollateralVault.sol"
+      - "contracts/contracts/interfaces/ICollateralVault.sol"
+      - "contracts/contracts/mocks/USDCMock.sol"
+      - "contracts/contracts/mocks/MarginEngineMock.sol"
+      - "contracts/abi/CollateralVault.json"
+      - "contracts/abi/ICollateralVault.json"
+      - "contracts/package.json"
+      - "contracts/pnpm-lock.yaml"
+      - "contracts/hardhat.config.ts"
       - ".github/workflows/indexer-tests.yml"
 
 jobs:

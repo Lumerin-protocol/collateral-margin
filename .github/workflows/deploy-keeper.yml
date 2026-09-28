@@ -36,7 +36,8 @@ on:
       - "cicd/**"
     paths:
       - "keeper/**"
-      - "config/*.env"
+      - "config/dev.env"
+      - "config/prd.env"
       - ".github/workflows/deploy-keeper.yml"
   workflow_dispatch:
     inputs:
