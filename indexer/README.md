@@ -79,6 +79,8 @@ ETH_NODE_ADDRESS=https://arb-sepolia.g.alchemy.com/v2/YOUR_KEY
 
 `PERPS_ADDRESS` / `OPTIONS_ADDRESS` are injected into the data source `context` block in `subgraph.yaml` via `envsubst` and read at runtime via `dataSource.context()`, so re-run `pnpm prepare-local` if you change them.
 
+`pnpm test` runs the AssemblyScript unit tests. `pnpm test:integration` deploys the real vault and feeds its logs through the same mappings. Compile the contracts package first (`pnpm --dir ../contracts compile`) and render `subgraph.yaml` (`pnpm prepare-local`) before the integration run.
+
 ### 2. Start infrastructure
 
 ```bash
@@ -121,6 +123,7 @@ http://localhost:8000/subgraphs/name/collateral-vault
 | `pnpm remove-local` | Remove subgraph from local graph-node |
 | `pnpm deploy` | Deploy to The Graph Studio (hosted) |
 | `pnpm test` | Run Matchstick unit tests |
+| `pnpm test:integration` | Replay a real vault deployment through the mappings |
 | `pnpm clean` | Remove generated files, build artifacts, and data |
 
 ## Configuration

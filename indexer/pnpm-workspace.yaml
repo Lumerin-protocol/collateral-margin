@@ -1,0 +1,9 @@
+allowBuilds:
+  esbuild: false
+minimumReleaseAgeExclude:
+  - hardhat-matchstick-ts@0.4.2
+  - matchstick-ts@0.4.3
+# The published plugin is 0.4.2 and would otherwise keep its own matchstick-ts 0.4.2.
+# The ABI argument-order fix is in matchstick-ts 0.4.3.
+overrides:
+  matchstick-ts: 0.4.3

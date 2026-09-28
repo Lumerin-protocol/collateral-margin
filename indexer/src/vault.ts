@@ -55,22 +55,27 @@ const REASON_NO_MARGIN_ENGINE = "NO_MARGIN_ENGINE";
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
- * Read the perps/options engine addresses from `dataSource.context()`.
- * Populated from environment variables via subgraph.template.yaml. Tests must
- * call `dataSourceMock.setContext(ctx)` to seed these.
+ * Read one engine address from `dataSource.context()`. The manifest sets these
+ * from the environment. A missing or blank value means "no engine configured"
+ * and must not be treated as a caller: the matchstick-ts runner does not load
+ * manifest context, and `address(0)` would otherwise match an empty `transaction.to`.
  */
+function contextAddress(key: string): Address {
+  const value = dataSource.context().get(key);
+  if (value == null) return Address.zero();
+  const text = value.toString();
+  if (text.length == 0) return Address.zero();
+  return Address.fromString(text);
+}
+
 function knownCallers(): Address[] {
-  const ctx = dataSource.context();
-  return [
-    Address.fromString(ctx.mustGet("perpsAddress").toString()),
-    Address.fromString(ctx.mustGet("optionsAddress").toString()),
-  ];
+  return [contextAddress("perpsAddress"), contextAddress("optionsAddress")];
 }
 
 function categoryOf(caller: Bytes): string {
   const known = knownCallers();
-  if (caller.equals(known[0])) return CATEGORY_PERPS;
-  if (caller.equals(known[1])) return CATEGORY_OPTIONS;
+  if (!known[0].equals(Address.zero()) && caller.equals(known[0])) return CATEGORY_PERPS;
+  if (!known[1].equals(Address.zero()) && caller.equals(known[1])) return CATEGORY_OPTIONS;
   return CATEGORY_OTHER;
 }
 
