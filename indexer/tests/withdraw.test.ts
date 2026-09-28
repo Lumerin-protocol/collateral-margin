@@ -1,8 +1,8 @@
 import { Address, BigInt } from "@graphprotocol/graph-ts";
 import { newTypedMockEventWithParams } from "matchstick-as/assembly/defaults";
 import { assert, beforeEach, clearStore, describe, test } from "matchstick-as/assembly/index";
-import { Transfer, Withdrawn } from "../generated/CollateralVault/CollateralVault";
-import { handleTransfer, handleWithdrawn } from "../src/vault";
+import { Deposited, Transfer, Withdrawn } from "../generated/CollateralVault/CollateralVault";
+import { handleDeposited, handleTransfer, handleWithdrawn } from "../src/vault";
 import {
   INSURANCE_FUND_ADDRESS,
   paramAddr,
@@ -30,6 +30,19 @@ function createTransferEvent(from: Address, to: Address, value: BigInt): Transfe
   ]);
 }
 
+function seedDeposit(to: Address, value: BigInt): void {
+  const mint = createTransferEvent(ZERO, to, value);
+  const deposited = newTypedMockEventWithParams<Deposited>([
+    paramAddr("user", to),
+    paramUint("amount", value),
+    paramAddr("sender", to),
+  ]);
+  deposited.transaction.hash = mint.transaction.hash;
+  deposited.transaction.to = mint.transaction.to;
+  handleDeposited(deposited);
+  handleTransfer(mint);
+}
+
 describe("handleWithdrawn", () => {
   beforeEach(() => {
     clearStore();
@@ -43,7 +56,7 @@ describe("handleWithdrawn", () => {
     const withdrawal = BigInt.fromI32(400_000);
 
     // Seed balance: deposit then withdraw.
-    handleTransfer(createTransferEvent(ZERO, alice, deposit));
+    seedDeposit(alice, deposit);
     handleTransfer(createTransferEvent(alice, ZERO, withdrawal));
     const evt = createWithdrawnEvent(alice, withdrawal, alice);
     handleWithdrawn(evt);
@@ -69,7 +82,7 @@ describe("handleWithdrawn", () => {
     const bob = userAddress(2); // recipient
     const amount = BigInt.fromI32(500_000);
 
-    handleTransfer(createTransferEvent(ZERO, alice, amount));
+    seedDeposit(alice, amount);
     handleTransfer(createTransferEvent(alice, ZERO, amount));
     handleWithdrawn(createWithdrawnEvent(alice, amount, bob));
 

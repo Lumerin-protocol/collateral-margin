@@ -84,7 +84,25 @@ export function setupVault(): void {
   vault.depositCount = 0;
   vault.withdrawalCount = 0;
   vault.internalTransferCount = 0;
+  vault.insuranceDebt = BigInt.zero();
+  vault.insuranceDebtCap = BigInt.zero();
+  vault.insuranceDebtBorrowedTotal = BigInt.zero();
+  vault.insuranceDebtRepaidTotal = BigInt.zero();
+  vault.traderBadDebtTotal = BigInt.zero();
+  vault.insuranceCapital = BigInt.zero();
+  vault.uncoveredLoss = BigInt.zero();
+  vault.timingDebt = BigInt.zero();
+  vault.halted = false;
+  vault.haltedSince = BigInt.zero();
+  vault.insuranceDebtSince = BigInt.zero();
+  vault.pendingDepositTx = Bytes.empty();
+  vault.pendingDepositUser = Bytes.empty();
+  vault.pendingDepositAmount = BigInt.zero();
   vault.initializedAt = BigInt.zero();
   vault.lastUpdatedAt = BigInt.zero();
   vault.save();
+}
+
+export function paramI32(name: string, value: i32): ethereum.EventParam {
+  return new ethereum.EventParam(name, ethereum.Value.fromI32(value));
 }

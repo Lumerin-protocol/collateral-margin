@@ -84,7 +84,15 @@ export class Scheduler {
     this.inflightSweep = true;
     try {
       const users = this.tracker.list();
-      if (users.length === 0) return;
+      if (users.length === 0) {
+        // Info, not debug: dev runs at LOG_LEVEL=info, and the heartbeat
+        // alarm matches this exact message.
+        this.logger.info(
+          { tracked: 0, underwater: 0, warned: 0, critical: 0 },
+          "sweep complete",
+        );
+        return;
+      }
 
       const healths = await readAccountHealthBatch(this.chain, this.config, users);
       let underwater = 0;
@@ -116,7 +124,7 @@ export class Scheduler {
         }
       }
 
-      this.logger.debug(
+      this.logger.info(
         { tracked: users.length, underwater, warned, critical },
         "sweep complete",
       );

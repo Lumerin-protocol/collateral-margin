@@ -1,18 +1,28 @@
 import { Address, BigInt, Bytes, dataSource, log } from "@graphprotocol/graph-ts";
 import {
+  BadDebt,
   CollateralVault as VaultContract,
   Deposited,
   Initialized,
+  InsuranceDebtCapSet,
   InsuranceFundDeposited,
   InsuranceFundWithdrawn,
+  MarginEngineSet,
   Transfer,
+  VaultHalted,
+  VaultResumed,
   Withdrawn,
 } from "../generated/CollateralVault/CollateralVault";
 import {
+  BadDebtEvent,
+  InsuranceDebtCapChange,
+  InsuranceDebtEvent,
   Vault,
   VaultDeposit,
+  VaultHaltEvent,
   VaultInternalTransfer,
   VaultUser,
+  VaultVenue,
   VaultWithdrawal,
 } from "../generated/schema";
 import { createEventId } from "./ids";
@@ -32,25 +42,40 @@ const CATEGORY_PERPS = "PERPS";
 const CATEGORY_OPTIONS = "OPTIONS";
 const CATEGORY_OTHER = "OTHER";
 
+const KIND_RESERVE_LOSS = "RESERVE_LOSS";
+const KIND_FEE = "FEE";
+const KIND_BORROW = "BORROW";
+const KIND_REPAY = "REPAY";
+const KIND_HALT = "HALT";
+const KIND_RESUME = "RESUME";
+const REASON_CAP = "CAP";
+const REASON_OWNER = "OWNER";
+const REASON_NO_MARGIN_ENGINE = "NO_MARGIN_ENGINE";
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /**
- * Read the perps/options engine addresses from `dataSource.context()`.
- * Populated from environment variables via subgraph.template.yaml. Tests must
- * call `dataSourceMock.setContext(ctx)` to seed these.
+ * Read one engine address from `dataSource.context()`. The manifest sets these
+ * from the environment. A missing or blank value means "no engine configured"
+ * and must not be treated as a caller: the matchstick-ts runner does not load
+ * manifest context, and `address(0)` would otherwise match an empty `transaction.to`.
  */
+function contextAddress(key: string): Address {
+  const value = dataSource.context().get(key);
+  if (value == null) return Address.zero();
+  const text = value.toString();
+  if (text.length == 0) return Address.zero();
+  return Address.fromString(text);
+}
+
 function knownCallers(): Address[] {
-  const ctx = dataSource.context();
-  return [
-    Address.fromString(ctx.mustGet("perpsAddress").toString()),
-    Address.fromString(ctx.mustGet("optionsAddress").toString()),
-  ];
+  return [contextAddress("perpsAddress"), contextAddress("optionsAddress")];
 }
 
 function categoryOf(caller: Bytes): string {
   const known = knownCallers();
-  if (caller.equals(known[0])) return CATEGORY_PERPS;
-  if (caller.equals(known[1])) return CATEGORY_OPTIONS;
+  if (!known[0].equals(Address.zero()) && caller.equals(known[0])) return CATEGORY_PERPS;
+  if (!known[1].equals(Address.zero()) && caller.equals(known[1])) return CATEGORY_OPTIONS;
   return CATEGORY_OTHER;
 }
 
@@ -73,6 +98,20 @@ function getOrCreateVault(): Vault {
     vault.depositCount = 0;
     vault.withdrawalCount = 0;
     vault.internalTransferCount = 0;
+    vault.insuranceDebt = BigInt.zero();
+    vault.insuranceDebtCap = BigInt.zero();
+    vault.insuranceDebtBorrowedTotal = BigInt.zero();
+    vault.insuranceDebtRepaidTotal = BigInt.zero();
+    vault.traderBadDebtTotal = BigInt.zero();
+    vault.insuranceCapital = BigInt.zero();
+    vault.uncoveredLoss = BigInt.zero();
+    vault.timingDebt = BigInt.zero();
+    vault.halted = false;
+    vault.haltedSince = BigInt.zero();
+    vault.insuranceDebtSince = BigInt.zero();
+    vault.pendingDepositTx = Bytes.empty();
+    vault.pendingDepositUser = Bytes.empty();
+    vault.pendingDepositAmount = BigInt.zero();
     vault.initializedAt = BigInt.zero();
     vault.lastUpdatedAt = BigInt.zero();
     // Don't `loadVaultFromContract` here — that read happens lazily via
@@ -130,6 +169,123 @@ function bumpUserCount(vault: Vault, isNewUser: boolean): void {
 }
 
 /**
+ * uncoveredLoss = max(0, traderBadDebtTotal - insuranceCapital)
+ * timingDebt = max(0, insuranceDebt - uncoveredLoss)
+ * Capital is signed: a negative balance adds to the uncovered loss.
+ */
+function recomputeDebtSplit(vault: Vault): void {
+  let uncovered: BigInt;
+  if (vault.insuranceCapital.lt(BigInt.zero())) {
+    uncovered = vault.traderBadDebtTotal.plus(vault.insuranceCapital.neg());
+  } else if (vault.traderBadDebtTotal.le(vault.insuranceCapital)) {
+    uncovered = BigInt.zero();
+  } else {
+    uncovered = vault.traderBadDebtTotal.minus(vault.insuranceCapital);
+  }
+  vault.uncoveredLoss = uncovered;
+  if (vault.insuranceDebt.le(uncovered)) {
+    vault.timingDebt = BigInt.zero();
+  } else {
+    vault.timingDebt = vault.insuranceDebt.minus(uncovered);
+  }
+}
+
+function haltReasonName(reason: i32): string {
+  if (reason == 1) return REASON_OWNER;
+  if (reason == 2) return REASON_NO_MARGIN_ENGINE;
+  return REASON_CAP;
+}
+
+function getOrCreateVenue(venue: Address): VaultVenue {
+  let row = VaultVenue.load(venue);
+  if (!row) {
+    row = new VaultVenue(venue);
+    row.address = venue;
+    row.traderBadDebtTotal = BigInt.zero();
+    row.feeBadDebtTotal = BigInt.zero();
+  }
+  return row;
+}
+
+function noteDebtOpened(vault: Vault, previous: BigInt, debtAfter: BigInt, timestamp: BigInt): void {
+  if (previous.equals(BigInt.zero()) && debtAfter.gt(BigInt.zero())) {
+    vault.insuranceDebtSince = timestamp;
+  }
+  if (debtAfter.equals(BigInt.zero())) {
+    vault.insuranceDebtSince = BigInt.zero();
+  }
+}
+
+function callerBytes(event: Transfer): Bytes {
+  const txTo = event.transaction.to;
+  return txTo !== null ? (txTo as Bytes) : Bytes.empty();
+}
+
+/**
+ * A user mint that `Deposited` did not mark is a borrow. The fund's own mint is
+ * always a deposit: `_update` may burn it back in the same call, and that burn
+ * is the repayment.
+ */
+function noteBorrow(vault: Vault, event: Transfer, recipient: Address, amount: BigInt): void {
+  const previous = vault.insuranceDebt;
+  const debtAfter = previous.plus(amount);
+  vault.insuranceDebt = debtAfter;
+  vault.insuranceDebtBorrowedTotal = vault.insuranceDebtBorrowedTotal.plus(amount);
+  noteDebtOpened(vault, previous, debtAfter, event.block.timestamp);
+  recomputeDebtSplit(vault);
+
+  bumpCategoryNet(recipient, categoryOf(callerBytes(event)), amount);
+
+  const id = createEventId(event.transaction.hash, event.logIndex);
+  const row = new InsuranceDebtEvent(id);
+  row.kind = KIND_BORROW;
+  row.to = recipient;
+  row.amount = amount;
+  row.debtAfter = debtAfter;
+  row.timestamp = event.block.timestamp;
+  row.blockNumber = event.block.number;
+  row.transactionHash = event.transaction.hash;
+  row.save();
+}
+
+/** True when this mint is the one `Deposited` just marked. Clears the mark. */
+function consumePendingDeposit(vault: Vault, event: Transfer, recipient: Address, amount: BigInt): boolean {
+  if (vault.pendingDepositTx.length == 0) return false;
+  const matches =
+    vault.pendingDepositTx.equals(event.transaction.hash) &&
+    vault.pendingDepositUser.equals(recipient) &&
+    vault.pendingDepositAmount.equals(amount);
+  if (!matches) return false;
+  vault.pendingDepositTx = Bytes.empty();
+  vault.pendingDepositUser = Bytes.empty();
+  vault.pendingDepositAmount = BigInt.zero();
+  return true;
+}
+
+/** A burn from the insurance fund, up to the open debt, is a repayment. */
+function noteRepay(vault: Vault, event: Transfer, amount: BigInt): void {
+  const previous = vault.insuranceDebt;
+  if (previous.equals(BigInt.zero()) || amount.gt(previous)) return;
+
+  const debtAfter = previous.minus(amount);
+  vault.insuranceDebt = debtAfter;
+  vault.insuranceDebtRepaidTotal = vault.insuranceDebtRepaidTotal.plus(amount);
+  noteDebtOpened(vault, previous, debtAfter, event.block.timestamp);
+  recomputeDebtSplit(vault);
+
+  const id = createEventId(event.transaction.hash, event.logIndex);
+  const row = new InsuranceDebtEvent(id);
+  row.kind = KIND_REPAY;
+  row.to = Bytes.empty();
+  row.amount = amount;
+  row.debtAfter = debtAfter;
+  row.timestamp = event.block.timestamp;
+  row.blockNumber = event.block.number;
+  row.transactionHash = event.transaction.hash;
+  row.save();
+}
+
+/**
  * Apply a signed delta to a user's combined `netInternalIn` and the matching
  * per-category bucket. `delta` is negative for the sender, positive for the
  * receiver. Skips silently if the user entity doesn't exist (shouldn't happen
@@ -158,6 +314,16 @@ export function handleInitialized(event: Initialized): void {
   vault.initializedAt = event.block.timestamp;
   vault.lastUpdatedAt = event.block.timestamp;
   loadVaultFromContract(vault);
+  // Version 2 seeds protocol capital from the fund balance already in the vault.
+  // Matchstick has no contract, so a reverted read leaves the event-derived value.
+  if (event.params.version.equals(BigInt.fromI32(2))) {
+    const contract = VaultContract.bind(dataSource.address());
+    const capital = contract.try_insuranceCapital();
+    if (!capital.reverted) {
+      vault.insuranceCapital = capital.value;
+      recomputeDebtSplit(vault);
+    }
+  }
   vault.save();
 }
 
@@ -166,10 +332,12 @@ export function handleInitialized(event: Initialized): void {
 // CollateralVault inherits from ERC20Upgradeable, but its public ERC20 surface
 // (`approve`, `transfer`, `transferFrom`) is hard-disabled. Transfer events
 // only ever come from internal `_mint` / `_burn` / `_transfer`:
-//   - mint  (from = 0x0)  ⇢ paired with `Deposited`
-//   - burn  (to   = 0x0)  ⇢ paired with `Withdrawn`
-//   - internal transfer    ⇢ from `internalTransfer` / `internalTransferWithMarginCheck`
-// That makes Transfer a complete, lossless balance ledger.
+//   - mint to a user, with no preceding Deposited  ⇢ insurance-debt borrow
+//   - mint marked by a preceding Deposited         ⇢ deposit
+//   - burn from the insurance fund while debt > 0  ⇢ debt repayment
+//   - any other burn                               ⇢ withdrawal
+//   - internal transfer                            ⇢ PnL, fees, and the inflow that funds a repayment
+// That makes Transfer a complete balance ledger, and the debt ledger too.
 export function handleTransfer(event: Transfer): void {
   const from = event.params.from;
   const to = event.params.to;
@@ -233,6 +401,13 @@ export function handleTransfer(event: Transfer): void {
     vault.internalTransferCount++;
   }
 
+  if (isMint && !consumePendingDeposit(vault, event, to, amount) && !to.equals(INSURANCE_FUND_ADDR)) {
+    noteBorrow(vault, event, to, amount);
+  }
+  if (from.equals(INSURANCE_FUND_ADDR) && isBurn) {
+    noteRepay(vault, event, amount);
+  }
+
   vault.lastUpdatedAt = event.block.timestamp;
   vault.save();
 }
@@ -276,6 +451,9 @@ export function handleDeposited(event: Deposited): void {
     vault.depositCount++;
   }
   bumpUserCount(vault, isNewUser);
+  vault.pendingDepositTx = event.transaction.hash;
+  vault.pendingDepositUser = recipient;
+  vault.pendingDepositAmount = amount;
   vault.lastUpdatedAt = event.block.timestamp;
   vault.save();
 }
@@ -333,6 +511,8 @@ export function handleInsuranceFundDeposited(event: InsuranceFundDeposited): voi
 
   const vault = getOrCreateVault();
   vault.insuranceFundDeposited = vault.insuranceFundDeposited.plus(event.params.amount);
+  vault.insuranceCapital = vault.insuranceCapital.plus(event.params.amount);
+  recomputeDebtSplit(vault);
   vault.lastUpdatedAt = event.block.timestamp;
   vault.save();
 }
@@ -345,6 +525,116 @@ export function handleInsuranceFundWithdrawn(event: InsuranceFundWithdrawn): voi
 
   const vault = getOrCreateVault();
   vault.insuranceFundWithdrawn = vault.insuranceFundWithdrawn.plus(event.params.amount);
+  vault.insuranceCapital = vault.insuranceCapital.minus(event.params.amount);
+  recomputeDebtSplit(vault);
+  vault.lastUpdatedAt = event.block.timestamp;
+  vault.save();
+}
+
+// ── Bad debt and insurance-fund debt ────────────────────────────────────────
+
+export function handleBadDebt(event: BadDebt): void {
+  const payer = event.params.payer;
+  const receiver = event.params.receiver;
+  const amount = event.params.amount;
+  const venueAddress = event.params.venue;
+  const isReserveLoss = receiver.equals(INSURANCE_FUND_ADDR);
+
+  log.info("BadDebt: payer {} receiver {} amount {} venue {} kind {}", [
+    payer.toHexString(),
+    receiver.toHexString(),
+    amount.toString(),
+    venueAddress.toHexString(),
+    isReserveLoss ? KIND_RESERVE_LOSS : KIND_FEE,
+  ]);
+
+  const isNewUser = VaultUser.load(payer) === null;
+  const user = getOrCreateVaultUser(payer, event.block.timestamp);
+  user.lastActivityAt = event.block.timestamp;
+  user.save();
+
+  const venue = getOrCreateVenue(venueAddress);
+  if (isReserveLoss) {
+    venue.traderBadDebtTotal = venue.traderBadDebtTotal.plus(amount);
+  } else {
+    venue.feeBadDebtTotal = venue.feeBadDebtTotal.plus(amount);
+  }
+  venue.save();
+
+  const row = new BadDebtEvent(createEventId(event.transaction.hash, event.logIndex));
+  row.payer = user.id;
+  row.receiver = receiver;
+  row.amount = amount;
+  row.venue = venue.id;
+  row.kind = isReserveLoss ? KIND_RESERVE_LOSS : KIND_FEE;
+  row.timestamp = event.block.timestamp;
+  row.blockNumber = event.block.number;
+  row.transactionHash = event.transaction.hash;
+  row.save();
+
+  const vault = getOrCreateVault();
+  if (isReserveLoss) {
+    vault.traderBadDebtTotal = vault.traderBadDebtTotal.plus(amount);
+    recomputeDebtSplit(vault);
+  }
+  bumpUserCount(vault, isNewUser);
+  vault.lastUpdatedAt = event.block.timestamp;
+  vault.save();
+}
+
+export function handleInsuranceDebtCapSet(event: InsuranceDebtCapSet): void {
+  const vault = getOrCreateVault();
+  vault.insuranceDebtCap = event.params.newCap;
+  vault.lastUpdatedAt = event.block.timestamp;
+  vault.save();
+
+  const row = new InsuranceDebtCapChange(createEventId(event.transaction.hash, event.logIndex));
+  row.oldCap = event.params.oldCap;
+  row.newCap = event.params.newCap;
+  row.timestamp = event.block.timestamp;
+  row.blockNumber = event.block.number;
+  row.transactionHash = event.transaction.hash;
+  row.save();
+}
+
+export function handleVaultHalted(event: VaultHalted): void {
+  const vault = getOrCreateVault();
+  vault.halted = true;
+  vault.haltedSince = event.block.timestamp;
+  vault.lastUpdatedAt = event.block.timestamp;
+  vault.save();
+
+  const row = new VaultHaltEvent(createEventId(event.transaction.hash, event.logIndex));
+  row.kind = KIND_HALT;
+  row.reason = haltReasonName(event.params.reason);
+  row.debt = event.params.debt;
+  row.effectiveCap = event.params.effectiveCap;
+  row.timestamp = event.block.timestamp;
+  row.blockNumber = event.block.number;
+  row.transactionHash = event.transaction.hash;
+  row.save();
+}
+
+export function handleVaultResumed(event: VaultResumed): void {
+  const vault = getOrCreateVault();
+  vault.halted = false;
+  vault.haltedSince = BigInt.zero();
+  vault.lastUpdatedAt = event.block.timestamp;
+  vault.save();
+
+  const row = new VaultHaltEvent(createEventId(event.transaction.hash, event.logIndex));
+  row.kind = KIND_RESUME;
+  row.debt = event.params.debt;
+  row.effectiveCap = event.params.effectiveCap;
+  row.timestamp = event.block.timestamp;
+  row.blockNumber = event.block.number;
+  row.transactionHash = event.transaction.hash;
+  row.save();
+}
+
+export function handleMarginEngineSet(event: MarginEngineSet): void {
+  const vault = getOrCreateVault();
+  vault.marginEngine = event.params.marginEngine;
   vault.lastUpdatedAt = event.block.timestamp;
   vault.save();
 }
