@@ -36,14 +36,11 @@ keeper_service = {
   task_ram        = 512
 }
 
-# Insurance-fund debt. Notifications stay off until the dashboard has been checked.
+# Insurance-fund debt. Addresses and the subgraph URL come from config/prd.env.
+# Notifications stay off until the dashboard has been checked.
 vault_monitoring = {
   create                   = true
   notifications_enabled    = false
-  subgraph_url             = "https://api.goldsky.com/api/public/project_cmmz5dm4l7ocp01xng61y5nwr/subgraphs/collateral-vault/lmn-latest/gn"
-  vault_address            = "0x0730422E49B76A2D36d51304ACEcbe4f444821F8"
-  futures_address          = "0xf97a1bbfb5e061ef73dad8ebf25939d93639fb7f"
-  perps_address            = "0x794f9e63b7666985256f1d2763ee24cc0b528199"
   rate_minutes             = 5
   debt_util_warn_pct       = 50
   debt_util_crit_pct       = 80

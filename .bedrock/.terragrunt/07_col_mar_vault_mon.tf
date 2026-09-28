@@ -98,10 +98,10 @@ resource "aws_lambda_function" "vault_mon" {
 
   environment {
     variables = {
-      SUBGRAPH_URL    = var.vault_monitoring.subgraph_url
-      VAULT_ADDRESS   = var.vault_monitoring.vault_address
-      FUTURES_ADDRESS = var.vault_monitoring.futures_address
-      PERPS_ADDRESS   = var.vault_monitoring.perps_address
+      SUBGRAPH_URL    = var.vault_env.subgraph_url
+      VAULT_ADDRESS   = var.vault_env.vault_address
+      FUTURES_ADDRESS = var.vault_env.futures_address
+      PERPS_ADDRESS   = var.vault_env.perps_address
       ETH_RPC_URL     = "${local.vault_rpc_host}/${var.alchemy_api_key}"
       CW_NAMESPACE    = local.vault_mon_ns
     }
