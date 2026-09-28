@@ -166,8 +166,10 @@ variable "webhook_secret" {
 ################################################################################
 # Reads the vault subgraph and one USDC balanceOf at the subgraph block.
 # notifications_enabled gates alarm actions so the dashboard can be applied
-# and watched before paging is turned on. Thresholds are percentages of the
-# on-chain cap, so changing the cap does not require an apply.
+# and watched before paging is turned on. Warning alarms publish to
+# dev_alerts_topic_name (Slack). Critical alarms publish there as well, except
+# on prd, where they publish to devops_alerts_topic_name (phone). Thresholds
+# are percentages of the on-chain cap, so changing the cap does not require an apply.
 
 variable "vault_monitoring" {
   description = "Insurance-fund debt monitor (subgraph + one balanceOf). Addresses and the subgraph URL are vault_env, read from config/<env>.env."
@@ -179,6 +181,8 @@ variable "vault_monitoring" {
     debt_util_crit_pct       = number
     max_subgraph_age_minutes = number
     oracle_metric_namespace  = string
+    dev_alerts_topic_name    = string
+    devops_alerts_topic_name = string
   })
   default = {
     create                   = false
@@ -188,6 +192,8 @@ variable "vault_monitoring" {
     debt_util_crit_pct       = 80
     max_subgraph_age_minutes = 15
     oracle_metric_namespace  = ""
+    dev_alerts_topic_name    = ""
+    devops_alerts_topic_name = ""
   }
 }
 

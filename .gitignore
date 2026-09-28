@@ -13,3 +13,7 @@ node_modules
 secret.tfvars
 secret.*
 .bedrock/.terragrunt/*.zip
+
+# Python
+__pycache__/
+*.pyc

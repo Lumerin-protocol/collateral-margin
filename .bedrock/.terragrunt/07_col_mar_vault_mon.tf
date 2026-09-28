@@ -6,26 +6,17 @@
 ################################################################################
 
 locals {
-  vault_mon_env       = substr(var.account_shortname, 8, 3)
-  vault_mon_ns        = "ColMarVault"
-  vault_mon_name      = "${local.shortname}-vault-mon-${local.vault_mon_env}"
-  vault_alert_actions = var.vault_monitoring.notifications_enabled ? aws_sns_topic.vault_alerts[*].arn : []
-  vault_rpc_host      = var.account_lifecycle == "prd" ? "https://base-mainnet.g.alchemy.com/v2" : "https://base-sepolia.g.alchemy.com/v2"
-}
-
-################################################################################
-# SNS
-################################################################################
-
-resource "aws_sns_topic" "vault_alerts" {
-  count    = var.vault_monitoring.create ? 1 : 0
-  provider = aws.use1
-  name     = "${local.shortname}-vault-alerts-${local.vault_mon_env}"
-
-  tags = merge(var.default_tags, var.foundation_tags, {
-    Name       = "Col-Mar Vault Alerts"
-    Capability = "Monitoring"
-  })
+  vault_mon_env            = substr(var.account_shortname, 8, 3)
+  vault_mon_ns             = "ColMarVault"
+  vault_mon_name           = "${local.shortname}-vault-mon-${local.vault_mon_env}"
+  vault_slack_topic_arn    = "arn:aws:sns:${var.default_region}:${var.account_number}:${var.vault_monitoring.dev_alerts_topic_name}"
+  vault_page_topic_arn     = "arn:aws:sns:${var.default_region}:${var.account_number}:${var.vault_monitoring.devops_alerts_topic_name}"
+  vault_critical_topic_arn = var.account_lifecycle == "prd" ? local.vault_page_topic_arn : local.vault_slack_topic_arn
+  # Empty until notifications_enabled. Warning is Slack. Critical is Slack in
+  # dev and the phone topic when account_lifecycle is prd.
+  vault_warning_actions  = var.vault_monitoring.notifications_enabled ? [local.vault_slack_topic_arn] : []
+  vault_critical_actions = var.vault_monitoring.notifications_enabled ? [local.vault_critical_topic_arn] : []
+  vault_rpc_host         = var.account_lifecycle == "prd" ? "https://base-mainnet.g.alchemy.com/v2" : "https://base-sepolia.g.alchemy.com/v2"
 }
 
 ################################################################################
@@ -82,6 +73,18 @@ resource "aws_iam_role_policy" "vault_mon_metrics" {
   })
 }
 
+resource "aws_cloudwatch_log_group" "vault_mon" {
+  count             = var.vault_monitoring.create ? 1 : 0
+  provider          = aws.use1
+  name              = "/aws/lambda/${local.vault_mon_name}"
+  retention_in_days = local.cloudwatch_event_retention
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Monitor"
+    Capability = "Monitoring"
+  })
+}
+
 resource "aws_lambda_function" "vault_mon" {
   count         = var.vault_monitoring.create ? 1 : 0
   provider      = aws.use1
@@ -112,7 +115,10 @@ resource "aws_lambda_function" "vault_mon" {
     Capability = "Monitoring"
   })
 
-  depends_on = [aws_iam_role_policy_attachment.vault_mon_logs]
+  depends_on = [
+    aws_iam_role_policy_attachment.vault_mon_logs,
+    aws_cloudwatch_log_group.vault_mon,
+  ]
 }
 
 resource "aws_cloudwatch_event_rule" "vault_mon" {
@@ -201,8 +207,8 @@ resource "aws_cloudwatch_metric_alarm" "vault_uncovered_loss" {
   statistic           = "Maximum"
   threshold           = 0
   treat_missing_data  = "ignore"
-  alarm_actions       = local.vault_alert_actions
-  ok_actions          = local.vault_alert_actions
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Vault Uncovered Loss"
@@ -223,8 +229,8 @@ resource "aws_cloudwatch_metric_alarm" "vault_util_warn" {
   statistic           = "Maximum"
   threshold           = var.vault_monitoring.debt_util_warn_pct
   treat_missing_data  = "ignore"
-  alarm_actions       = local.vault_alert_actions
-  ok_actions          = local.vault_alert_actions
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Vault Utilization Warning"
@@ -245,8 +251,8 @@ resource "aws_cloudwatch_metric_alarm" "vault_util_crit" {
   statistic           = "Maximum"
   threshold           = var.vault_monitoring.debt_util_crit_pct
   treat_missing_data  = "ignore"
-  alarm_actions       = local.vault_alert_actions
-  ok_actions          = local.vault_alert_actions
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Vault Utilization Critical"
@@ -267,8 +273,8 @@ resource "aws_cloudwatch_metric_alarm" "vault_halted" {
   statistic           = "Maximum"
   threshold           = 1
   treat_missing_data  = "ignore"
-  alarm_actions       = local.vault_alert_actions
-  ok_actions          = local.vault_alert_actions
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Vault Halted"
@@ -289,8 +295,8 @@ resource "aws_cloudwatch_metric_alarm" "vault_backing_gap" {
   statistic           = "Maximum"
   threshold           = 0
   treat_missing_data  = "ignore"
-  alarm_actions       = local.vault_alert_actions
-  ok_actions          = local.vault_alert_actions
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Vault Backing Gap"
@@ -311,8 +317,8 @@ resource "aws_cloudwatch_metric_alarm" "vault_margin_engine_unset" {
   statistic           = "Maximum"
   threshold           = 1
   treat_missing_data  = "ignore"
-  alarm_actions       = local.vault_alert_actions
-  ok_actions          = local.vault_alert_actions
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Vault Margin Engine Unset"
@@ -333,8 +339,8 @@ resource "aws_cloudwatch_metric_alarm" "vault_check_success" {
   statistic           = "Minimum"
   threshold           = 1
   treat_missing_data  = "breaching"
-  alarm_actions       = local.vault_alert_actions
-  ok_actions          = local.vault_alert_actions
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Vault Check Success"
@@ -355,8 +361,8 @@ resource "aws_cloudwatch_metric_alarm" "vault_subgraph_age" {
   statistic           = "Maximum"
   threshold           = var.vault_monitoring.max_subgraph_age_minutes * 60
   treat_missing_data  = "ignore"
-  alarm_actions       = local.vault_alert_actions
-  ok_actions          = local.vault_alert_actions
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Vault Subgraph Age"
@@ -377,8 +383,8 @@ resource "aws_cloudwatch_metric_alarm" "vault_subgraph_errors" {
   statistic           = "Maximum"
   threshold           = 1
   treat_missing_data  = "ignore"
-  alarm_actions       = local.vault_alert_actions
-  ok_actions          = local.vault_alert_actions
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Vault Subgraph Errors"
@@ -399,8 +405,8 @@ resource "aws_cloudwatch_metric_alarm" "keeper_unhealthy" {
   statistic           = "Minimum"
   threshold           = 1
   treat_missing_data  = "breaching"
-  alarm_actions       = local.vault_alert_actions
-  ok_actions          = local.vault_alert_actions
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
 
   dimensions = {
     LoadBalancer = aws_alb.keeper_int_use1[0].arn_suffix
@@ -426,8 +432,8 @@ resource "aws_cloudwatch_metric_alarm" "keeper_silent" {
   statistic           = "Sum"
   threshold           = 1
   treat_missing_data  = "breaching"
-  alarm_actions       = local.vault_alert_actions
-  ok_actions          = local.vault_alert_actions
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Keeper Silent"
@@ -448,8 +454,8 @@ resource "aws_cloudwatch_metric_alarm" "keeper_errors" {
   statistic           = "Sum"
   threshold           = 1
   treat_missing_data  = "notBreaching"
-  alarm_actions       = local.vault_alert_actions
-  ok_actions          = local.vault_alert_actions
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Keeper Errors"
