@@ -36,6 +36,20 @@ keeper_service = {
   task_ram        = 512
 }
 
+# Insurance-fund debt. Addresses and the subgraph URL come from config/prd.env.
+# Notifications stay off until the dashboard has been checked.
+vault_monitoring = {
+  create                   = true
+  notifications_enabled    = false
+  rate_minutes             = 5
+  debt_util_warn_pct       = 50
+  debt_util_crit_pct       = 80
+  max_subgraph_age_minutes = 15
+  oracle_metric_namespace  = "HashpriceOracle-LMN"
+  dev_alerts_topic_name    = "titanio-lmn-dev-alerts"    # Slack
+  devops_alerts_topic_name = "titanio-lmn-devops-alerts" # Phone
+}
+
 ########################################
 # Account metadata
 ########################################

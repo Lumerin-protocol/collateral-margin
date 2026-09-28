@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { getAddress, maxUint256, zeroAddress } from "viem";
+import { getAddress, maxUint256, parseEventLogs, zeroAddress } from "viem";
 import { network } from "hardhat";
 import {
   VAULT_AUTH_OPS_ALICE_DEPOSIT,
@@ -710,6 +710,405 @@ describe("CollateralVault", () => {
         [getAddress(alice.account.address), aliceWithdraw, getAddress(alice.account.address)],
       );
       assert.equal(await vault.read.totalSupply(), totalAfterWithdraw);
+    });
+  });
+
+  // ── Insurance debt ──────────────────────────────────────────────────────
+
+  describe("insurance debt", () => {
+    /** Margin engine on, so the configured cap is the effective cap, and `engine` may settle. */
+    async function ready() {
+      const ctx = await networkHelpers.loadFixture(deployVaultFixture);
+      const margin = await viem.deployContract("MarginEngineMock", []);
+      await margin.write.setVault([ctx.vault.address]);
+      await ctx.vault.write.setMarginEngine([margin.address], { account: ctx.owner.account });
+      await ctx.vault.write.setAuthorizedCaller([ctx.engine.account.address, true], {
+        account: ctx.owner.account,
+      });
+      const fund = await ctx.vault.read.INSURANCE_FUND_ADDR();
+      return { ...ctx, margin, fund };
+    }
+
+    async function assertInvariants(
+      vault: Awaited<ReturnType<typeof ready>>["vault"],
+      usdc: Awaited<ReturnType<typeof ready>>["usdc"],
+    ) {
+      const supply = await vault.read.totalSupply();
+      const debt = await vault.read.insuranceDebt();
+      const backing = await usdc.read.balanceOf([vault.address]);
+      assert.ok(backing >= supply - debt, "USDC must cover supply minus insurance debt");
+      if (debt > 0n) {
+        assert.equal(await vault.read.insuranceFundBalance(), 0n);
+      }
+    }
+
+    async function debtSnapshot(vault: Awaited<ReturnType<typeof ready>>["vault"]) {
+      return {
+        debt: await vault.read.insuranceDebt(),
+        uncovered: await vault.read.uncoveredLoss(),
+        timing: await vault.read.timingDebt(),
+        capital: await vault.read.insuranceCapital(),
+        bad: await vault.read.traderBadDebtTotal(),
+        halted: await vault.read.halted(),
+      };
+    }
+
+    it("reports version 1.2.0", async () => {
+      const { vault } = await networkHelpers.loadFixture(deployVaultFixture);
+      assert.equal(await vault.read.VERSION(), "1.2.0");
+    });
+
+    describe("settleTransfer", () => {
+      it("moves a trader payment in full when the balance covers it", async () => {
+        const { vault, alice, bob, engine } = await ready();
+        await vault.write.deposit([100n], { account: alice.account });
+        await vault.write.settleTransfer([alice.account.address, bob.account.address, 40n], {
+          account: engine.account,
+        });
+        assert.equal(await vault.read.balanceOf([alice.account.address]), 60n);
+        assert.equal(await vault.read.balanceOf([bob.account.address]), 40n);
+        assert.equal(await vault.read.traderBadDebtTotal(), 0n);
+      });
+
+      it("records a trader shortfall owed to the fund as bad debt", async () => {
+        const { vault, alice, engine, fund } = await ready();
+        await vault.write.deposit([40n], { account: alice.account });
+        await viem.assertions.emitWithArgs(
+          vault.write.settleTransfer([alice.account.address, fund, 100n], { account: engine.account }),
+          vault,
+          "BadDebt",
+          [getAddress(alice.account.address), getAddress(fund), 60n, getAddress(engine.account.address)],
+        );
+        assert.equal(await vault.read.balanceOf([alice.account.address]), 0n);
+        assert.equal(await vault.read.insuranceFundBalance(), 40n);
+        assert.equal(await vault.read.traderBadDebtTotal(), 60n);
+        assert.equal(await vault.read.uncoveredLoss(), 60n);
+      });
+
+      it("emits fee shortfalls without counting them as reserve losses", async () => {
+        const { vault, alice, bob, engine } = await ready();
+        await vault.write.deposit([40n], { account: alice.account });
+        await viem.assertions.emitWithArgs(
+          vault.write.settleTransfer([alice.account.address, bob.account.address, 100n], {
+            account: engine.account,
+          }),
+          vault,
+          "BadDebt",
+          [
+            getAddress(alice.account.address),
+            getAddress(bob.account.address),
+            60n,
+            getAddress(engine.account.address),
+          ],
+        );
+        assert.equal(await vault.read.balanceOf([bob.account.address]), 40n);
+        assert.equal(await vault.read.traderBadDebtTotal(), 0n);
+        assert.equal(await vault.read.uncoveredLoss(), 0n);
+      });
+
+      it("pays from the fund in full when the balance covers it", async () => {
+        const { vault, usdc, alice, engine, fund, owner } = await ready();
+        await vault.write.depositInsuranceFund([100n], { account: owner.account });
+        await vault.write.settleTransfer([fund, alice.account.address, 40n], { account: engine.account });
+        assert.equal(await vault.read.balanceOf([alice.account.address]), 40n);
+        assert.equal(await vault.read.insuranceFundBalance(), 60n);
+        assert.equal(await vault.read.insuranceDebt(), 0n);
+        await assertInvariants(vault, usdc);
+      });
+
+      it("borrows the fund shortfall and pays the winner in full", async () => {
+        const { vault, usdc, alice, engine, fund, owner } = await ready();
+        await vault.write.setInsuranceDebtCap([1000n], { account: owner.account });
+        await vault.write.depositInsuranceFund([10n], { account: owner.account });
+        await vault.write.settleTransfer([fund, alice.account.address, 25n], { account: engine.account });
+        assert.equal(await vault.read.balanceOf([alice.account.address]), 25n);
+        assert.equal(await vault.read.insuranceFundBalance(), 0n);
+        assert.equal(await vault.read.insuranceDebt(), 15n);
+        assert.equal(await vault.read.timingDebt(), 15n);
+        assert.equal(await vault.read.uncoveredLoss(), 0n);
+        assert.equal(await vault.read.halted(), false);
+        await assertInvariants(vault, usdc);
+      });
+
+      it("pays in full and latches the halt when a borrow crosses the cap", async () => {
+        const { vault, usdc, alice, engine, fund, owner } = await ready();
+        const pc = await viem.getPublicClient();
+        await vault.write.setInsuranceDebtCap([10n], { account: owner.account });
+        const hash = await vault.write.settleTransfer([fund, alice.account.address, 15n], {
+          account: engine.account,
+        });
+        const receipt = await pc.waitForTransactionReceipt({ hash });
+        const halted = parseEventLogs({ abi: vault.abi, eventName: "VaultHalted", logs: receipt.logs });
+        assert.equal(halted.length, 1);
+        assert.equal(Number(halted[0].args.reason), 0);
+        assert.equal(halted[0].args.debt, 15n);
+        assert.equal(halted[0].args.effectiveCap, 10n);
+        assert.equal(await vault.read.balanceOf([alice.account.address]), 15n);
+        assert.equal(await vault.read.insuranceDebt(), 15n);
+        assert.equal(await vault.read.halted(), true);
+        await assertInvariants(vault, usdc);
+      });
+
+      it("rejects callers that are not authorized", async () => {
+        const { vault, alice, bob, fund } = await ready();
+        await viem.assertions.revertWithCustomError(
+          vault.write.settleTransfer([fund, alice.account.address, 1n], { account: bob.account }),
+          vault,
+          "NotAuthorized",
+        );
+      });
+    });
+
+    describe("halt", () => {
+      it("keeps settling inside the transaction that crossed the cap", async () => {
+        const { vault, alice, fund, owner } = await ready();
+        await vault.write.setInsuranceDebtCap([10n], { account: owner.account });
+        const harness = await viem.deployContract("InsuranceDebtHarness", []);
+        await vault.write.setAuthorizedCaller([harness.address, true], { account: owner.account });
+        await harness.write.settleTwice([vault.address, fund, alice.account.address, 15n, 5n]);
+        assert.equal(await vault.read.balanceOf([alice.account.address]), 20n);
+        assert.equal(await vault.read.insuranceDebt(), 20n);
+        assert.equal(await vault.read.halted(), true);
+      });
+
+      it("rolls the borrow back when a later withdrawal in the same transaction reverts", async () => {
+        const { vault, usdc, alice, fund, owner } = await ready();
+        await vault.write.setInsuranceDebtCap([10n], { account: owner.account });
+        const harness = await viem.deployContract("InsuranceDebtHarness", []);
+        await usdc.write.transfer([harness.address, 100n], { account: owner.account });
+        await harness.write.approveAndDeposit([usdc.address, vault.address, 100n]);
+        await vault.write.setAuthorizedCaller([harness.address, true], { account: owner.account });
+
+        const usdcInVault = await usdc.read.balanceOf([vault.address]);
+        const harnessUsdc = await usdc.read.balanceOf([harness.address]);
+        await viem.assertions.revertWithCustomError(
+          harness.write.settleThenWithdraw([vault.address, fund, alice.account.address, 15n, 1n]),
+          vault,
+          "Halted",
+        );
+        assert.equal(await usdc.read.balanceOf([vault.address]), usdcInVault);
+        assert.equal(await usdc.read.balanceOf([harness.address]), harnessUsdc);
+        assert.equal(await vault.read.balanceOf([alice.account.address]), 0n);
+        assert.equal(await vault.read.insuranceDebt(), 0n);
+        assert.equal(await vault.read.halted(), false);
+      });
+
+      it("blocks withdrawals and still allows deposits, transfers, and further borrowing", async () => {
+        const { vault, alice, bob, engine, fund, owner } = await ready();
+        await vault.write.setInsuranceDebtCap([10n], { account: owner.account });
+        await vault.write.deposit([50n], { account: alice.account });
+        await vault.write.deposit([20n], { account: engine.account });
+        await vault.write.settleTransfer([fund, bob.account.address, 15n], { account: engine.account });
+        assert.equal(await vault.read.halted(), true);
+
+        await viem.assertions.revertWithCustomError(
+          vault.write.withdraw([1n], { account: alice.account }),
+          vault,
+          "Halted",
+        );
+        await viem.assertions.revertWithCustomError(
+          vault.write.withdrawTo([alice.account.address, 1n], { account: engine.account }),
+          vault,
+          "Halted",
+        );
+
+        await vault.write.deposit([5n], { account: alice.account });
+        await vault.write.internalTransfer([alice.account.address, bob.account.address, 5n], {
+          account: engine.account,
+        });
+        await vault.write.settleTransfer([fund, bob.account.address, 7n], { account: engine.account });
+        assert.equal(await vault.read.insuranceDebt(), 22n);
+        assert.equal(await vault.read.halted(), true);
+      });
+
+      it("stays halted after repayment brings the debt back under the cap", async () => {
+        const { vault, bob, engine, fund, owner } = await ready();
+        await vault.write.setInsuranceDebtCap([10n], { account: owner.account });
+        await vault.write.settleTransfer([fund, bob.account.address, 15n], { account: engine.account });
+        await vault.write.deposit([15n], { account: bob.account });
+        await vault.write.settleTransfer([bob.account.address, fund, 15n], { account: engine.account });
+        assert.equal(await vault.read.insuranceDebt(), 0n);
+        assert.equal(await vault.read.halted(), true);
+      });
+
+      it("resume reverts above the cap and clears the halt at or under it", async () => {
+        const { vault, engine, fund, owner, bob } = await ready();
+        await vault.write.setInsuranceDebtCap([10n], { account: owner.account });
+        await vault.write.settleTransfer([fund, bob.account.address, 15n], { account: engine.account });
+        await viem.assertions.revertWithCustomError(
+          vault.write.resume({ account: owner.account }),
+          vault,
+          "DebtAboveCap",
+        );
+        await vault.write.setInsuranceDebtCap([15n], { account: owner.account });
+        await vault.write.resume({ account: owner.account });
+        assert.equal(await vault.read.halted(), false);
+        await vault.write.deposit([5n], { account: bob.account });
+        await vault.write.withdraw([1n], { account: bob.account });
+      });
+
+      it("restricts halt and resume to the owner", async () => {
+        const { vault, alice } = await ready();
+        await viem.assertions.revertWithCustomError(
+          vault.write.halt({ account: alice.account }),
+          vault,
+          "OwnableUnauthorizedAccount",
+        );
+        await viem.assertions.revertWithCustomError(
+          vault.write.resume({ account: alice.account }),
+          vault,
+          "OwnableUnauthorizedAccount",
+        );
+      });
+
+      it("halts when the margin engine is removed while debt is outstanding", async () => {
+        const { vault, margin, engine, fund, owner, bob } = await ready();
+        const pc = await viem.getPublicClient();
+        await vault.write.setInsuranceDebtCap([100n], { account: owner.account });
+        await vault.write.settleTransfer([fund, bob.account.address, 10n], { account: engine.account });
+        assert.equal(await vault.read.halted(), false);
+        const hash = await vault.write.setMarginEngine([zeroAddress], { account: owner.account });
+        const receipt = await pc.waitForTransactionReceipt({ hash });
+        const halted = parseEventLogs({ abi: vault.abi, eventName: "VaultHalted", logs: receipt.logs });
+        assert.equal(halted.length, 1);
+        assert.equal(Number(halted[0].args.reason), 2);
+        assert.equal(await vault.read.halted(), true);
+        assert.equal(await vault.read.effectiveInsuranceDebtCap(), 0n);
+        await viem.assertions.revertWithCustomError(
+          vault.write.resume({ account: owner.account }),
+          vault,
+          "DebtAboveCap",
+        );
+        await margin.write.setVault([vault.address]);
+        await vault.write.setMarginEngine([margin.address], { account: owner.account });
+        await vault.write.resume({ account: owner.account });
+        assert.equal(await vault.read.halted(), false);
+      });
+
+      it("does not halt when the cap is lowered under the current debt", async () => {
+        const { vault, engine, fund, owner, bob } = await ready();
+        await vault.write.setInsuranceDebtCap([100n], { account: owner.account });
+        await vault.write.settleTransfer([fund, bob.account.address, 20n], { account: engine.account });
+        await vault.write.setInsuranceDebtCap([5n], { account: owner.account });
+        assert.equal(await vault.read.halted(), false);
+        assert.equal(await vault.read.insuranceDebt(), 20n);
+      });
+
+      it("does not halt when the margin engine is cleared with no debt", async () => {
+        const { vault, owner } = await ready();
+        await vault.write.setMarginEngine([zeroAddress], { account: owner.account });
+        assert.equal(await vault.read.halted(), false);
+        assert.equal(await vault.read.effectiveInsuranceDebtCap(), 0n);
+      });
+    });
+
+    describe("repayment", () => {
+      it("repays debt from a trader payment into the fund before the balance can sit there", async () => {
+        const { vault, usdc, bob, engine, fund, owner } = await ready();
+        await vault.write.setInsuranceDebtCap([1000n], { account: owner.account });
+        await vault.write.settleTransfer([fund, bob.account.address, 20n], { account: engine.account });
+        await vault.write.deposit([50n], { account: bob.account });
+        await vault.write.settleTransfer([bob.account.address, fund, 50n], { account: engine.account });
+        assert.equal(await vault.read.insuranceDebt(), 0n);
+        assert.equal(await vault.read.insuranceFundBalance(), 30n);
+        assert.equal(await vault.read.balanceOf([bob.account.address]), 20n);
+        await assertInvariants(vault, usdc);
+      });
+
+      it("repays debt from depositInsuranceFund and counts the deposit as capital", async () => {
+        const { vault, usdc, bob, engine, fund, owner } = await ready();
+        await vault.write.setInsuranceDebtCap([1000n], { account: owner.account });
+        await vault.write.settleTransfer([fund, bob.account.address, 20n], { account: engine.account });
+        await vault.write.depositInsuranceFund([12n], { account: owner.account });
+        assert.equal(await vault.read.insuranceDebt(), 8n);
+        assert.equal(await vault.read.insuranceFundBalance(), 0n);
+        assert.equal(await vault.read.insuranceCapital(), 12n);
+        await assertInvariants(vault, usdc);
+      });
+    });
+
+    describe("initializeV2", () => {
+      it("seeds capital from the existing fund balance and cannot run twice", async () => {
+        const { vault, alice, engine, fund, owner } = await ready();
+        await vault.write.deposit([100n], { account: alice.account });
+        await vault.write.internalTransfer([alice.account.address, fund, 100n], {
+          account: engine.account,
+        });
+        assert.equal(await vault.read.insuranceCapital(), 0n);
+        await vault.write.initializeV2({ account: owner.account });
+        assert.equal(await vault.read.insuranceCapital(), 100n);
+        await viem.assertions.revertWithCustomError(
+          vault.write.initializeV2({ account: owner.account }),
+          vault,
+          "InvalidInitialization",
+        );
+      });
+
+      it("is owner-only", async () => {
+        const { vault, alice } = await ready();
+        await viem.assertions.revertWithCustomError(
+          vault.write.initializeV2({ account: alice.account }),
+          vault,
+          "OwnableUnauthorizedAccount",
+        );
+      });
+    });
+
+    it("follows the empty-fund worked example", async () => {
+      const { vault, usdc, alice, bob, engine, fund, owner } = await ready();
+      const carol = (await viem.getWalletClients())[4];
+      await vault.write.setInsuranceDebtCap([1000n], { account: owner.account });
+
+      await vault.write.settleTransfer([fund, alice.account.address, 20n], { account: engine.account });
+      let snap = await debtSnapshot(vault);
+      assert.deepEqual(snap, {
+        debt: 20n,
+        uncovered: 0n,
+        timing: 20n,
+        capital: 0n,
+        bad: 0n,
+        halted: false,
+      });
+      await assertInvariants(vault, usdc);
+
+      await vault.write.deposit([50n], { account: bob.account });
+      await vault.write.settleTransfer([bob.account.address, fund, 60n], { account: engine.account });
+      snap = await debtSnapshot(vault);
+      assert.deepEqual(snap, {
+        debt: 0n,
+        uncovered: 10n,
+        timing: 0n,
+        capital: 0n,
+        bad: 10n,
+        halted: false,
+      });
+      assert.equal(await vault.read.insuranceFundBalance(), 30n);
+      await assertInvariants(vault, usdc);
+
+      await vault.write.settleTransfer([fund, carol.account.address, 40n], { account: engine.account });
+      snap = await debtSnapshot(vault);
+      assert.deepEqual(snap, {
+        debt: 10n,
+        uncovered: 10n,
+        timing: 0n,
+        capital: 0n,
+        bad: 10n,
+        halted: false,
+      });
+      assert.equal(await vault.read.balanceOf([carol.account.address]), 40n);
+      await assertInvariants(vault, usdc);
+
+      await vault.write.depositInsuranceFund([10n], { account: owner.account });
+      snap = await debtSnapshot(vault);
+      assert.deepEqual(snap, {
+        debt: 0n,
+        uncovered: 0n,
+        timing: 0n,
+        capital: 10n,
+        bad: 10n,
+        halted: false,
+      });
+      await assertInvariants(vault, usdc);
     });
   });
 });

@@ -254,6 +254,9 @@ resource "aws_ecs_service" "perps_mm_use1" {
   deployment_minimum_healthy_percent = 0
   deployment_maximum_percent         = 100
 
+  # Same startup grace as the futures MM service (see 04_futures_mm_svc.tf).
+  health_check_grace_period_seconds = 300
+
   deployment_circuit_breaker {
     enable   = true
     rollback = true

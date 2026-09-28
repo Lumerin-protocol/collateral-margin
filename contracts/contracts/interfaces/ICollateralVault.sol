@@ -19,8 +19,23 @@ interface ICollateralVault is IERC20 {
     /// @notice Transfer balance between two accounts. Authorized callers only.
     function internalTransfer(address from, address to, uint256 amount) external;
 
+    /// @notice Settle a transfer that may come up short. Authorized callers only.
+    /// @dev A trader payer moves `min(balance, amount)` and the rest is bad debt.
+    ///      The insurance fund pays in full, borrowing any shortfall from the pool.
+    /// @return moved Amount credited to `to`.
+    function settleTransfer(address from, address to, uint256 amount) external returns (uint256 moved);
+
     /// @notice Transfer balance between two accounts, reverting if the sender breaches portfolio margin. Authorized callers only.
     function internalTransferWithMarginCheck(address from, address to, uint256 amount) external;
+
+    /// @notice True once a borrow crossed the effective debt cap, the owner halted, or the margin engine was removed while debt was outstanding.
+    function halted() external view returns (bool);
+
+    /// @notice Trader losses the insurance capital does not cover. The top-up the pool is owed.
+    function uncoveredLoss() external view returns (uint256);
+
+    /// @notice Debt backed by losers who have not closed yet.
+    function timingDebt() external view returns (uint256);
 
     /// @notice Withdraw collateral tokens; burns receipt tokens.
     ///         Reverts if the withdrawal would breach portfolio margin requirements.

@@ -1,8 +1,8 @@
 import { Address, BigInt } from "@graphprotocol/graph-ts";
 import { newTypedMockEventWithParams } from "matchstick-as/assembly/defaults";
 import { assert, beforeEach, clearStore, describe, test } from "matchstick-as/assembly/index";
-import { Transfer } from "../generated/CollateralVault/CollateralVault";
-import { handleTransfer } from "../src/vault";
+import { Deposited, Transfer } from "../generated/CollateralVault/CollateralVault";
+import { handleDeposited, handleTransfer } from "../src/vault";
 import {
   INSURANCE_FUND_ADDRESS,
   OPTIONS_ADDRESS,
@@ -33,6 +33,19 @@ function createTransferEvent(
   return event;
 }
 
+function seedDeposit(to: Address, value: BigInt): void {
+  const mint = createTransferEvent(ZERO, to, value);
+  const deposited = newTypedMockEventWithParams<Deposited>([
+    paramAddr("user", to),
+    paramUint("amount", value),
+    paramAddr("sender", to),
+  ]);
+  deposited.transaction.hash = mint.transaction.hash;
+  deposited.transaction.to = mint.transaction.to;
+  handleDeposited(deposited);
+  handleTransfer(mint);
+}
+
 describe("handleTransfer", () => {
   beforeEach(() => {
     clearStore();
@@ -50,11 +63,14 @@ describe("handleTransfer", () => {
     assert.fieldEquals("Vault", "0", "totalSupply", "1000000");
     assert.fieldEquals("Vault", "0", "totalUsers", "1");
     assert.entityCount("VaultInternalTransfer", 0);
+    // A mint with no Deposited log is profit borrowed from the pool.
+    assert.fieldEquals("Vault", "0", "insuranceDebt", "1000000");
+    assert.entityCount("InsuranceDebtEvent", 1);
   });
 
   test("burn debits balance and shrinks totalSupply", () => {
     const alice = userAddress(1);
-    handleTransfer(createTransferEvent(ZERO, alice, BigInt.fromI32(1_000_000)));
+    seedDeposit(alice, BigInt.fromI32(1_000_000));
     handleTransfer(createTransferEvent(alice, ZERO, BigInt.fromI32(400_000)));
 
     assert.fieldEquals("VaultUser", alice.toHexString(), "balance", "600000");
@@ -65,7 +81,7 @@ describe("handleTransfer", () => {
   test("internal transfer between real accounts moves balance and creates VaultInternalTransfer", () => {
     const alice = userAddress(1);
     const bob = userAddress(2);
-    handleTransfer(createTransferEvent(ZERO, alice, BigInt.fromI32(1_000_000)));
+    seedDeposit(alice, BigInt.fromI32(1_000_000));
 
     const transferEvt = createTransferEvent(alice, bob, BigInt.fromI32(250_000));
     handleTransfer(transferEvt);
@@ -89,7 +105,7 @@ describe("handleTransfer", () => {
   test("internal transfer attributes callerCategory by transaction.to", () => {
     const alice = userAddress(1);
     const bob = userAddress(2);
-    handleTransfer(createTransferEvent(ZERO, alice, BigInt.fromI32(2_000_000)));
+    seedDeposit(alice, BigInt.fromI32(2_000_000));
 
     // PERPS-routed transfer
     const perpsCall = createTransferEvent(alice, bob, BigInt.fromI32(100_000), PERPS_ADDRESS);
@@ -119,7 +135,7 @@ describe("handleTransfer", () => {
 
   test("transfers touching the insurance fund update Vault.insuranceFundBalance", () => {
     const alice = userAddress(1);
-    handleTransfer(createTransferEvent(ZERO, alice, BigInt.fromI32(1_000_000)));
+    seedDeposit(alice, BigInt.fromI32(1_000_000));
 
     // Alice → insurance fund (e.g. liquidation penalty). Routed through perps.
     handleTransfer(

@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - "indexer/**"
-      - "contracts/abi/CollateralVault.json"
+      - "contracts/**"
       - ".github/workflows/indexer-tests.yml"
   push:
     branches:
@@ -13,7 +13,7 @@ on:
       - dev
     paths:
       - "indexer/**"
-      - "contracts/abi/CollateralVault.json"
+      - "contracts/**"
       - ".github/workflows/indexer-tests.yml"
 
 jobs:
@@ -35,10 +35,7 @@ jobs:
     needs: pre
     if: needs.pre.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: ./indexer
+    timeout-minutes: 15
 
     steps:
       - name: Checkout code
@@ -54,28 +51,49 @@ jobs:
         with:
           node-version: "24"
           cache: "pnpm"
-          cache-dependency-path: indexer/pnpm-lock.yaml
+          cache-dependency-path: |
+            indexer/pnpm-lock.yaml
+            contracts/pnpm-lock.yaml
 
-      - name: Install dependencies
+      # Integration tests deploy the vault from compiled artifacts.
+      - name: Install contracts dependencies
+        working-directory: ./contracts
+        run: pnpm install --frozen-lockfile
+
+      - name: Compile contracts
+        working-directory: ./contracts
+        run: pnpm compile
+
+      - name: Install indexer dependencies
+        working-directory: ./indexer
         run: pnpm install --frozen-lockfile
 
       # Render subgraph.yaml from the template using the dummy values shipped
       # in .env.example so codegen has something to chew on. Real addresses
       # are only needed at deploy time.
       - name: Prepare subgraph (with .env.example defaults)
+        working-directory: ./indexer
         run: |
           ENV_FILE=.env.example pnpm prepare:env
           echo "--- subgraph.yaml ---"
           cat subgraph.yaml
 
       - name: Codegen
+        working-directory: ./indexer
         run: pnpm codegen
 
       - name: Lint
+        working-directory: ./indexer
         run: pnpm lint
 
       - name: Typecheck
+        working-directory: ./indexer
         run: pnpm typecheck
 
-      - name: Run matchstick tests
+      - name: Run matchstick unit tests
+        working-directory: ./indexer
         run: pnpm test
+
+      - name: Run integration tests
+        working-directory: ./indexer
+        run: pnpm test:integration

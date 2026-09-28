@@ -41,10 +41,13 @@ describe("handleDeposited", () => {
     const alice = userAddress(1);
     const amount = BigInt.fromI32(1_000_000);
 
-    // Real chain order: mint Transfer first, then Deposited.
-    handleTransfer(createTransferEvent(ZERO, alice, amount));
+    // Real chain order: Deposited, then the mint Transfer.
+    const mint = createTransferEvent(ZERO, alice, amount);
     const evt = createDepositedEvent(alice, amount, alice);
+    evt.transaction.hash = mint.transaction.hash;
+    evt.transaction.to = mint.transaction.to;
     handleDeposited(evt);
+    handleTransfer(mint);
 
     const id = evt.transaction.hash.concatI32(evt.logIndex.toI32()).toHexString();
     assert.entityCount("VaultDeposit", 1);
@@ -60,6 +63,9 @@ describe("handleDeposited", () => {
     assert.fieldEquals("Vault", "0", "totalDeposited", amount.toString());
     assert.fieldEquals("Vault", "0", "depositCount", "1");
     assert.fieldEquals("Vault", "0", "totalSupply", amount.toString());
+    assert.fieldEquals("Vault", "0", "insuranceDebt", "0");
+    assert.fieldEquals("VaultUser", alice.toHexString(), "netInternalIn", "0");
+    assert.entityCount("InsuranceDebtEvent", 0);
   });
 
   test("depositFor: receipt mints to recipient, sender field tracks the funder", () => {
@@ -67,8 +73,12 @@ describe("handleDeposited", () => {
     const bob = userAddress(2); // receipt recipient
     const amount = BigInt.fromI32(500_000);
 
-    handleTransfer(createTransferEvent(ZERO, bob, amount));
-    handleDeposited(createDepositedEvent(bob, amount, alice));
+    const mint = createTransferEvent(ZERO, bob, amount);
+    const deposited = createDepositedEvent(bob, amount, alice);
+    deposited.transaction.hash = mint.transaction.hash;
+    deposited.transaction.to = mint.transaction.to;
+    handleDeposited(deposited);
+    handleTransfer(mint);
 
     assert.fieldEquals("VaultUser", bob.toHexString(), "balance", amount.toString());
     assert.fieldEquals("VaultUser", bob.toHexString(), "totalDeposited", amount.toString());
@@ -86,9 +96,11 @@ describe("handleDeposited", () => {
     const ifAddr = INSURANCE_FUND_ADDRESS;
     const amount = BigInt.fromI32(2_500_000);
 
-    handleTransfer(createTransferEvent(ZERO, ifAddr, amount));
+    const mint = createTransferEvent(ZERO, ifAddr, amount);
     const evt = createDepositedEvent(ifAddr, amount, treasury);
+    evt.transaction.hash = mint.transaction.hash;
     handleDeposited(evt);
+    handleTransfer(mint);
 
     const id = evt.transaction.hash.concatI32(evt.logIndex.toI32()).toHexString();
     assert.fieldEquals("VaultDeposit", id, "isInsuranceFund", "true");

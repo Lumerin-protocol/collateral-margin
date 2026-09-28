@@ -160,3 +160,49 @@ variable "webhook_secret" {
   sensitive   = true
   default     = ""
 }
+
+################################################################################
+# INSURANCE-FUND DEBT MONITOR
+################################################################################
+# Reads the vault subgraph and one USDC balanceOf at the subgraph block.
+# notifications_enabled gates alarm actions so the dashboard can be applied
+# and watched before paging is turned on. Warning alarms publish to
+# dev_alerts_topic_name (Slack). Critical alarms publish there as well, except
+# on prd, where they publish to devops_alerts_topic_name (phone). Thresholds
+# are percentages of the on-chain cap, so changing the cap does not require an apply.
+
+variable "vault_monitoring" {
+  description = "Insurance-fund debt monitor (subgraph + one balanceOf). Addresses and the subgraph URL are vault_env, read from config/<env>.env."
+  type = object({
+    create                   = bool
+    notifications_enabled    = bool
+    rate_minutes             = number
+    debt_util_warn_pct       = number
+    debt_util_crit_pct       = number
+    max_subgraph_age_minutes = number
+    oracle_metric_namespace  = string
+    dev_alerts_topic_name    = string
+    devops_alerts_topic_name = string
+  })
+  default = {
+    create                   = false
+    notifications_enabled    = false
+    rate_minutes             = 5
+    debt_util_warn_pct       = 50
+    debt_util_crit_pct       = 80
+    max_subgraph_age_minutes = 15
+    oracle_metric_namespace  = ""
+    dev_alerts_topic_name    = ""
+    devops_alerts_topic_name = ""
+  }
+}
+
+variable "vault_env" {
+  description = "Vault monitor addresses and subgraph URL from config/dev.env or config/prd.env (VAULT_ADDRESS, FUTURES_ADDRESS, PERPS_ADDRESS, VAULT_SUBGRAPH_URL)."
+  type = object({
+    subgraph_url    = string
+    vault_address   = string
+    futures_address = string
+    perps_address   = string
+  })
+}

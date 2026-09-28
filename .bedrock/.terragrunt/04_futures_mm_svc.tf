@@ -235,6 +235,15 @@ resource "aws_ecs_service" "futures_mm_use1" {
   deployment_minimum_healthy_percent = 0
   deployment_maximum_percent         = 100
 
+  # Ignore ALB target health for the first 5 minutes of a task. Measured on
+  # LMN 2026-09-22: /health listens ~4 s after container start and portfolio
+  # init finishes in 21-44 s, but the scheduler still killed nine v1.5.0
+  # tasks in a row for "failed ELB health checks" (TG 30 s x 2, grace 0);
+  # each replacement then raced the dying one on nonces. 300 s covers init
+  # plus a slow RPC with room to spare and still replaces a task that never
+  # comes up within ~6 minutes.
+  health_check_grace_period_seconds = 300
+
   deployment_circuit_breaker {
     enable   = true
     rollback = true
