@@ -12,5 +12,9 @@ export async function writeAndWait(
   simulateResult: { request: WriteContractParameters },
 ) {
   const hash = await writeContract(walletClient, simulateResult.request);
-  return await waitForTransactionReceipt(walletClient, { hash });
+  const receipt = await waitForTransactionReceipt(walletClient, { hash });
+  if (receipt.status !== "success") {
+    throw new Error(`Transaction reverted: ${hash}`);
+  }
+  return receipt;
 }
