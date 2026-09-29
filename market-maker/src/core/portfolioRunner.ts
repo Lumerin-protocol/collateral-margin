@@ -299,6 +299,7 @@ export async function runPortfolioLoop(opts: PortfolioRunnerOpts): Promise<void>
       state = result.state;
       markets = state.markets; // keep health.markets() closure in sync
       consecutiveErrors = result.halted ? consecutiveErrors + 1 : 0;
+      logger.info({ markets: markets.length, halted: result.halted }, "portfolio tick");
     } catch (err) {
       consecutiveErrors++;
       health.status = "error";
