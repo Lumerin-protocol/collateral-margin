@@ -3,8 +3,8 @@
 # Metric filters, alarms, and dashboard for the Futures Market Maker ECS service
 #
 # Mirror of 05_perps_mm_mon.tf with venue-specific names and metric namespace.
-# Log message vocabulary is identical between perps and futures (both apps
-# share src/core/runner.ts).
+# The portfolio runner logs "portfolio tick" once per successful loop.
+# Component alarms do not notify. The composite does.
 ################################################################################
 
 locals {
@@ -80,7 +80,7 @@ resource "aws_cloudwatch_log_metric_filter" "futures_mm_tick_count" {
   provider       = aws.use1
   name           = "${local.shortname}-futures-mm-tick-count"
   log_group_name = aws_cloudwatch_log_group.futures_mm_use1[0].name
-  pattern        = "{ $.msg = \"tick\" }"
+  pattern        = "{ $.msg = \"portfolio tick\" }"
 
   metric_transformation {
     name      = "TickCount"
@@ -307,8 +307,8 @@ resource "aws_cloudwatch_metric_alarm" "futures_mm_halt" {
   statistic           = "Sum"
   threshold           = 1
   treat_missing_data  = "notBreaching"
-  alarm_actions       = [aws_sns_topic.futures_mm_alerts[0].arn]
-  ok_actions          = [aws_sns_topic.futures_mm_alerts[0].arn]
+  alarm_actions       = []
+  ok_actions          = []
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Futures MM HALT Alarm"
@@ -321,7 +321,7 @@ resource "aws_cloudwatch_metric_alarm" "futures_mm_no_tick" {
   count               = var.futures_mm_service.create ? 1 : 0
   provider            = aws.use1
   alarm_name          = "${local.shortname}-futures-mm-no-tick-${local.futures_mm_env_suffix}"
-  alarm_description   = "No tick events for 5+ minutes - futures mm may be down"
+  alarm_description   = "No portfolio tick logs for 5+ minutes - futures mm may be down"
   comparison_operator = "LessThanThreshold"
   evaluation_periods  = 1
   metric_name         = "TickCount"
@@ -330,8 +330,8 @@ resource "aws_cloudwatch_metric_alarm" "futures_mm_no_tick" {
   statistic           = "Sum"
   threshold           = 1
   treat_missing_data  = "breaching"
-  alarm_actions       = [aws_sns_topic.futures_mm_alerts[0].arn]
-  ok_actions          = [aws_sns_topic.futures_mm_alerts[0].arn]
+  alarm_actions       = []
+  ok_actions          = []
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Futures MM No Tick Alarm"
@@ -353,8 +353,8 @@ resource "aws_cloudwatch_metric_alarm" "futures_mm_tick_error" {
   statistic           = "Sum"
   threshold           = 3
   treat_missing_data  = "notBreaching"
-  alarm_actions       = [aws_sns_topic.futures_mm_alerts[0].arn]
-  ok_actions          = [aws_sns_topic.futures_mm_alerts[0].arn]
+  alarm_actions       = []
+  ok_actions          = []
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Futures MM Tick Error Alarm"
@@ -376,8 +376,8 @@ resource "aws_cloudwatch_metric_alarm" "futures_mm_cancel_fail" {
   statistic           = "Sum"
   threshold           = 1
   treat_missing_data  = "notBreaching"
-  alarm_actions       = [aws_sns_topic.futures_mm_alerts[0].arn]
-  ok_actions          = [aws_sns_topic.futures_mm_alerts[0].arn]
+  alarm_actions       = []
+  ok_actions          = []
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Futures MM Cancel Failure Alarm"
@@ -399,8 +399,8 @@ resource "aws_cloudwatch_metric_alarm" "futures_mm_error_rate" {
   statistic           = "Sum"
   threshold           = 5
   treat_missing_data  = "notBreaching"
-  alarm_actions       = [aws_sns_topic.futures_mm_alerts[0].arn]
-  ok_actions          = [aws_sns_topic.futures_mm_alerts[0].arn]
+  alarm_actions       = []
+  ok_actions          = []
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Futures MM Error Rate Alarm"
@@ -422,8 +422,8 @@ resource "aws_cloudwatch_metric_alarm" "futures_mm_multicall_fail" {
   statistic           = "Sum"
   threshold           = 1
   treat_missing_data  = "notBreaching"
-  alarm_actions       = [aws_sns_topic.futures_mm_alerts[0].arn]
-  ok_actions          = [aws_sns_topic.futures_mm_alerts[0].arn]
+  alarm_actions       = []
+  ok_actions          = []
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Futures MM Multicall Failure Alarm"
@@ -740,5 +740,30 @@ resource "aws_cloudwatch_dashboard" "futures_mm" {
         }
       }
     ]
+  })
+}
+
+# The only futures market-maker alarm that notifies. Component alarms stay silent.
+resource "aws_cloudwatch_composite_alarm" "futures_mm_unhealthy" {
+  count             = var.futures_mm_service.create ? 1 : 0
+  provider          = aws.use1
+  alarm_name        = "${local.shortname}-futures-mm-${local.futures_mm_env_suffix}"
+  alarm_description = "Futures market maker is unhealthy"
+
+  alarm_rule = join(" OR ", [
+    "ALARM(${aws_cloudwatch_metric_alarm.futures_mm_halt[0].alarm_name})",
+    "ALARM(${aws_cloudwatch_metric_alarm.futures_mm_no_tick[0].alarm_name})",
+    "ALARM(${aws_cloudwatch_metric_alarm.futures_mm_tick_error[0].alarm_name})",
+    "ALARM(${aws_cloudwatch_metric_alarm.futures_mm_cancel_fail[0].alarm_name})",
+    "ALARM(${aws_cloudwatch_metric_alarm.futures_mm_error_rate[0].alarm_name})",
+    "ALARM(${aws_cloudwatch_metric_alarm.futures_mm_multicall_fail[0].alarm_name})",
+  ])
+
+  alarm_actions = [aws_sns_topic.futures_mm_alerts[0].arn]
+  ok_actions    = [aws_sns_topic.futures_mm_alerts[0].arn]
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Futures MM Unhealthy"
+    Capability = "Monitoring"
   })
 }
