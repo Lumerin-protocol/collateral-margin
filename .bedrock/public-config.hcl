@@ -20,9 +20,10 @@ locals {
 
 inputs = {
   vault_env = {
-    subgraph_url    = local.config_env["VAULT_SUBGRAPH_URL"]
-    vault_address   = local.config_env["VAULT_ADDRESS"]
-    futures_address = local.config_env["FUTURES_ADDRESS"]
-    perps_address   = local.config_env["PERPS_ADDRESS"]
+    subgraph_url        = local.config_env["VAULT_SUBGRAPH_URL"]
+    points_subgraph_url = local.config_env["POINTS_SUBGRAPH_URL"]
+    vault_address       = local.config_env["VAULT_ADDRESS"]
+    futures_address     = local.config_env["FUTURES_ADDRESS"]
+    perps_address       = local.config_env["PERPS_ADDRESS"]
   }
 }

@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 import boto3
 
 SUBGRAPH_URL = os.environ.get("SUBGRAPH_URL", "")
+POINTS_SUBGRAPH_URL = os.environ.get("POINTS_SUBGRAPH_URL", "")
 VAULT_ADDRESS = os.environ.get("VAULT_ADDRESS", "").lower()
 FUTURES_ADDRESS = os.environ.get("FUTURES_ADDRESS", "").lower()
 PERPS_ADDRESS = os.environ.get("PERPS_ADDRESS", "").lower()
@@ -122,6 +123,29 @@ def eth_balance(token, holder, block_number):
     return int(raw, 16)
 
 
+POINTS_QUERY = """
+{
+  _meta { block { number } hasIndexingErrors }
+}
+"""
+
+
+def eth_block_number():
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 1,
+    }
+    result = post_json(ETH_RPC_URL, payload)
+    if result.get("error"):
+        raise RuntimeError("eth_blockNumber: {}".format(result["error"]))
+    raw = result.get("result")
+    if not raw:
+        raise RuntimeError("eth_blockNumber returned empty data")
+    return int(raw, 16)
+
+
 def eth_block_timestamp(block_number):
     # Goldsky leaves _meta.block.timestamp null. The age alarm needs the
     # timestamp of the block the subgraph actually indexed.
@@ -188,6 +212,38 @@ def publish_failure():
         log("failed to publish CheckSuccess=0: {}".format(exc))
 
 
+def blocks_behind(head, indexed):
+    if head is None or indexed is None:
+        return None
+    return max(0, head - indexed)
+
+
+def points_drift(head):
+    # A points failure must not fail the vault debt check.
+    if not POINTS_SUBGRAPH_URL or head is None:
+        return []
+    try:
+        result = post_json(POINTS_SUBGRAPH_URL, {"query": POINTS_QUERY})
+    except Exception as exc:
+        log("points drift failed: {}".format(exc))
+        return []
+    if result.get("errors"):
+        log("points graphql: {}".format(result["errors"]))
+        return []
+    meta = (result.get("data") or {}).get("_meta") or {}
+    block = meta.get("block") or {}
+    raw_number = block.get("number")
+    if raw_number is None:
+        log("points drift missing block number")
+        return []
+    behind = blocks_behind(head, int(raw_number))
+    dims = [{"Name": "Subgraph", "Value": "points"}]
+    return [
+        metric("SubgraphBlocksBehind", behind, "Count", dims),
+        metric("SubgraphIndexingErrors", 1 if meta.get("hasIndexingErrors") else 0, "Count", dims),
+    ]
+
+
 def collect():
     data = query_subgraph()
     meta = data["_meta"]
@@ -216,6 +272,12 @@ def collect():
         gap = 1.0 / float(10 ** decimals)
 
     age = max(0, int(time.time()) - block_timestamp)
+    try:
+        head = eth_block_number()
+    except Exception as exc:
+        log("chain head failed: {}".format(exc))
+        head = None
+    vault_behind = blocks_behind(head, block_number)
     futures_balance = 0
     perps_balance = 0
     if data.get("futuresUser") and data["futuresUser"].get("balance") is not None:
@@ -241,6 +303,16 @@ def collect():
         metric("SubgraphIndexingErrors", 1 if meta.get("hasIndexingErrors") else 0, "Count"),
         metric("CheckSuccess", 1, "Count"),
     ]
+    if vault_behind is not None:
+        points.append(
+            metric(
+                "SubgraphBlocksBehind",
+                vault_behind,
+                "Count",
+                [{"Name": "Subgraph", "Value": "vault"}],
+            )
+        )
+    points.extend(points_drift(head))
     for venue in data.get("vaultVenues") or []:
         points.append(
             metric(
@@ -251,6 +323,8 @@ def collect():
         )
     return points, {
         "block": block_number,
+        "head": head,
+        "behind": vault_behind,
         "age": age,
         "debt": debt,
         "gap_raw": gap_raw,
@@ -278,6 +352,6 @@ def lambda_handler(event, context):
         publish_failure()
         return {"statusCode": 500, "body": str(exc)}
     log(
-        "ok block={block} age={age}s debt={debt} gap_raw={gap_raw} halted={halted}".format(**summary)
+        "ok block={block} head={head} behind={behind} age={age}s debt={debt} gap_raw={gap_raw} halted={halted}".format(**summary)
     )
     return {"statusCode": 200, "body": "ok"}
