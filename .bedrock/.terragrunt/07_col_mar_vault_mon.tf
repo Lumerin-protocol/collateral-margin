@@ -101,12 +101,13 @@ resource "aws_lambda_function" "vault_mon" {
 
   environment {
     variables = {
-      SUBGRAPH_URL    = var.vault_env.subgraph_url
-      VAULT_ADDRESS   = var.vault_env.vault_address
-      FUTURES_ADDRESS = var.vault_env.futures_address
-      PERPS_ADDRESS   = var.vault_env.perps_address
-      ETH_RPC_URL     = "${local.vault_rpc_host}/${var.alchemy_api_key}"
-      CW_NAMESPACE    = local.vault_mon_ns
+      SUBGRAPH_URL        = var.vault_env.subgraph_url
+      POINTS_SUBGRAPH_URL = var.vault_env.points_subgraph_url
+      VAULT_ADDRESS       = var.vault_env.vault_address
+      FUTURES_ADDRESS     = var.vault_env.futures_address
+      PERPS_ADDRESS       = var.vault_env.perps_address
+      ETH_RPC_URL         = "${local.vault_rpc_host}/${var.alchemy_api_key}"
+      CW_NAMESPACE        = local.vault_mon_ns
     }
   }
 
@@ -370,6 +371,52 @@ resource "aws_cloudwatch_metric_alarm" "vault_subgraph_age" {
   })
 }
 
+resource "aws_cloudwatch_metric_alarm" "vault_subgraph_behind" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-subgraph-behind-${local.vault_mon_env}"
+  alarm_description   = "Vault subgraph is more than ${var.vault_monitoring.max_subgraph_age_minutes} minutes of blocks behind the chain head. The tag is still indexing or stalled. Debt readings from the index are not current."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "SubgraphBlocksBehind"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = var.vault_monitoring.max_subgraph_age_minutes * 30
+  treat_missing_data  = "ignore"
+  dimensions          = { Subgraph = "vault" }
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Subgraph Behind"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "points_subgraph_behind" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-points-subgraph-behind-${local.vault_mon_env}"
+  alarm_description   = "Points subgraph is more than ${var.vault_monitoring.max_subgraph_age_minutes} minutes of blocks behind the chain head. The tag is still indexing or stalled."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "SubgraphBlocksBehind"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = var.vault_monitoring.max_subgraph_age_minutes * 30
+  treat_missing_data  = "ignore"
+  dimensions          = { Subgraph = "points" }
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Points Subgraph Behind"
+    Capability = "Monitoring"
+  })
+}
+
 resource "aws_cloudwatch_metric_alarm" "vault_subgraph_errors" {
   count               = var.vault_monitoring.create ? 1 : 0
   provider            = aws.use1
@@ -492,6 +539,8 @@ resource "aws_cloudwatch_dashboard" "vault" {
               aws_cloudwatch_metric_alarm.vault_margin_engine_unset[*].arn,
               aws_cloudwatch_metric_alarm.vault_check_success[*].arn,
               aws_cloudwatch_metric_alarm.vault_subgraph_age[*].arn,
+              aws_cloudwatch_metric_alarm.vault_subgraph_behind[*].arn,
+              aws_cloudwatch_metric_alarm.points_subgraph_behind[*].arn,
               aws_cloudwatch_metric_alarm.vault_subgraph_errors[*].arn,
               aws_cloudwatch_metric_alarm.keeper_unhealthy[*].arn,
               aws_cloudwatch_metric_alarm.keeper_silent[*].arn,
