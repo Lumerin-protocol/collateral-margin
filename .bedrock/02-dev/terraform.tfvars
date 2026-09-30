@@ -19,14 +19,15 @@ perps_mm_service = {
   task_ram        = 512
 }
 
-# Futures Market Maker - replaces the futures-marketplace lambda. No DNS
-# collision (futuresmm.{env}.hashpower.exchange is fresh).
+# Futures Market Maker. 512 CPU is 0.5 vCPU. Fargate's minimum memory at
+# that size is 1024 MB. The 0.25 vCPU task stalled /health under a tick.
 futures_mm_service = {
   create          = true
   task_worker_qty = 1
   cnt_port        = 3001
-  task_cpu        = 256
-  task_ram        = 512
+  task_cpu        = 512
+  task_ram        = 1024
+  ghcr_vers       = "auto" # newest col-mar-mm -dev tag, unless the running task is newer
 }
 
 # Unified liquidation keeper (replaces derivatives svc-perps-keeper-dev).
