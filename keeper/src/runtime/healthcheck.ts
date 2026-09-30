@@ -5,6 +5,7 @@ import type { Config } from "../config.ts";
 import type { CoordinatorExecutor } from "../coordinator/executor.ts";
 import type { CoordinatorQueue } from "../coordinator/queue.ts";
 import type { DeliveryCoordinator } from "../delivery/coordinator.ts";
+import type { BackstopUnwinder } from "../backstop/unwinder.ts";
 import type { FuturesExpiryIndex } from "../discovery/futuresExpiryIndex.ts";
 import type { ParticipantSource } from "../discovery/types.ts";
 import type { PriceFeed } from "../oracle/priceFeed.ts";
@@ -45,6 +46,7 @@ export class Healthcheck {
   private readonly priceFeed: PriceFeed | undefined;
   private readonly futuresExpiryIndex: FuturesExpiryIndex | undefined;
   private readonly deliveryCoordinator: DeliveryCoordinator | undefined;
+  private readonly backstopUnwinder: BackstopUnwinder | undefined;
   private readonly logger: pino.Logger;
 
   constructor(
@@ -58,6 +60,7 @@ export class Healthcheck {
     priceFeed?: PriceFeed,
     futuresExpiryIndex?: FuturesExpiryIndex,
     deliveryCoordinator?: DeliveryCoordinator,
+    backstopUnwinder?: BackstopUnwinder,
   ) {
     this.config = config;
     this.signerAddress = signerAddress;
@@ -68,6 +71,7 @@ export class Healthcheck {
     this.priceFeed = priceFeed;
     this.futuresExpiryIndex = futuresExpiryIndex;
     this.deliveryCoordinator = deliveryCoordinator;
+    this.backstopUnwinder = backstopUnwinder;
     this.logger = logger.child({ component: "healthcheck" });
   }
 
@@ -84,6 +88,7 @@ export class Healthcheck {
       discoveryMode: this.config.chain.discoveryMode,
       dryRun: String(this.config.keeper.dryRun),
       deliveryEnabled: String(this.config.delivery.enabled),
+      backstopUnwindEnabled: String(this.config.backstop.enabled),
       signer: this.signerAddress,
       vault: this.config.vault.address,
       perps: this.config.perps.address,
@@ -124,6 +129,7 @@ export class Healthcheck {
     // queue only ever holds underwater accounts (`mmSurplus < 0`).
     const head = this.queue.peek();
     const expiry = this.futuresExpiryIndex?.stats();
+    const backstop = this.backstopUnwinder?.snapshot();
     const ready = this.lifecycle === "ready" && this.executor.isRunning();
     return {
       ready: ready ? 1 : 0,
@@ -150,6 +156,12 @@ export class Healthcheck {
       futuresReplayFromBlock: expiry?.replayFromBlock?.toString() ?? null,
       futuresReplayHeadBlock: expiry?.replayHeadBlock?.toString() ?? null,
       deliveryTrackedPositions: this.deliveryCoordinator?.size() ?? 0,
+      // Protocol backstop exposure the unwinder saw on its last tick: number of
+      // non-flat legs across venues, unwinds sent, and fee earned (token units).
+      backstopOpenLegs: backstop?.legs.length ?? 0,
+      backstopUnwinds: backstop?.unwinds ?? 0,
+      backstopUnfilledAttempts: backstop?.unfilled ?? 0,
+      backstopFeeEarned: backstop?.feeEarned.toString() ?? "0",
     };
   }
 

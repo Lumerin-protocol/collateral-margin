@@ -281,6 +281,12 @@ function buildConfig(
       bootstrapUsers: overrides.deliveryBootstrapUsers ?? [],
       maxBatchSize: overrides.deliveryMaxBatchSize ?? 50,
     },
+    backstop: {
+      enabled: false,
+      intervalMs: 1_000,
+      maxQtyFutures: 0n,
+      maxQtyPerps: 0n,
+    },
   };
 }
 

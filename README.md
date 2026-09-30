@@ -6,7 +6,7 @@ Deployable Solidity for **unified collateral custody** and **cross-product portf
 
 | Area        | Contracts                                                                                         |
 | ----------- | ------------------------------------------------------------------------------------------------- |
-| Custody     | `CollateralVault` (UUPS upgradeable receipt token + authorized engine transfers)                  |
+| Custody     | `CollateralVault` (UUPS upgradeable receipt token + authorized engine transfers; owns the insurance-fund and protocol-backstop ledgers, see `docs/insurance-debt.md` and `docs/protocol-liquidation-exposure.md`) |
 | Risk        | `PortfolioMarginEngine` (scenario-based portfolio IM/MM)                                          |
 | Integration | `ICollateralVault`, `IPortfolioMarginEngine`, `IHashPowerPerpsDEX`, `IOptionsEnginePortfolioView` |
 | Tests       | Mocks under `contracts/contracts/mocks/` (`USDCMock`, `PerpsDEXMock`, `OptionsEngineMock`, …)     |

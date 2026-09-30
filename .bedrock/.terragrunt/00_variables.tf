@@ -211,12 +211,14 @@ variable "vault_monitoring" {
 }
 
 variable "vault_env" {
-  description = "Vault monitor addresses and subgraph URLs from config/dev.env or config/prd.env (VAULT_ADDRESS, FUTURES_ADDRESS, PERPS_ADDRESS, VAULT_SUBGRAPH_URL, POINTS_SUBGRAPH_URL)."
+  description = "Vault monitor addresses and subgraph URLs from config/dev.env or config/prd.env (VAULT_ADDRESS, FUTURES_ADDRESS, PERPS_ADDRESS, VAULT_SUBGRAPH_URL, POINTS_SUBGRAPH_URL, FUTURES_SUBGRAPH_URL, PERPS_SUBGRAPH_URL). The venue subgraph URLs feed the position-conservation check and may be empty to skip it."
   type = object({
-    subgraph_url        = string
-    points_subgraph_url = string
-    vault_address       = string
-    futures_address     = string
-    perps_address       = string
+    subgraph_url         = string
+    points_subgraph_url  = string
+    futures_subgraph_url = string
+    perps_subgraph_url   = string
+    vault_address        = string
+    futures_address      = string
+    perps_address        = string
   })
 }

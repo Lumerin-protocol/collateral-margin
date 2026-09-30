@@ -11,6 +11,7 @@ import type {
   ParticipantListener,
   ParticipantSource,
 } from "./types.ts";
+import { BACKSTOP_ADDR, isProtocolAccount } from "../protocolAccounts.ts";
 
 export interface ExpiryPosition {
   user: Address;
@@ -388,6 +389,9 @@ export class FuturesExpiryIndex implements ParticipantSource {
       if (args?.user === undefined || args.expirationAt === undefined) continue;
       this.touchParticipant(args.expirationAt, args.user);
       void this.reconcilePosition(args.user, args.expirationAt);
+      // Liquidation hands the closed quantity to the backstop, which then owns a
+      // leg at this expiry that the delivery coordinator must settle at maturity.
+      void this.reconcilePosition(BACKSTOP_ADDR, args.expirationAt);
     }
   }
 
@@ -404,6 +408,12 @@ export class FuturesExpiryIndex implements ParticipantSource {
 
   private touchParticipant(expirationAt: bigint, rawUser: Address): void {
     const user = getAddress(rawUser);
+    // Protocol ledgers are never liquidation candidates. Their *positions* are
+    // still tracked (see `setPosition`) so expiry settlement covers the backstop.
+    if (isProtocolAccount(user)) {
+      this.bucket(expirationAt);
+      return;
+    }
     const existedGlobally = this.has(user);
     const bucket = this.bucket(expirationAt);
     bucket.participants.add(user);

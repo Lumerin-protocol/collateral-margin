@@ -14,6 +14,7 @@ import type {
 } from "./types.ts";
 import { CollateralVaultAbi as collateralVaultAbi } from "collateral-margin-abi/CollateralVault.ts";
 import { HashPowerPerpsDEXAbi as perpsAbi } from "derivatives-marketplace-abi/HashPowerPerpsDEX.ts";
+import { isProtocolAccount } from "../protocolAccounts.ts";
 
 /**
  * Set of user addresses with collateral or open positions/orders that the
@@ -263,6 +264,9 @@ export class ParticipantTracker implements ParticipantSource {
    */
   add(user: Address): boolean {
     const checksummed = getAddress(user);
+    // The insurance fund and the backstop appear in vault transfers and as the
+    // backstop's taker fills; neither is ever liquidatable.
+    if (isProtocolAccount(checksummed)) return false;
     if (this.users.has(checksummed)) return false;
     this.users.add(checksummed);
     this.logger.debug(

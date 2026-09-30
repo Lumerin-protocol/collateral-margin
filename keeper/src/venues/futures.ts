@@ -189,7 +189,23 @@ export class FuturesVenue implements Venue {
     ]);
 
     // Liquidation-fee payout is disabled on-chain — pass 0 so the projection matches.
-    const closes = solveFuturesClosesToTarget(snapshot, params, marketPrice, 0n);
+    const allCloses = solveFuturesClosesToTarget(snapshot, params, marketPrice, 0n);
+    // A matured leg is worth its settlement price, not the live mark: the venue
+    // refuses to liquidate it (`PositionMatured` / skipped in the batch) and the
+    // delivery coordinator settles it instead. Sending it would only waste a slot.
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    const closes = allCloses.filter((c) => c.expirationAt > nowSec);
+    if (closes.length < allCloses.length) {
+      this.logger.info(
+        {
+          user,
+          maturedLegs: allCloses
+            .filter((c) => c.expirationAt <= nowSec)
+            .map((c) => c.expirationAt.toString()),
+        },
+        "Futures reduceToTarget: skipping matured legs (settlement, not liquidation)",
+      );
+    }
     if (closes.length === 0) {
       return { skipped: "nothingToClose" };
     }

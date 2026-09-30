@@ -6,6 +6,11 @@ export const contractErrors = [
   },
   {
     "inputs": [],
+    "name": "BackstopParamOutOfBounds",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "OracleStale",
     "type": "error"
   },

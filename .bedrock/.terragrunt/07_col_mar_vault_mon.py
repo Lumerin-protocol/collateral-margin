@@ -1,9 +1,14 @@
 """
-Insurance-fund debt monitor.
+Insurance-fund debt and protocol-backstop monitor.
 
-One GraphQL query against the vault subgraph, then one eth_call of
-collateralToken.balanceOf(vault) at the subgraph's block. Both sides of the
-backing check describe the same block, so indexer lag cannot open a false gap.
+One GraphQL query against the vault subgraph, then eth_calls pinned to the
+subgraph's block: collateralToken.balanceOf(vault) for the backing check, and
+the venues' backstop views (position legs, unrealized PnL, pending funding) for
+the backstop equity. Every read describes the same block, so indexer lag cannot
+open a false gap.
+
+Conservation (user positions + backstop == 0) comes from the venue subgraphs
+when FUTURES_SUBGRAPH_URL / PERPS_SUBGRAPH_URL are set; it is skipped otherwise.
 
 On any failure this publishes CheckSuccess=0 and no value metrics. Value
 alarms treat missing data as ignore and keep their last state.
@@ -24,9 +29,26 @@ FUTURES_ADDRESS = os.environ.get("FUTURES_ADDRESS", "").lower()
 PERPS_ADDRESS = os.environ.get("PERPS_ADDRESS", "").lower()
 ETH_RPC_URL = os.environ.get("ETH_RPC_URL", "")
 CW_NAMESPACE = os.environ.get("CW_NAMESPACE", "ColMarVault")
+FUTURES_SUBGRAPH_URL = os.environ.get("FUTURES_SUBGRAPH_URL", "")
+PERPS_SUBGRAPH_URL = os.environ.get("PERPS_SUBGRAPH_URL", "")
+
+# CollateralVault.BACKSTOP_ADDR: keyless ledger that inherits liquidated positions.
+BACKSTOP_ADDRESS = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 # balanceOf(address)
 BALANCE_OF_SELECTOR = "70a08231"
+# getRiskView(address) -> (netPositionDelta, unrealizedPnl, pendingFunding, ...)
+RISK_VIEW_SELECTOR = "624f962b"
+# getActiveExpirationDates(address) -> uint256[]
+ACTIVE_EXPIRIES_SELECTOR = "ecd249cb"
+# getUserPosition(address,uint256) -> (netQuantity, netEntryValue)   [futures]
+FUTURES_POSITION_SELECTOR = "1c88ef1e"
+# getUserPosition(address) -> (netQuantity, netEntryValue)           [perps]
+PERPS_POSITION_SELECTOR = "5b7c2dad"
+
+UINT256_MOD = 1 << 256
+INT256_MAX = (1 << 255) - 1
+SUBGRAPH_PAGE = 1000
 
 QUERY = """
 query VaultDebt($futures: Bytes!, $perps: Bytes!) {
@@ -42,6 +64,10 @@ query VaultDebt($futures: Bytes!, $perps: Bytes!) {
     uncoveredLoss
     insuranceCapital
     traderBadDebtTotal
+    backstopBalance
+    backstopBadDebtTotal
+    backstopUnwindBandBps
+    backstopUnwindFeeBps
     totalSupply
     halted
     marginEngine
@@ -51,9 +77,31 @@ query VaultDebt($futures: Bytes!, $perps: Bytes!) {
   vaultVenues(first: 100) {
     id
     traderBadDebtTotal
+    backstopBadDebtTotal
   }
   futuresUser: vaultUser(id: $futures) { balance }
   perpsUser: vaultUser(id: $perps) { balance }
+}
+"""
+
+# Every open futures pointer / perps position, paged by id. Summed per market
+# (and per expiry for futures) the signed quantities must cancel: the backstop
+# inherits liquidated quantity with the user's sign, so it is part of the sum.
+FUTURES_POINTERS_QUERY = """
+query Pointers($block: Int!, $after: Bytes!, $first: Int!) {
+  userDeliverySessionPointers(
+    block: { number: $block }, first: $first, orderBy: id, orderDirection: asc,
+    where: { id_gt: $after, netQuantity_not: 0 }
+  ) { id expirationAt netQuantity }
+}
+"""
+
+PERPS_USERS_QUERY = """
+query Users($block: Int!, $after: Bytes!, $first: Int!) {
+  users(
+    block: { number: $block }, first: $first, orderBy: id, orderDirection: asc,
+    where: { id_gt: $after, netQuantity_not: 0 }
+  ) { id netQuantity }
 }
 """
 
@@ -163,6 +211,111 @@ def eth_block_timestamp(block_number):
     if not raw:
         raise RuntimeError("eth_getBlockByNumber returned no timestamp")
     return int(raw, 16)
+
+
+def eth_call(to, data, block_number):
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "eth_call",
+        "params": [{"to": to, "data": data}, hex(block_number)],
+        "id": 1,
+    }
+    result = post_json(ETH_RPC_URL, payload)
+    if result.get("error"):
+        raise RuntimeError("eth_call {}: {}".format(data[:10], result["error"]))
+    raw = result.get("result")
+    if not raw or raw == "0x":
+        raise RuntimeError("eth_call {} returned empty data".format(data[:10]))
+    return raw[2:]
+
+
+def word(hex_words, index):
+    start = index * 64
+    chunk = hex_words[start : start + 64]
+    if len(chunk) != 64:
+        raise RuntimeError("abi word {} out of range".format(index))
+    return int(chunk, 16)
+
+
+def signed(value):
+    return value - UINT256_MOD if value > INT256_MAX else value
+
+
+def addr_word(address):
+    return address.lower().replace("0x", "").rjust(64, "0")
+
+
+def uint_word(value):
+    return "{:064x}".format(value)
+
+
+def backstop_risk(venue, block_number):
+    """(unrealizedPnl, pendingFunding) of the backstop on one venue, raw units."""
+    data = "0x" + RISK_VIEW_SELECTOR + addr_word(BACKSTOP_ADDRESS)
+    out = eth_call(venue, data, block_number)
+    return signed(word(out, 1)), signed(word(out, 2))
+
+
+def futures_backstop_legs(block_number):
+    """[(expirationAt, netQuantity)] the backstop holds on futures, raw units."""
+    data = "0x" + ACTIVE_EXPIRIES_SELECTOR + addr_word(BACKSTOP_ADDRESS)
+    out = eth_call(FUTURES_ADDRESS, data, block_number)
+    offset = word(out, 0) // 32
+    count = word(out, offset)
+    legs = []
+    for i in range(count):
+        expiration_at = word(out, offset + 1 + i)
+        pos = eth_call(
+            FUTURES_ADDRESS,
+            "0x" + FUTURES_POSITION_SELECTOR + addr_word(BACKSTOP_ADDRESS) + uint_word(expiration_at),
+            block_number,
+        )
+        net = signed(word(pos, 0))
+        if net != 0:
+            legs.append((expiration_at, net))
+    return legs
+
+
+def perps_backstop_net(block_number):
+    out = eth_call(PERPS_ADDRESS, "0x" + PERPS_POSITION_SELECTOR + addr_word(BACKSTOP_ADDRESS), block_number)
+    return signed(word(out, 0))
+
+
+def page_subgraph(url, query, key, block_number):
+    after = "0x"
+    while True:
+        result = post_json(
+            url,
+            {"query": query, "variables": {"block": block_number, "after": after, "first": SUBGRAPH_PAGE}},
+        )
+        if result.get("errors"):
+            raise RuntimeError("graphql {}: {}".format(key, result["errors"]))
+        rows = (result.get("data") or {}).get(key)
+        if rows is None:
+            raise RuntimeError("graphql response missing {}".format(key))
+        for row in rows:
+            yield row
+        if len(rows) < SUBGRAPH_PAGE:
+            return
+        after = rows[-1]["id"]
+
+
+def futures_imbalance(block_number):
+    """Largest |sum of signed pointers| over expiries, raw contract units."""
+    by_expiry = {}
+    for row in page_subgraph(FUTURES_SUBGRAPH_URL, FUTURES_POINTERS_QUERY, "userDeliverySessionPointers", block_number):
+        key = str(row["expirationAt"])
+        by_expiry[key] = by_expiry.get(key, 0) + int(row["netQuantity"])
+    return max([abs(v) for v in by_expiry.values()] or [0])
+
+
+def perps_imbalance(block_number):
+    total = 0
+    for row in page_subgraph(PERPS_SUBGRAPH_URL, PERPS_USERS_QUERY, "users", block_number):
+        total += int(row["netQuantity"])
+    return abs(total)
+
+
 
 
 def as_int(value, name):
@@ -285,6 +438,25 @@ def collect():
     if data.get("perpsUser") and data["perpsUser"].get("balance") is not None:
         perps_balance = as_int(data["perpsUser"]["balance"], "perps balance")
 
+    backstop_balance = as_int(vault.get("backstopBalance", 0), "backstopBalance")
+    backstop_bad_debt = as_int(vault.get("backstopBadDebtTotal", 0), "backstopBadDebtTotal")
+    backstop_upnl = 0
+    backstop_funding = 0
+    futures_legs = []
+    perps_net = 0
+    if not is_unset(FUTURES_ADDRESS):
+        upnl, _funding = backstop_risk(FUTURES_ADDRESS, block_number)
+        backstop_upnl += upnl
+        futures_legs = futures_backstop_legs(block_number)
+    if not is_unset(PERPS_ADDRESS):
+        upnl, funding = backstop_risk(PERPS_ADDRESS, block_number)
+        backstop_upnl += upnl
+        backstop_funding += funding
+        perps_net = perps_backstop_net(block_number)
+    # Equity the vault would see if every backstop leg were closed at the mark
+    # now. Negative means a loss is forming that BadDebt has not recorded yet.
+    backstop_equity = backstop_balance + backstop_upnl + backstop_funding
+
     points = [
         metric("InsuranceFundBalance", to_units(as_int(vault["insuranceFundBalance"], "fund"), decimals)),
         metric("InsuranceDebt", to_units(debt, decimals)),
@@ -294,6 +466,17 @@ def collect():
         metric("UncoveredLoss", to_units(as_int(vault["uncoveredLoss"], "uncoveredLoss"), decimals)),
         metric("InsuranceCapital", to_units(capital, decimals)),
         metric("TraderBadDebtTotal", to_units(as_int(vault["traderBadDebtTotal"], "traderBadDebt"), decimals)),
+        metric("BackstopBadDebtTotal", to_units(backstop_bad_debt, decimals)),
+        metric("BackstopBalance", to_units(backstop_balance, decimals)),
+        metric("BackstopUnrealizedPnl", to_units(backstop_upnl, decimals)),
+        metric("BackstopPendingFunding", to_units(backstop_funding, decimals)),
+        metric("BackstopEquity", to_units(backstop_equity, decimals)),
+        metric("BackstopUnwindBandBps", as_int(vault.get("backstopUnwindBandBps", 0), "band"), "Count"),
+        metric("BackstopUnwindFeeBps", as_int(vault.get("backstopUnwindFeeBps", 0), "fee"), "Count"),
+        metric("BackstopOpenLegs", len(futures_legs) + (1 if perps_net != 0 else 0), "Count"),
+        # Raw contract units: futures counts whole contracts, perps is 1e6-scaled.
+        metric("BackstopFuturesNetQuantity", sum(net for _e, net in futures_legs), "Count"),
+        metric("BackstopPerpsNetQuantity", perps_net, "Count"),
         metric("Halted", 1 if vault.get("halted") else 0, "Count"),
         metric("FuturesFeeBalance", to_units(futures_balance, decimals)),
         metric("PerpsFeeBalance", to_units(perps_balance, decimals)),
@@ -314,13 +497,45 @@ def collect():
         )
     points.extend(points_drift(head))
     for venue in data.get("vaultVenues") or []:
+        dims = [{"Name": "Venue", "Value": str(venue["id"])}]
         points.append(
             metric(
                 "TraderBadDebtTotal",
                 to_units(as_int(venue["traderBadDebtTotal"], "venue bad debt"), decimals),
-                dimensions=[{"Name": "Venue", "Value": str(venue["id"])}],
+                dimensions=dims,
             )
         )
+        points.append(
+            metric(
+                "BackstopBadDebtTotal",
+                to_units(as_int(venue.get("backstopBadDebtTotal", 0), "venue backstop bad debt"), decimals),
+                dimensions=dims,
+            )
+        )
+    for expiration_at, net in futures_legs:
+        points.append(
+            metric(
+                "BackstopFuturesNetQuantity",
+                net,
+                "Count",
+                dimensions=[{"Name": "ExpirationAt", "Value": str(expiration_at)}],
+            )
+        )
+
+    # Conservation: the signed positions of every account, backstop included,
+    # cancel per market. A non-zero sum means the indexer or the venue lost a
+    # leg; the alarm is on the max imbalance across markets.
+    imbalance = 0
+    conservation_checked = False
+    if FUTURES_SUBGRAPH_URL and not is_unset(FUTURES_ADDRESS):
+        imbalance = max(imbalance, futures_imbalance(block_number))
+        conservation_checked = True
+    if PERPS_SUBGRAPH_URL and not is_unset(PERPS_ADDRESS):
+        imbalance = max(imbalance, perps_imbalance(block_number))
+        conservation_checked = True
+    if conservation_checked:
+        points.append(metric("PositionImbalance", imbalance, "Count"))
+
     return points, {
         "block": block_number,
         "head": head,
@@ -329,6 +544,8 @@ def collect():
         "debt": debt,
         "gap_raw": gap_raw,
         "halted": bool(vault.get("halted")),
+        "backstop_equity": backstop_equity,
+        "imbalance": imbalance,
     }
 
 
@@ -352,6 +569,7 @@ def lambda_handler(event, context):
         publish_failure()
         return {"statusCode": 500, "body": str(exc)}
     log(
-        "ok block={block} head={head} behind={behind} age={age}s debt={debt} gap_raw={gap_raw} halted={halted}".format(**summary)
+        "ok block={block} head={head} behind={behind} age={age}s debt={debt} gap_raw={gap_raw} halted={halted} "
+        "backstop_equity={backstop_equity} imbalance={imbalance}".format(**summary)
     )
     return {"statusCode": 200, "body": "ok"}

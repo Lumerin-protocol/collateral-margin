@@ -8,6 +8,8 @@ type Vault @entity(immutable: false) {
   collateralToken: Bytes!
   marginEngine: Bytes!
   insuranceFundAddress: Bytes!
+  "Keyless protocol backstop ledger that inherits liquidated positions (`BACKSTOP_ADDR`)."
+  backstopAddress: Bytes!
   decimals: Int!
 
   # Lifetime stats
@@ -17,6 +19,8 @@ type Vault @entity(immutable: false) {
   insuranceFundWithdrawn: BigInt! # cumulative gross insurance-fund withdrawals
   totalSupply: BigInt! # current outstanding receipt tokens
   insuranceFundBalance: BigInt! # current INSURANCE_FUND_ADDR balance
+  backstopBalance: BigInt! # current BACKSTOP_ADDR balance (receipt tokens; unfunded backstop sits at 0)
+  backstopWithdrawn: BigInt! # cumulative `withdrawBackstop` sweeps
   totalUsers: Int! # number of distinct addresses with non-zero historical activity
 
   # Counters
@@ -30,6 +34,12 @@ type Vault @entity(immutable: false) {
   insuranceDebtBorrowedTotal: BigInt!
   insuranceDebtRepaidTotal: BigInt!
   traderBadDebtTotal: BigInt!
+  "Share of traderBadDebtTotal whose payer was the protocol backstop (it is left unfunded, so its losses land here)."
+  backstopBadDebtTotal: BigInt!
+  "Backstop unwind band (bps around the mark) shared by every venue."
+  backstopUnwindBandBps: Int!
+  "Backstop unwind caller fee (bps of filled notional) shared by every venue."
+  backstopUnwindFeeBps: Int!
   "Protocol capital: insurance deposits minus withdrawals. May be negative."
   insuranceCapital: BigInt!
   uncoveredLoss: BigInt!
@@ -112,6 +122,8 @@ type VaultWithdrawal @entity(immutable: true) {
   amount: BigInt!
   "True when this withdrawal debits the insurance-fund vanity address."
   isInsuranceFund: Boolean!
+  "True when this withdrawal debits the protocol backstop ledger (`withdrawBackstop`)."
+  isBackstop: Boolean!
 
   # Metadata
   timestamp: BigInt!
@@ -174,6 +186,8 @@ type VaultVenue @entity(immutable: false) {
   address: Bytes!
   "Shortfalls owed to the insurance fund. These increase uncovered loss."
   traderBadDebtTotal: BigInt!
+  "Share of traderBadDebtTotal paid by the protocol backstop ledger."
+  backstopBadDebtTotal: BigInt!
   "Fee shortfalls. Lost revenue; they do not increase uncovered loss."
   feeBadDebtTotal: BigInt!
   badDebts: [BadDebtEvent!]! @derivedFrom(field: "venue")
@@ -186,6 +200,8 @@ type BadDebtEvent @entity(immutable: true) {
   amount: BigInt!
   venue: VaultVenue!
   kind: BadDebtKind!
+  "True when the payer is the protocol backstop ledger rather than a trader."
+  isBackstop: Boolean!
   timestamp: BigInt!
   blockNumber: BigInt!
   transactionHash: Bytes!
@@ -201,6 +217,15 @@ type InsuranceDebtEvent @entity(immutable: true) {
   to: Bytes!
   amount: BigInt!
   debtAfter: BigInt!
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
+}
+
+type BackstopParamsChange @entity(immutable: true) {
+  id: Bytes! # tx hash + log index
+  unwindBandBps: Int!
+  unwindFeeBps: Int!
   timestamp: BigInt!
   blockNumber: BigInt!
   transactionHash: Bytes!

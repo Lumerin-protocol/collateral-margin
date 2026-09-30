@@ -16,6 +16,12 @@ interface ICollateralVault is IERC20 {
     /// @notice Constant vanity address used as the shared insurance fund ledger account.
     function INSURANCE_FUND_ADDR() external pure returns (address);
 
+    /// @notice Constant vanity address that holds liquidation leftovers as explicit positions.
+    function BACKSTOP_ADDR() external pure returns (address);
+
+    /// @notice Unwind band (bps around the mark) and caller fee (bps of notional) for `unwindBackstop`.
+    function backstopParams() external view returns (uint16 unwindBandBps, uint16 unwindFeeBps);
+
     /// @notice Transfer balance between two accounts. Authorized callers only.
     function internalTransfer(address from, address to, uint256 amount) external;
 

@@ -20,6 +20,7 @@ import { PriceFeed } from "./oracle/priceFeed.ts";
 import { EthUsdFeed } from "./oracle/ethUsdFeed.ts";
 import { PredictiveCoordinator } from "./predict/coordinator.ts";
 import { DeliveryCoordinator } from "./delivery/coordinator.ts";
+import { BackstopUnwinder } from "./backstop/unwinder.ts";
 import type { Venue } from "./venues/types.ts";
 
 /**
@@ -150,6 +151,14 @@ async function main(): Promise<void> {
     );
   }
 
+  // Optional: shrink the protocol backstop's inherited positions through the
+  // permissionless, fee-paying `unwindBackstop` on both venues. Off by default;
+  // see `backstop/unwinder.ts`.
+  let backstopUnwinder: BackstopUnwinder | undefined;
+  if (config.backstop.enabled) {
+    backstopUnwinder = new BackstopUnwinder(chain, config, logger, ethUsdFeed);
+  }
+
   const health = new Healthcheck(
     config,
     chain.account.address,
@@ -161,6 +170,7 @@ async function main(): Promise<void> {
     priceFeed,
     futuresExpiryIndex,
     deliveryCoordinator,
+    backstopUnwinder,
   );
 
   // Always-on gas-balance monitor on the keeper signer. Logs INFO with
@@ -193,6 +203,7 @@ async function main(): Promise<void> {
     priceFeed.stop();
     balanceMonitor.stop();
     ethUsdFeed?.stop();
+    backstopUnwinder?.stop();
     deliveryCoordinator?.stop();
     futuresExpiryIndex.stop();
     await executor.stop();
@@ -220,6 +231,7 @@ async function main(): Promise<void> {
   await futuresExpiryIndex.start();
   if (webhookIngester !== undefined) await webhookIngester.start();
   if (deliveryCoordinator !== undefined) await deliveryCoordinator.start();
+  if (backstopUnwinder !== undefined) await backstopUnwinder.start();
   await executor.start();
   scheduler.start();
   // Eager initial check (logs the boot-time balance) + interval polling.

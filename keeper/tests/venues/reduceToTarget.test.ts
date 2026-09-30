@@ -8,7 +8,10 @@ import type { Config } from "../../src/config.ts";
 const FUTURES = "0x000000000000000000000000000000000000F00d" as Address;
 const USER = "0x0000000000000000000000000000000000000b0b" as Address;
 const USDC = "0x000000000000000000000000000000000000aa05" as Address;
-const EXPIRY = 1_756_416_000n;
+/** Always in the future: the venue skips matured legs (they belong to settlement). */
+const EXPIRY = BigInt(Math.floor(Date.now() / 1000)) + 30n * 86_400n;
+/** Already matured: must never reach `liquidatePositions`. */
+const MATURED_EXPIRY = BigInt(Math.floor(Date.now() / 1000)) - 86_400n;
 
 const IM_SHOCK = 10n ** 17n;
 const MM_SHOCK = 5n * 10n ** 16n;
@@ -71,7 +74,9 @@ function makeChainStub(opts: {
   netQuantity: bigint;
   netEntryValue: bigint;
   onSimulate: (call: ReadCall) => void;
+  expiry?: bigint;
 }): Chain {
+  const expiry = opts.expiry ?? EXPIRY;
   return {
     account: { address: "0x0000000000000000000000000000000000009999" as Address },
     publicClient: {
@@ -84,7 +89,7 @@ function makeChainStub(opts: {
         const fns = contracts.map((c) => c.functionName);
         if (fns[0] === "imSpotShock") return [IM_SHOCK, MM_SHOCK, 6, 6];
         if (fns[0] === "balanceOf") {
-          return snapshotMulticall(opts.balance, [EXPIRY]);
+          return snapshotMulticall(opts.balance, [expiry]);
         }
         if (fns[0] === "getUserPosition") {
           // Per-expiry batch: positions, settlement prices, order aggregates.
@@ -182,6 +187,64 @@ describe("futures venue: reduceToTarget", () => {
     const [, expirationAts] = simulated?.args as [Address, bigint[], bigint[]];
     assert.equal(expirationAts.length, 2, "capped to 2 expiry legs");
     assert.ok("feeEarned" in outcome);
+  });
+
+  it("drops matured legs from the batch and leaves them to settlement", async () => {
+    let simulated: ReadCall | undefined;
+    const chain = {
+      account: { address: "0x0000000000000000000000000000000000009999" as Address },
+      publicClient: {
+        readContract: async (call: ReadCall) => {
+          if (call.functionName === "getMarketPrice") return 100_000n;
+          if (call.functionName === "collateralToken") return USDC;
+          throw new Error(`unexpected readContract: ${call.functionName}`);
+        },
+        multicall: async ({ contracts }: { contracts: readonly ReadCall[] }) => {
+          const fns = contracts.map((c) => c.functionName);
+          if (fns[0] === "imSpotShock") return [IM_SHOCK, MM_SHOCK, 6, 6];
+          if (fns[0] === "balanceOf") {
+            return snapshotMulticall(1_000_000n, [MATURED_EXPIRY, EXPIRY]);
+          }
+          if (fns[0] === "getUserPosition") {
+            return contracts.map((c) => {
+              if (c.functionName === "settlementPrice") return 0n;
+              if (c.functionName === "getOrderAggregateAtExpiration") {
+                return { buyQty: 0n, sellQty: 0n, buyValue: 0n, sellValue: 0n };
+              }
+              return { netQuantity: 4n, netEntryValue: 4n * 40_000_000n };
+            });
+          }
+          throw new Error(`unexpected multicall head: ${fns[0]}`);
+        },
+        simulateContract: async (call: ReadCall) => {
+          simulated = call;
+          return { request: { ...call } };
+        },
+      },
+    } as unknown as Chain;
+
+    const venue = new FuturesVenue(chain, makeConfigStub(true), silentLogger);
+    const outcome = await venue.reduceToTarget(USER);
+    assert.ok(simulated, "the live leg is still liquidated");
+    const [, expirationAts] = simulated?.args as [Address, bigint[], bigint[]];
+    assert.deepEqual(expirationAts, [EXPIRY], "matured leg filtered out");
+    assert.ok("feeEarned" in outcome);
+  });
+
+  it("returns nothingToClose when only matured legs remain", async () => {
+    const chain = makeChainStub({
+      balance: 136_000_000n,
+      marketPrice: 30_000_000n,
+      netQuantity: 12n,
+      netEntryValue: 12n * 40_000_000n,
+      onSimulate: () => {
+        throw new Error("should not simulate");
+      },
+      expiry: MATURED_EXPIRY,
+    });
+    const venue = new FuturesVenue(chain, makeConfigStub(true), silentLogger);
+    const outcome = await venue.reduceToTarget(USER);
+    assert.deepEqual(outcome, { skipped: "nothingToClose" });
   });
 
   it("returns nothingToClose when already healthy", async () => {

@@ -5,6 +5,7 @@ import type pino from "pino";
 import { ParticipantTracker } from "../../src/discovery/tracker.ts";
 import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
+import { BACKSTOP_ADDR, INSURANCE_FUND_ADDR } from "../../src/protocolAccounts.ts";
 
 function userAt(idx: number): Address {
   return getAddress(`0x${(idx + 1).toString(16).padStart(40, "0")}` as Address);
@@ -76,6 +77,18 @@ describe("ParticipantTracker: add / remove / list", () => {
     assert.equal(t.add(userAt(0)), true, "first add");
     assert.equal(t.add(userAt(0)), false, "duplicate");
     assert.equal(t.size(), 1);
+  });
+
+  it("never tracks the vault's protocol ledgers (insurance fund, backstop)", () => {
+    const t = new ParticipantTracker(makeChain(), makeConfig(), silentLogger);
+    const added: Address[] = [];
+    t.onAdded((u) => added.push(u));
+    assert.equal(t.add(INSURANCE_FUND_ADDR), false);
+    assert.equal(t.add(BACKSTOP_ADDR), false);
+    assert.equal(t.add(BACKSTOP_ADDR.toLowerCase() as Address), false, "case-insensitive");
+    assert.equal(t.size(), 0);
+    assert.deepEqual(added, []);
+    assert.equal(t.has(BACKSTOP_ADDR), false);
   });
 
   it("treats addresses as case-insensitive (checksum-normalised)", () => {
