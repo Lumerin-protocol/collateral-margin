@@ -3,6 +3,11 @@
 # Lambda reads the vault subgraph and one USDC balanceOf at that block.
 # Keeper liveness (target health + sweep heartbeat) lives here too: a late
 # keeper is what turns collectible debt into bad debt.
+#
+# The package is monitor/ zipped as-is: Node 24 runs the .ts sources without
+# transpiling and node_modules holds only viem after the prod install that a
+# terragrunt before_hook (root.hcl) runs on plan/apply. The AWS SDK comes
+# from the runtime.
 ################################################################################
 
 locals {
@@ -26,7 +31,8 @@ locals {
 data "archive_file" "vault_mon" {
   count       = var.vault_monitoring.create ? 1 : 0
   type        = "zip"
-  source_file = "${path.module}/07_col_mar_vault_mon.py"
+  source_dir  = var.vault_mon_dir
+  excludes    = ["tests", "tsconfig.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]
   output_path = "${path.module}/07_col_mar_vault_mon.zip"
 }
 
@@ -91,8 +97,8 @@ resource "aws_lambda_function" "vault_mon" {
   function_name = local.vault_mon_name
   description   = "Publishes insurance-fund debt, halt, backing, and protocol-backstop metrics from the vault subgraph and venue views"
   role          = aws_iam_role.vault_mon[0].arn
-  handler       = "07_col_mar_vault_mon.lambda_handler"
-  runtime       = "python3.12"
+  handler       = "index.handler"
+  runtime       = "nodejs24.x"
   timeout       = 120
   memory_size   = 128
 
@@ -101,15 +107,13 @@ resource "aws_lambda_function" "vault_mon" {
 
   environment {
     variables = {
-      SUBGRAPH_URL         = var.vault_env.subgraph_url
-      POINTS_SUBGRAPH_URL  = var.vault_env.points_subgraph_url
-      FUTURES_SUBGRAPH_URL = var.vault_env.futures_subgraph_url
-      PERPS_SUBGRAPH_URL   = var.vault_env.perps_subgraph_url
-      VAULT_ADDRESS        = var.vault_env.vault_address
-      FUTURES_ADDRESS      = var.vault_env.futures_address
-      PERPS_ADDRESS        = var.vault_env.perps_address
-      ETH_RPC_URL          = "${local.vault_rpc_host}/${var.alchemy_api_key}"
-      CW_NAMESPACE         = local.vault_mon_ns
+      SUBGRAPH_URL        = var.vault_env.subgraph_url
+      POINTS_SUBGRAPH_URL = var.vault_env.points_subgraph_url
+      VAULT_ADDRESS       = var.vault_env.vault_address
+      FUTURES_ADDRESS     = var.vault_env.futures_address
+      PERPS_ADDRESS       = var.vault_env.perps_address
+      ETH_RPC_URL         = "${local.vault_rpc_host}/${var.alchemy_api_key}"
+      CW_NAMESPACE        = local.vault_mon_ns
     }
   }
 
@@ -237,28 +241,6 @@ resource "aws_cloudwatch_metric_alarm" "vault_backstop_equity" {
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Vault Backstop Equity"
-    Capability = "Monitoring"
-  })
-}
-
-resource "aws_cloudwatch_metric_alarm" "vault_position_imbalance" {
-  count               = var.vault_monitoring.create ? 1 : 0
-  provider            = aws.use1
-  alarm_name          = "${local.shortname}-vault-position-imbalance-${local.vault_mon_env}"
-  alarm_description   = "Signed positions across all accounts (backstop included) do not sum to zero on some market or expiry. Either a venue subgraph dropped a leg or a venue mis-booked a liquidation hand-off. Compare the subgraph pointers with getUserPosition on-chain for that market before touching anything; do not unwind or top up on this alarm alone. Critical."
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 2
-  metric_name         = "PositionImbalance"
-  namespace           = local.vault_mon_ns
-  period              = 300
-  statistic           = "Maximum"
-  threshold           = 0
-  treat_missing_data  = "ignore"
-  alarm_actions       = local.vault_alert_actions
-  ok_actions          = local.vault_alert_actions
-
-  tags = merge(var.default_tags, var.foundation_tags, {
-    Name       = "Col-Mar Vault Position Imbalance"
     Capability = "Monitoring"
   })
 }
@@ -579,7 +561,6 @@ resource "aws_cloudwatch_dashboard" "vault" {
             alarms = concat(
               aws_cloudwatch_metric_alarm.vault_uncovered_loss[*].arn,
               aws_cloudwatch_metric_alarm.vault_backstop_equity[*].arn,
-              aws_cloudwatch_metric_alarm.vault_position_imbalance[*].arn,
               aws_cloudwatch_metric_alarm.vault_util_warn[*].arn,
               aws_cloudwatch_metric_alarm.vault_util_crit[*].arn,
               aws_cloudwatch_metric_alarm.vault_halted[*].arn,
@@ -726,7 +707,6 @@ resource "aws_cloudwatch_dashboard" "vault" {
               [local.vault_mon_ns, "BackstopFuturesNetQuantity", { label = "Futures net contracts" }],
               [local.vault_mon_ns, "BackstopPerpsNetQuantity", { label = "Perps net (1e6)" }],
               [local.vault_mon_ns, "BackstopOpenLegs", { label = "Open legs", stat = "Maximum" }],
-              [local.vault_mon_ns, "PositionImbalance", { label = "Position imbalance", color = "#d62728", stat = "Maximum" }],
             ]
           }
         },

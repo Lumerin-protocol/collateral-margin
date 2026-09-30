@@ -5,17 +5,24 @@ remote_state {
     if_exists = "overwrite_terragrunt"
   }
   config = {
-    profile         = "titanio-mst"
-    bucket          = "titanio-terraform-states"
-    use_lockfile    = true
-    key             = "state/titanio/afs/collateral-margin/${substr(path_relative_to_include(),3, 3)}.tfstate"
-    region          = "us-east-1"
-    encrypt         = true
-    kms_key_id      = "arn:aws:kms:us-east-1:228930573471:alias/foundation-cmk-s3"
-    acl             = "bucket-owner-full-control"
+    profile      = "titanio-mst"
+    bucket       = "titanio-terraform-states"
+    use_lockfile = true
+    key          = "state/titanio/afs/collateral-margin/${substr(path_relative_to_include(), 3, 3)}.tfstate"
+    region       = "us-east-1"
+    encrypt      = true
+    kms_key_id   = "arn:aws:kms:us-east-1:228930573471:alias/foundation-cmk-s3"
+    acl          = "bucket-owner-full-control"
   }
 }
 
 terraform {
   source = "../.terragrunt/"
+
+  # The vault monitor Lambda is monitor/ zipped as-is. The prod install leaves
+  # only runtime dependencies in node_modules. Needs node and pnpm on the runner.
+  before_hook "monitor_deps" {
+    commands = ["plan", "apply"]
+    execute  = ["sh", "-c", "cd '${get_parent_terragrunt_dir()}/../monitor' && pnpm install --prod --frozen-lockfile"]
+  }
 }

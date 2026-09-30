@@ -1,0 +1,26 @@
+{
+  "name": "collateral-margin-monitor",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Vault debt and protocol-backstop monitor. Runs as a Lambda every few minutes and publishes CloudWatch metrics.",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.ts\"",
+    "typecheck": "tsgo --noEmit",
+    "lint": "biome lint .",
+    "lint:fix": "biome check --write ."
+  },
+  "dependencies": {
+    "viem": "^2.48.8"
+  },
+  "devDependencies": {
+    "@aws-sdk/client-cloudwatch": "^3.1143.0",
+    "@biomejs/biome": "2.4.13",
+    "@types/node": "^24.19.0",
+    "@typescript/native-preview": "7.0.0-dev.20260511.1"
+  },
+  "packageManager": "pnpm@11.22.0"
+}

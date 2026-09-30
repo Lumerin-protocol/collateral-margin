@@ -85,8 +85,9 @@ Conservation now holds on-chain:
 sum(user net positions) + backstop net position = 0
 ```
 
-per perps market and per futures expiry. The vault monitor checks it from the
-venue subgraphs (`PositionImbalance`).
+per perps market and per futures expiry. The contracts hold it by construction
+(every fill and every backstop hand-off moves quantity between two accounts);
+the venue invariant tests assert it.
 
 ### Matured futures legs
 
@@ -236,7 +237,7 @@ UI: the contract-specs modal has a "Protocol backstop" section (open legs with
 entry, ledger balance, band, fee) for each venue, and the public trades feed
 tags liquidation and backstop prints.
 
-Monitoring (`col-mar-vault-{env}` dashboard, [07_col_mar_vault_mon.py](../.bedrock/.terragrunt/07_col_mar_vault_mon.py)):
+Monitoring (`col-mar-vault-{env}` dashboard, [monitor/](../monitor/src/index.ts)):
 
 | Metric | Meaning |
 | --- | --- |
@@ -245,7 +246,6 @@ Monitoring (`col-mar-vault-{env}` dashboard, [07_col_mar_vault_mon.py](../.bedro
 | `BackstopBadDebtTotal` | Realized backstop losses, vault-wide and per venue. Included in `TraderBadDebtTotal` and `UncoveredLoss`. |
 | `BackstopFuturesNetQuantity` (total and per `ExpirationAt`), `BackstopPerpsNetQuantity`, `BackstopOpenLegs` | Exposure in raw units. |
 | `BackstopUnwindBandBps`, `BackstopUnwindFeeBps` | Current parameters. |
-| `PositionImbalance` | Max over markets of the absolute signed position sum from the venue subgraphs. Critical alarm above 0 for two periods. Skipped when the venue subgraph URLs are not configured. |
 
 ## Operating the backstop
 
@@ -258,9 +258,6 @@ Monitoring (`col-mar-vault-{env}` dashboard, [07_col_mar_vault_mon.py](../.bedro
 - Backstop balance positive: sweep with `withdrawBackstop` into the fund when
   convenient. It is also margin-free collateral for nothing, so there is no
   reason to leave it.
-- Position imbalance: compare the subgraph pointers with `getUserPosition` on
-  chain for the flagged market before touching anything. A venue bug here means
-  revoking the venue, as for a backing gap.
 - Parameters: `setBackstopParams(bandBps, feeBps)` on the vault applies to both
   venues at once. Start at `(0, 0)` and raise only when the ledger has legs that
   the book is not taking at the mark.

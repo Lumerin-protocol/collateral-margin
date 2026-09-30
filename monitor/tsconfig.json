@@ -1,0 +1,20 @@
+{
+  // Typecheck only (tsgo --noEmit, editor). Node 24 runs the .ts files directly
+  // and never reads this file; erasableSyntaxOnly keeps the code strippable.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "strict": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "types": ["node"],
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src", "tests"]
+}

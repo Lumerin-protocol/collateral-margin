@@ -62,7 +62,6 @@ Amounts below are USDC on the `col-mar-vault-{env}` dashboard. Alarm text matche
 | Timing debt above 0 | none | Backed by open losers. Leave it. |
 | Uncovered loss above 0 | critical | Top up exactly that amount with `depositInsuranceFund`. The alarm clears on its own. Never raise the cap to cover it. |
 | Backstop equity below 0 | warning | Positions the backstop inherited from liquidations are losing at the mark. Nothing is booked yet; it becomes uncovered loss when the legs unwind, offset, or settle. Make sure unwinds are flowing (keeper `BACKSTOP_UNWIND_ENABLED`, or call `unwindBackstop`) and plan the top-up. Do not deposit into the backstop. |
-| Position imbalance above 0 | critical | Signed positions across all accounts, backstop included, do not cancel on some market. Compare the venue subgraph with `getUserPosition` on chain before acting; a venue bug here is handled like a backing gap. |
 | Utilization at or above 50% | warning | Confirm uncovered loss is 0 and the keeper and oracle are healthy. If it is only timing debt, raise the cap. |
 | Utilization at or above 80% | critical | Same checks. Raise the cap or top up before a borrow crosses 100% and halts the vault. |
 | Vault halted | critical | Follow [Resume](#resume). |
