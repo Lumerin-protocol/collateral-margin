@@ -19,6 +19,9 @@ locals {
 }
 
 inputs = {
+  # Whole file. The futures market-maker task definition reads this when it
+  # has to register a new revision. CI deploy reads the same file.
+  public_env = local.config_env
   vault_env = {
     subgraph_url        = local.config_env["VAULT_SUBGRAPH_URL"]
     points_subgraph_url = local.config_env["POINTS_SUBGRAPH_URL"]

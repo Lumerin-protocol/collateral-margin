@@ -1,19 +1,51 @@
 ################################################################################
-# FUTURES MARKET MAKER - ECS SERVICE (SCAFFOLDING)
+# FUTURES MARKET MAKER - ECS SERVICE
 ################################################################################
-# Mirror of 04_perps_mm_svc.tf for MAKER_APP=futures. Same CI/CD-owned
-# personality model: Terraform builds infra, deploy-col-mar-mm.yml owns
-# image / public env vars / desired_count after first apply.
-# PRIVATE_KEY and ALCHEMY_API_KEY are injected from Secrets Manager.
-#
-# Replaces the legacy futures market-maker Lambda (futures-marketplace,
-# 10_market_maker_lambda.tf). DNS name `futuresmm.{env}.hashpower.exchange`
-# does not collide with anything currently in derivatives or futures repos,
-# so this can be applied immediately.
+# CI (deploy-col-mar-mm.yml) rolls the image and the public env between
+# applies, and both lifecycle blocks below keep a routine plan from fighting
+# that. CPU and memory force a new revision, which does not honor
+# ignore_changes, so that revision is built here from the same inputs CI uses:
+#   image       ghcr tag from GitHub, or the running task if that is newer
+#   environment non-empty keys in config/<env>.env (var.public_env)
+#   secrets     PRIVATE_KEY and ALCHEMY_API_KEY valueFrom refs
+# COMMIT_HASH is the commit the resolved image tag points at.
 ################################################################################
 
 locals {
   futures_mm_env_suffix = substr(var.account_shortname, 8, 3)
+
+  # Same denylist as deploy-col-mar-mm.yml. These are Secrets Manager
+  # values, not config/<env>.env entries.
+  futures_mm_secret_env_names = toset([
+    "ALCHEMY_API_KEY",
+    "LIQUIDATOR_PRIVATE_KEY",
+    "WEBHOOK_SECRET",
+    "PRIVATE_KEY",
+    "FUTURES_MM_PRIVATE_KEY",
+    "PERPS_MM_PRIVATE_KEY",
+  ])
+
+  futures_mm_file_env = {
+    for key, value in var.public_env : key => value
+    if trimspace(value) != ""
+    && !contains(local.futures_mm_secret_env_names, key)
+    && !contains(["MAKER_APP", "MAKER_ENV", "IMAGE_TAG", "COMMIT_HASH"], key)
+  }
+
+  # MAKER_APP and MAKER_ENV are required by docker-entrypoint.sh and are not
+  # in the env file. IMAGE_TAG and COMMIT_HASH come from the resolved tag.
+  futures_mm_environment = concat(
+    [for key in sort(keys(local.futures_mm_file_env)) : {
+      name  = key
+      value = local.futures_mm_file_env[key]
+    }],
+    [
+      { name = "COMMIT_HASH", value = local.futures_mm_commit_hash },
+      { name = "IMAGE_TAG", value = local.futures_mm_image_tag },
+      { name = "MAKER_APP", value = "portfolio" },
+      { name = "MAKER_ENV", value = local.maker_env },
+    ],
+  )
 }
 
 ################################
@@ -142,14 +174,16 @@ resource "aws_alb_target_group" "futures_mm_int_use1" {
   deregistration_delay          = "10"
 
   health_check {
-    enabled             = true
-    interval            = 30
-    path                = "/health"
-    port                = var.futures_mm_service.cnt_port
-    protocol            = "HTTP"
-    timeout             = 5
+    enabled  = true
+    interval = 30
+    path     = "/health"
+    port     = var.futures_mm_service.cnt_port
+    protocol = "HTTP"
+    # A tick on 0.25 vCPU can stall /health past 5s. Two misses 30s apart
+    # was killing the task. 10s timeout and 4 misses is about two minutes.
+    timeout             = 10
     healthy_threshold   = 2
-    unhealthy_threshold = 2
+    unhealthy_threshold = 4
   }
 
   tags = merge(
@@ -221,13 +255,20 @@ resource "aws_route53_record" "futures_mm_int_lmn" {
 ################################
 
 resource "aws_ecs_service" "futures_mm_use1" {
+  # task_definition stays ignored so the next plan does not revert a CI roll.
+  # A CPU or memory apply registers a new revision and does not point the
+  # service at it while this ignore is set. Take task_definition out of the
+  # list for that apply, then put it back.
+
   lifecycle { ignore_changes = [task_definition, desired_count] }
   count                  = var.futures_mm_service.create ? 1 : 0
   provider               = aws.use1
   name                   = "svc-${local.shortname}-futures-mm-${local.futures_mm_env_suffix}"
   cluster                = data.aws_ecs_cluster.derivatives.arn
   task_definition        = aws_ecs_task_definition.futures_mm_use1[count.index].arn
-  desired_count          = 0
+  # 0 here scales the maker down whenever the desired_count ignore is
+  # commented out. task_worker_qty is the count this switch should push.
+  desired_count          = var.futures_mm_service.task_worker_qty
   launch_type            = "FARGATE"
   propagate_tags         = "SERVICE"
   enable_execute_command = true
@@ -283,14 +324,12 @@ resource "aws_ecs_task_definition" "futures_mm_use1" {
   task_role_arn            = local.titanio_role_arn
   execution_role_arn       = local.titanio_role_arn
 
-  # STUB CONTAINER. CI/CD overwrites this on every deploy; the only thing
-  # that matters here is that the task def is registerable. See the perps
-  # equivalent for full rationale.
+  # Used when this resource is created or replaced. In-place container drift
+  # is ignored so CI can keep rolling the image and env.
   container_definitions = jsonencode([
     {
       name      = "${local.shortname}-futures-mm-container"
-      image     = "public.ecr.aws/docker/library/busybox:latest"
-      command   = ["sh", "-c", "echo 'col-mar futures-mm stub - awaiting CI/CD deploy'; sleep infinity"]
+      image     = "${local.futures_mm_ghcr_repo}:${local.futures_mm_image_tag}"
       cpu       = 0
       essential = true
 
@@ -301,6 +340,8 @@ resource "aws_ecs_task_definition" "futures_mm_use1" {
           protocol      = "tcp"
         }
       ]
+
+      environment = local.futures_mm_environment
 
       secrets = [
         {
