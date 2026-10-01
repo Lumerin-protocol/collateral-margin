@@ -1,0 +1,4 @@
+autoInstallPeers: false
+blockExoticSubdeps: false
+# Flat node_modules with real files: Terraform zips this directory as the Lambda.
+nodeLinker: hoisted

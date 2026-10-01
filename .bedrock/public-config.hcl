@@ -8,8 +8,9 @@ locals {
     "04-lmn" = "prd.env"
   }[local.stack]
 
-  # Stack dirs are .bedrock/<stack>, so the repo config/ is two levels up.
-  config_env_path = "${get_original_terragrunt_dir()}/../../config/${local.config_env_file}"
+  # Stack dirs are .bedrock/<stack>, so the repo root is two levels up.
+  repo_root       = "${get_original_terragrunt_dir()}/../.."
+  config_env_path = "${local.repo_root}/config/${local.config_env_file}"
 
   config_env = {
     for line in split("\n", file(local.config_env_path)) :
@@ -29,4 +30,7 @@ inputs = {
     futures_address     = local.config_env["FUTURES_ADDRESS"]
     perps_address       = local.config_env["PERPS_ADDRESS"]
   }
+  # Lambda package is monitor/ itself. Absolute because terraform runs from
+  # .terragrunt-cache, where path.module is not the repo.
+  vault_mon_dir = "${local.repo_root}/monitor"
 }

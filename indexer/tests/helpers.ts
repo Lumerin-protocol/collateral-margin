@@ -73,6 +73,7 @@ export function setupVault(): void {
   vault.collateralToken = Bytes.empty();
   vault.marginEngine = Bytes.empty();
   vault.insuranceFundAddress = Bytes.empty();
+  vault.backstopAddress = Bytes.empty();
   vault.decimals = 6;
   vault.totalDeposited = BigInt.zero();
   vault.totalWithdrawn = BigInt.zero();
@@ -80,6 +81,8 @@ export function setupVault(): void {
   vault.insuranceFundWithdrawn = BigInt.zero();
   vault.totalSupply = BigInt.zero();
   vault.insuranceFundBalance = BigInt.zero();
+  vault.backstopBalance = BigInt.zero();
+  vault.backstopWithdrawn = BigInt.zero();
   vault.totalUsers = 0;
   vault.depositCount = 0;
   vault.withdrawalCount = 0;
@@ -89,6 +92,9 @@ export function setupVault(): void {
   vault.insuranceDebtBorrowedTotal = BigInt.zero();
   vault.insuranceDebtRepaidTotal = BigInt.zero();
   vault.traderBadDebtTotal = BigInt.zero();
+  vault.backstopBadDebtTotal = BigInt.zero();
+  vault.backstopUnwindBandBps = 0;
+  vault.backstopUnwindFeeBps = 0;
   vault.insuranceCapital = BigInt.zero();
   vault.uncoveredLoss = BigInt.zero();
   vault.timingDebt = BigInt.zero();

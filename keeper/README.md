@@ -105,6 +105,9 @@ src/
     executor.ts        # Pulls from queue, runs planner with bounded concurrency
   alert/
     notifier.ts        # Shared dedup'd webhook notifier (warn → critical promotion)
+  backstop/
+    unwinder.ts        # Opt-in loop shrinking the protocol backstop via unwindBackstop
+  protocolAccounts.ts  # Vault vanity ledgers (insurance fund, backstop) excluded from discovery
   tx/
     liquidate.ts       # Shared simulate → send → parse-fee + revert-decoding helper
   runtime/
@@ -170,6 +173,34 @@ See `src/config.ts` for the authoritative shape. The minimum-viable set:
 | `SWEEP_INTERVAL_MS`            | no       | Periodic safety-net sweep cadence (predictor handles the hot path). Default `60_000` |
 | `HEALTH_PORT`                  | no       | `/health` and `/ready` port. Default `3000` |
 | `LOG_LEVEL`                    | no       | pino level. Default `info`             |
+| `BACKSTOP_UNWIND_ENABLED`      | no       | `true` to run the protocol-backstop unwinder (see below). Default `false` |
+| `BACKSTOP_UNWIND_INTERVAL_MS`  | no       | Unwind sweep cadence. Default `60_000` |
+| `BACKSTOP_UNWIND_MAX_QTY_FUTURES` | no    | Max contracts requested per futures `unwindBackstop` tx. `0` = whole leg (default) |
+| `BACKSTOP_UNWIND_MAX_QTY_PERPS` | no      | Same for perps, in `QUANTITY_DECIMALS`. `0` = whole position (default) |
+
+## Protocol backstop
+
+Position liquidation on both venues closes the user at the mark and hands the
+closed quantity to the keyless `BACKSTOP_ADDR` ledger (`0xbB…bB`, a vault
+constant) as an explicit position, so per-market positions keep summing to
+zero. The keeper treats that account, and the insurance fund (`0xaA…aA`), as
+protocol ledgers rather than users:
+
+- `ParticipantTracker` and `FuturesExpiryIndex` never add them as liquidation
+  candidates; `liquidate*` calls against them revert `BackstopAccount`, which
+  `tx/liquidate.ts` treats as recoverable.
+- `FuturesExpiryIndex` still tracks the backstop's *positions* (it re-reads them
+  after every `PositionLiquidated`), so the delivery coordinator cash-settles
+  the backstop's legs at expiry like anyone else's.
+- `venues/futures.ts` drops matured legs from `liquidatePositions` batches; the
+  venue would refuse them (`PositionMatured`) and settlement is the right exit.
+- `backstop/unwinder.ts` (opt-in via `BACKSTOP_UNWIND_ENABLED`) sweeps the
+  backstop's net per venue and calls the permissionless `unwindBackstop`, which
+  fills as a taker inside the vault's `backstopUnwindBandBps` around the mark
+  and pays the caller `backstopUnwindFeeBps` of the filled notional from the
+  venue fee pot. No liquidity inside the band reverts `TimeInForceNotFilled`
+  and is retried next tick. `/health` exposes `backstopOpenLegs`,
+  `backstopUnwinds`, `backstopUnfilledAttempts` and `backstopFeeEarned`.
 
 ## Dry run
 

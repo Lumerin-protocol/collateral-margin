@@ -1,5 +1,7 @@
 import { Address, BigInt, Bytes, dataSource, log } from "@graphprotocol/graph-ts";
 import {
+  BackstopParamsSet,
+  BackstopWithdrawn,
   BadDebt,
   CollateralVault as VaultContract,
   Deposited,
@@ -14,6 +16,7 @@ import {
   Withdrawn,
 } from "../generated/CollateralVault/CollateralVault";
 import {
+  BackstopParamsChange,
   BadDebtEvent,
   InsuranceDebtCapChange,
   InsuranceDebtEvent,
@@ -36,6 +39,9 @@ const ZERO_ADDRESS = Address.zero();
 // The on-chain literal is mixed-case (`0xaAaA…aaAa`) for EIP-55 styling, but
 // graph-ts/matchstick can mis-parse non-canonical casing, so we use lowercase.
 const INSURANCE_FUND_ADDR = Address.fromString("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+// Must mirror CollateralVault.BACKSTOP_ADDR: the keyless ledger that inherits
+// liquidated positions. Left unfunded, so its clearing losses surface as BadDebt.
+const BACKSTOP_ADDR = Address.fromString("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
 
 // CallerCategory enum string values (must match schema.graphql).
 const CATEGORY_PERPS = "PERPS";
@@ -87,6 +93,7 @@ function getOrCreateVault(): Vault {
     vault.collateralToken = Bytes.empty();
     vault.marginEngine = Bytes.empty();
     vault.insuranceFundAddress = INSURANCE_FUND_ADDR;
+    vault.backstopAddress = BACKSTOP_ADDR;
     vault.decimals = 0;
     vault.totalDeposited = BigInt.zero();
     vault.totalWithdrawn = BigInt.zero();
@@ -94,6 +101,8 @@ function getOrCreateVault(): Vault {
     vault.insuranceFundWithdrawn = BigInt.zero();
     vault.totalSupply = BigInt.zero();
     vault.insuranceFundBalance = BigInt.zero();
+    vault.backstopBalance = BigInt.zero();
+    vault.backstopWithdrawn = BigInt.zero();
     vault.totalUsers = 0;
     vault.depositCount = 0;
     vault.withdrawalCount = 0;
@@ -103,6 +112,9 @@ function getOrCreateVault(): Vault {
     vault.insuranceDebtBorrowedTotal = BigInt.zero();
     vault.insuranceDebtRepaidTotal = BigInt.zero();
     vault.traderBadDebtTotal = BigInt.zero();
+    vault.backstopBadDebtTotal = BigInt.zero();
+    vault.backstopUnwindBandBps = 0;
+    vault.backstopUnwindFeeBps = 0;
     vault.insuranceCapital = BigInt.zero();
     vault.uncoveredLoss = BigInt.zero();
     vault.timingDebt = BigInt.zero();
@@ -202,6 +214,7 @@ function getOrCreateVenue(venue: Address): VaultVenue {
     row = new VaultVenue(venue);
     row.address = venue;
     row.traderBadDebtTotal = BigInt.zero();
+    row.backstopBadDebtTotal = BigInt.zero();
     row.feeBadDebtTotal = BigInt.zero();
   }
   return row;
@@ -375,6 +388,12 @@ export function handleTransfer(event: Transfer): void {
   if (to.equals(INSURANCE_FUND_ADDR)) {
     vault.insuranceFundBalance = vault.insuranceFundBalance.plus(amount);
   }
+  if (from.equals(BACKSTOP_ADDR)) {
+    vault.backstopBalance = vault.backstopBalance.minus(amount);
+  }
+  if (to.equals(BACKSTOP_ADDR)) {
+    vault.backstopBalance = vault.backstopBalance.plus(amount);
+  }
 
   if (!isMint && !isBurn) {
     // Internal transfer between two real accounts (PnL settlement, fees, etc.).
@@ -465,12 +484,14 @@ export function handleWithdrawn(event: Withdrawn): void {
   const amount = event.params.amount;
   const recipient = event.params.recipient;
   const isInsuranceFund = owner.equals(INSURANCE_FUND_ADDR);
+  const isBackstop = owner.equals(BACKSTOP_ADDR);
 
-  log.info("Withdrawn: owner {} amount {} recipient {} insuranceFund {}", [
+  log.info("Withdrawn: owner {} amount {} recipient {} insuranceFund {} backstop {}", [
     owner.toHexString(),
     amount.toString(),
     recipient.toHexString(),
     isInsuranceFund ? "true" : "false",
+    isBackstop ? "true" : "false",
   ]);
 
   const isNewUser = VaultUser.load(owner) === null;
@@ -486,13 +507,15 @@ export function handleWithdrawn(event: Withdrawn): void {
   withdrawal.recipient = recipient;
   withdrawal.amount = amount;
   withdrawal.isInsuranceFund = isInsuranceFund;
+  withdrawal.isBackstop = isBackstop;
   withdrawal.timestamp = event.block.timestamp;
   withdrawal.blockNumber = event.block.number;
   withdrawal.transactionHash = event.transaction.hash;
   withdrawal.save();
 
   const vault = getOrCreateVault();
-  if (!isInsuranceFund) {
+  // Protocol ledgers are not user flow: their sweeps have their own counters.
+  if (!isInsuranceFund && !isBackstop) {
     vault.totalWithdrawn = vault.totalWithdrawn.plus(amount);
     vault.withdrawalCount++;
   }
@@ -539,6 +562,7 @@ export function handleBadDebt(event: BadDebt): void {
   const amount = event.params.amount;
   const venueAddress = event.params.venue;
   const isReserveLoss = receiver.equals(INSURANCE_FUND_ADDR);
+  const isBackstop = payer.equals(BACKSTOP_ADDR);
 
   log.info("BadDebt: payer {} receiver {} amount {} venue {} kind {}", [
     payer.toHexString(),
@@ -556,6 +580,7 @@ export function handleBadDebt(event: BadDebt): void {
   const venue = getOrCreateVenue(venueAddress);
   if (isReserveLoss) {
     venue.traderBadDebtTotal = venue.traderBadDebtTotal.plus(amount);
+    if (isBackstop) venue.backstopBadDebtTotal = venue.backstopBadDebtTotal.plus(amount);
   } else {
     venue.feeBadDebtTotal = venue.feeBadDebtTotal.plus(amount);
   }
@@ -567,6 +592,7 @@ export function handleBadDebt(event: BadDebt): void {
   row.amount = amount;
   row.venue = venue.id;
   row.kind = isReserveLoss ? KIND_RESERVE_LOSS : KIND_FEE;
+  row.isBackstop = isBackstop;
   row.timestamp = event.block.timestamp;
   row.blockNumber = event.block.number;
   row.transactionHash = event.transaction.hash;
@@ -575,11 +601,42 @@ export function handleBadDebt(event: BadDebt): void {
   const vault = getOrCreateVault();
   if (isReserveLoss) {
     vault.traderBadDebtTotal = vault.traderBadDebtTotal.plus(amount);
+    if (isBackstop) vault.backstopBadDebtTotal = vault.backstopBadDebtTotal.plus(amount);
     recomputeDebtSplit(vault);
   }
   bumpUserCount(vault, isNewUser);
   vault.lastUpdatedAt = event.block.timestamp;
   vault.save();
+}
+
+// ── Protocol backstop (paired marker; the Withdrawn/Transfer logs carry the balance) ─
+
+export function handleBackstopWithdrawn(event: BackstopWithdrawn): void {
+  log.info("BackstopWithdrawn: recipient {} amount {}", [
+    event.params.recipient.toHexString(),
+    event.params.amount.toString(),
+  ]);
+
+  const vault = getOrCreateVault();
+  vault.backstopWithdrawn = vault.backstopWithdrawn.plus(event.params.amount);
+  vault.lastUpdatedAt = event.block.timestamp;
+  vault.save();
+}
+
+export function handleBackstopParamsSet(event: BackstopParamsSet): void {
+  const vault = getOrCreateVault();
+  vault.backstopUnwindBandBps = event.params.unwindBandBps;
+  vault.backstopUnwindFeeBps = event.params.unwindFeeBps;
+  vault.lastUpdatedAt = event.block.timestamp;
+  vault.save();
+
+  const row = new BackstopParamsChange(createEventId(event.transaction.hash, event.logIndex));
+  row.unwindBandBps = event.params.unwindBandBps;
+  row.unwindFeeBps = event.params.unwindFeeBps;
+  row.timestamp = event.block.timestamp;
+  row.blockNumber = event.block.number;
+  row.transactionHash = event.transaction.hash;
+  row.save();
 }
 
 export function handleInsuranceDebtCapSet(event: InsuranceDebtCapSet): void {

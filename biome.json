@@ -65,7 +65,7 @@
     }
   },
   "formatter": {
-    "enabled": false,
+    "enabled": true,
     "indentStyle": "space",
     "indentWidth": 2
   }

@@ -1,0 +1,64 @@
+name: Monitor Tests
+
+on:
+  push:
+    branches: [main, dev, stg]
+    paths:
+      - "monitor/**"
+      - ".github/workflows/monitor-test.yml"
+
+  pull_request:
+    paths:
+      - "monitor/**"
+      - ".github/workflows/monitor-test.yml"
+
+  workflow_dispatch:
+
+concurrency:
+  group: monitor-test-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout collateral-margin
+        uses: actions/checkout@v5
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: monitor/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: monitor/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: ./monitor
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        working-directory: ./monitor
+        run: pnpm lint
+
+      - name: TypeCheck
+        working-directory: ./monitor
+        run: pnpm typecheck
+
+      - name: Unit tests
+        working-directory: ./monitor
+        run: pnpm test

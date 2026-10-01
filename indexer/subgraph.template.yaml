@@ -57,6 +57,10 @@ dataSources:
           handler: handleBadDebt
         - event: InsuranceDebtCapSet(uint256,uint256)
           handler: handleInsuranceDebtCapSet
+        - event: BackstopWithdrawn(indexed address,uint256)
+          handler: handleBackstopWithdrawn
+        - event: BackstopParamsSet(uint16,uint16)
+          handler: handleBackstopParamsSet
         - event: VaultHalted(uint8,uint256,uint256)
           handler: handleVaultHalted
         - event: VaultResumed(uint256,uint256)

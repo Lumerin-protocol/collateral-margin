@@ -41,6 +41,8 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     error DebtAboveCap();
     /// @notice `resume` was called while the vault was not halted.
     error NotHalted();
+    /// @notice A backstop parameter is above its bound.
+    error BackstopParamOutOfBounds();
 
     /// @notice Why trading and withdrawals were stopped.
     enum HaltReason {
@@ -64,6 +66,8 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     event InsuranceDebtCapSet(uint256 oldCap, uint256 newCap);
     event VaultHalted(HaltReason reason, uint256 debt, uint256 effectiveCap);
     event VaultResumed(uint256 debt, uint256 effectiveCap);
+    event BackstopWithdrawn(address indexed recipient, uint256 amount);
+    event BackstopParamsSet(uint16 unwindBandBps, uint16 unwindFeeBps);
 
     // ── Storage ─────────────────────────────────────────────────────────────
 
@@ -72,7 +76,15 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     ///      Balance is normal vault receipt tokens; authorized callers credit it via
     ///      `transfer` / `credit` / `depositFor`. Owner withdraws via `withdrawInsuranceFund`.
     address public constant INSURANCE_FUND_ADDR = 0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa;
-    string public constant VERSION = "1.2.0";
+    /// @dev Vanity address that holds the protocol's liquidation leftovers as explicit positions.
+    ///      All-0xbb bytes — no private key exists for it. Venues hand every liquidated quantity
+    ///      to this account and reduce it with `unwindBackstop`. It is a trader payer in
+    ///      `settleTransfer`: a loss it cannot cover is `BadDebt` counted in `traderBadDebtTotal`.
+    ///      Gains accrue to its balance; the owner sweeps them with `withdrawBackstop`.
+    address public constant BACKSTOP_ADDR = 0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB;
+    /// @dev Upper bound for each backstop parameter (25%).
+    uint16 public constant MAX_BACKSTOP_PARAM_BPS = 2_500;
+    string public constant VERSION = "1.3.0";
 
     IERC20 public collateralToken;
     mapping(address => bool) public authorizedCallers;
@@ -94,6 +106,10 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     int256 public insuranceCapital;
     /// @notice Latched circuit breaker. Stays on until the owner calls `resume`.
     bool public halted;
+    /// @notice Oracle band (bps around the mark) inside which `unwindBackstop` may fill.
+    uint16 public backstopUnwindBandBps;
+    /// @notice Fee (bps of filled notional at the mark) paid to whoever calls `unwindBackstop`.
+    uint16 public backstopUnwindFeeBps;
 
     // ── Modifiers ───────────────────────────────────────────────────────────
 
@@ -237,6 +253,25 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
         emit InsuranceFundWithdrawn(recipient, amount);
     }
 
+    /// @notice Sweep realized backstop gains to `recipient`, burning its receipt tokens.
+    /// @dev Goes through `_withdrawTo`, so the halt check and the backstop's portfolio margin apply.
+    ///      Deposits, when wanted, use `depositFor(BACKSTOP_ADDR, amount)`.
+    function withdrawBackstop(address recipient, uint256 amount) external onlyOwner {
+        _withdrawTo(BACKSTOP_ADDR, recipient, amount);
+        emit BackstopWithdrawn(recipient, amount);
+    }
+
+    /// @notice Set the backstop unwind band and caller fee shared by every venue.
+    /// @dev All zeros is safe: unwinds fill only at or better than the mark and pay no fee.
+    function setBackstopParams(uint16 unwindBandBps, uint16 unwindFeeBps) external onlyOwner {
+        if (unwindBandBps > MAX_BACKSTOP_PARAM_BPS || unwindFeeBps > MAX_BACKSTOP_PARAM_BPS) {
+            revert BackstopParamOutOfBounds();
+        }
+        backstopUnwindBandBps = unwindBandBps;
+        backstopUnwindFeeBps = unwindFeeBps;
+        emit BackstopParamsSet(unwindBandBps, unwindFeeBps);
+    }
+
     // ── User functions ──────────────────────────────────────────────────────
 
     /// @notice Deposit collateral tokens; mints an equal amount of receipt tokens.
@@ -368,6 +403,11 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     /// @notice Receipt balance of the insurance fund.
     function insuranceFundBalance() external view returns (uint256) {
         return balanceOf(INSURANCE_FUND_ADDR);
+    }
+
+    /// @notice Both backstop parameters in one read, for venues.
+    function backstopParams() external view returns (uint16 unwindBandBps, uint16 unwindFeeBps) {
+        return (backstopUnwindBandBps, backstopUnwindFeeBps);
     }
 
     /// @notice Cap that borrowing is checked against. Zero while the margin engine is unset,

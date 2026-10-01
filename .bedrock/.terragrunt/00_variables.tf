@@ -211,7 +211,7 @@ variable "vault_monitoring" {
 }
 
 variable "vault_env" {
-  description = "Vault monitor addresses and subgraph URLs from config/dev.env or config/prd.env (VAULT_ADDRESS, FUTURES_ADDRESS, PERPS_ADDRESS, VAULT_SUBGRAPH_URL, POINTS_SUBGRAPH_URL)."
+  description = "Vault monitor addresses and subgraph URLs from config/dev.env or config/prd.env (VAULT_ADDRESS, FUTURES_ADDRESS, PERPS_ADDRESS, VAULT_SUBGRAPH_URL, POINTS_SUBGRAPH_URL). All required; the Lambda does not validate its environment."
   type = object({
     subgraph_url        = string
     points_subgraph_url = string
@@ -219,4 +219,13 @@ variable "vault_env" {
     futures_address     = string
     perps_address       = string
   })
+  validation {
+    condition     = alltrue([for value in values(var.vault_env) : value != ""])
+    error_message = "Every vault_env value must be set in config/<env>.env."
+  }
+}
+
+variable "vault_mon_dir" {
+  description = "Absolute path to the vault monitor package (monitor/), zipped as-is after a prod install. Set by public-config.hcl."
+  type        = string
 }

@@ -222,6 +222,25 @@ export interface Config {
      */
     maxBatchSize: number;
   };
+  backstop: {
+    /**
+     * Opt-in: when true, the keeper periodically reduces the protocol backstop's
+     * positions on both venues through the permissionless `unwindBackstop`,
+     * which fills as a taker inside the vault's `backstopUnwindBandBps` around
+     * the mark and pays the caller `backstopUnwindFeeBps` of the filled notional
+     * from the venue fee pot. Off by default.
+     */
+    enabled: boolean;
+    /** Cadence of the unwind sweep in ms. Each tick sends at most one tx per leg. */
+    intervalMs: number;
+    /**
+     * Cap on contracts requested per `unwindBackstop` tx on futures (whole
+     * contracts). 0 = request the whole leg and let the book fill what it can.
+     */
+    maxQtyFutures: bigint;
+    /** Same cap for perps, in `QUANTITY_DECIMALS` units. 0 = whole position. */
+    maxQtyPerps: bigint;
+  };
 }
 
 function requireEnv(name: string): string {
@@ -411,6 +430,12 @@ export function loadConfig(): Config {
       settleDelayMs: Number(process.env.DELIVERY_SETTLE_DELAY_MS ?? "5000"),
       bootstrapUsers: parseAddressList("DELIVERY_BOOTSTRAP_USERS"),
       maxBatchSize: Number(process.env.DELIVERY_MAX_BATCH_SIZE ?? "50"),
+    },
+    backstop: {
+      enabled: process.env.BACKSTOP_UNWIND_ENABLED === "true",
+      intervalMs: Number(process.env.BACKSTOP_UNWIND_INTERVAL_MS ?? "60000"),
+      maxQtyFutures: BigInt(process.env.BACKSTOP_UNWIND_MAX_QTY_FUTURES ?? "0"),
+      maxQtyPerps: BigInt(process.env.BACKSTOP_UNWIND_MAX_QTY_PERPS ?? "0"),
     },
   };
 }

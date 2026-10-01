@@ -3,6 +3,11 @@
 # Lambda reads the vault subgraph and one USDC balanceOf at that block.
 # Keeper liveness (target health + sweep heartbeat) lives here too: a late
 # keeper is what turns collectible debt into bad debt.
+#
+# The package is monitor/ zipped as-is: Node 24 runs the .ts sources without
+# transpiling and node_modules holds only viem after the prod install that a
+# terragrunt before_hook (root.hcl) runs on plan/apply. The AWS SDK comes
+# from the runtime.
 ################################################################################
 
 locals {
@@ -26,7 +31,8 @@ locals {
 data "archive_file" "vault_mon" {
   count       = var.vault_monitoring.create ? 1 : 0
   type        = "zip"
-  source_file = "${path.module}/07_col_mar_vault_mon.py"
+  source_dir  = var.vault_mon_dir
+  excludes    = ["tests", "tsconfig.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"]
   output_path = "${path.module}/07_col_mar_vault_mon.zip"
 }
 
@@ -89,11 +95,11 @@ resource "aws_lambda_function" "vault_mon" {
   count         = var.vault_monitoring.create ? 1 : 0
   provider      = aws.use1
   function_name = local.vault_mon_name
-  description   = "Publishes insurance-fund debt, halt, and backing metrics from the vault subgraph"
+  description   = "Publishes insurance-fund debt, halt, backing, and protocol-backstop metrics from the vault subgraph and venue views"
   role          = aws_iam_role.vault_mon[0].arn
-  handler       = "07_col_mar_vault_mon.lambda_handler"
-  runtime       = "python3.12"
-  timeout       = 60
+  handler       = "index.handler"
+  runtime       = "nodejs24.x"
+  timeout       = 120
   memory_size   = 128
 
   filename         = data.archive_file.vault_mon[0].output_path
@@ -101,7 +107,7 @@ resource "aws_lambda_function" "vault_mon" {
 
   environment {
     variables = {
-      SUBGRAPH_URL        = var.vault_env.subgraph_url
+      VAULT_SUBGRAPH_URL  = var.vault_env.subgraph_url
       POINTS_SUBGRAPH_URL = var.vault_env.points_subgraph_url
       VAULT_ADDRESS       = var.vault_env.vault_address
       FUTURES_ADDRESS     = var.vault_env.futures_address
@@ -213,6 +219,28 @@ resource "aws_cloudwatch_metric_alarm" "vault_uncovered_loss" {
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Vault Uncovered Loss"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "vault_backstop_equity" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-backstop-equity-${local.vault_mon_env}"
+  alarm_description   = "Protocol backstop equity (balance + unrealized PnL + pending funding at the mark) is negative. Liquidated positions parked on the backstop are losing and the loss is not yet booked as BadDebt; it lands in uncovered loss when the legs unwind, offset, or settle. Check the backstop legs on the dashboard, make sure unwinds are flowing (keeper BACKSTOP_UNWIND_ENABLED or a manual unwindBackstop), and be ready to depositInsuranceFund the shortfall. Warning only."
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "BackstopEquity"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Minimum"
+  threshold           = 0
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_alert_actions
+  ok_actions          = local.vault_alert_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Backstop Equity"
     Capability = "Monitoring"
   })
 }
@@ -532,6 +560,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
             title = "Alarm Status"
             alarms = concat(
               aws_cloudwatch_metric_alarm.vault_uncovered_loss[*].arn,
+              aws_cloudwatch_metric_alarm.vault_backstop_equity[*].arn,
               aws_cloudwatch_metric_alarm.vault_util_warn[*].arn,
               aws_cloudwatch_metric_alarm.vault_util_crit[*].arn,
               aws_cloudwatch_metric_alarm.vault_halted[*].arn,
@@ -639,6 +668,45 @@ resource "aws_cloudwatch_dashboard" "vault" {
             metrics = [
               [local.vault_mon_ns, "BackingGap", { label = "Supply - debt - USDC", color = "#d62728" }],
               [local.vault_mon_ns, "TraderBadDebtTotal", { label = "Trader bad debt" }],
+              [local.vault_mon_ns, "BackstopBadDebtTotal", { label = "of which backstop" }],
+            ]
+          }
+        },
+        {
+          type   = "metric"
+          x      = 0
+          y      = 22
+          width  = 12
+          height = 6
+          properties = {
+            title  = "Protocol backstop (USDC)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "BackstopEquity", { label = "Equity at mark", color = "#d62728" }],
+              [local.vault_mon_ns, "BackstopBalance", { label = "Ledger balance" }],
+              [local.vault_mon_ns, "BackstopUnrealizedPnl", { label = "Unrealized PnL" }],
+              [local.vault_mon_ns, "BackstopPendingFunding", { label = "Pending funding" }],
+            ]
+            annotations = { horizontal = [{ label = "loss forming", value = 0 }] }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 12
+          y      = 22
+          width  = 12
+          height = 6
+          properties = {
+            title  = "Protocol backstop exposure (raw units)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "BackstopFuturesNetQuantity", { label = "Futures net contracts" }],
+              [local.vault_mon_ns, "BackstopPerpsNetQuantity", { label = "Perps net (1e6)" }],
+              [local.vault_mon_ns, "BackstopOpenLegs", { label = "Open legs", stat = "Maximum" }],
             ]
           }
         },
