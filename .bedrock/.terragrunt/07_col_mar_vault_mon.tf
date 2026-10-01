@@ -107,7 +107,7 @@ resource "aws_lambda_function" "vault_mon" {
 
   environment {
     variables = {
-      SUBGRAPH_URL        = var.vault_env.subgraph_url
+      VAULT_SUBGRAPH_URL  = var.vault_env.subgraph_url
       POINTS_SUBGRAPH_URL = var.vault_env.points_subgraph_url
       VAULT_ADDRESS       = var.vault_env.vault_address
       FUTURES_ADDRESS     = var.vault_env.futures_address

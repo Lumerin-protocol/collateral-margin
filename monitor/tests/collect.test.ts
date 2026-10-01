@@ -5,10 +5,17 @@
  */
 import assert from "node:assert/strict";
 import { before, describe, it } from "node:test";
-import { decodeFunctionData, encodeFunctionResult, erc20Abi, parseAbi, toHex } from "viem";
+import {
+  decodeFunctionData,
+  encodeFunctionResult,
+  erc20Abi,
+  multicall3Abi,
+  parseAbi,
+  toHex,
+} from "viem";
 
 process.env.CW_NAMESPACE = "Test";
-process.env.SUBGRAPH_URL = "https://vault.test/gql";
+process.env.VAULT_SUBGRAPH_URL = "https://vault.test/gql";
 process.env.POINTS_SUBGRAPH_URL = "https://points.test/gql";
 process.env.ETH_RPC_URL = "https://rpc.test/v2/key";
 process.env.VAULT_ADDRESS = "0x0000000000000000000000000000000000000001";
@@ -26,10 +33,15 @@ const venueAbi = parseAbi([
 
 const BLOCK = 1_000;
 const USDC = 6;
+const MULTICALL3 = "0xca11bde05977b3631167028862be2a173976ca11";
 const u = (n: number) => String(BigInt(n) * 10n ** BigInt(USDC));
+const multicallSizes: number[] = [];
 
 const vaultResponse = {
-  _meta: { block: { number: String(BLOCK), timestamp: null }, hasIndexingErrors: false },
+  _meta: {
+    block: { number: String(BLOCK), timestamp: null },
+    hasIndexingErrors: false,
+  },
   vault: {
     insuranceFundBalance: u(500),
     insuranceDebt: u(100),
@@ -48,7 +60,13 @@ const vaultResponse = {
     decimals: String(USDC),
     collateralToken: "0x000000000000000000000000000000000000000a",
   },
-  vaultVenues: [{ id: process.env.FUTURES_ADDRESS, traderBadDebtTotal: u(30), backstopBadDebtTotal: u(10) }],
+  vaultVenues: [
+    {
+      id: process.env.FUTURES_ADDRESS,
+      traderBadDebtTotal: u(30),
+      backstopBadDebtTotal: u(10),
+    },
+  ],
   futuresUser: { balance: u(7) },
   perpsUser: null,
 };
@@ -64,28 +82,56 @@ const riskView = (unrealizedPnl: bigint, pendingFunding: bigint) => ({
 });
 
 function ethCall(to: string, data: `0x${string}`): `0x${string}` {
-  if (to === process.env.VAULT_ADDRESS) throw new Error("no calls to the vault expected");
-  if (to === vaultResponse.vault.collateralToken) {
+  const address = to.toLowerCase();
+  if (address === process.env.VAULT_ADDRESS)
+    throw new Error("no calls to the vault expected");
+  if (address === MULTICALL3) {
+    const decoded = decodeFunctionData({ abi: multicall3Abi, data });
+    assert.equal(decoded.functionName, "aggregate3");
+    const calls = decoded.args[0];
+    multicallSizes.push(calls.length);
+    return encodeFunctionResult({
+      abi: multicall3Abi,
+      functionName: "aggregate3",
+      result: calls.map(({ target, callData }) => ({
+        success: true,
+        returnData: ethCall(target, callData),
+      })),
+    });
+  }
+  if (address === vaultResponse.vault.collateralToken) {
     // supply 10_000 - debt 100 - balance 9_899 → gap of 1 USDC
-    return encodeFunctionResult({ abi: erc20Abi, functionName: "balanceOf", result: BigInt(u(9_899)) });
+    return encodeFunctionResult({
+      abi: erc20Abi,
+      functionName: "balanceOf",
+      result: BigInt(u(9_899)),
+    });
   }
   const { functionName, args } = decodeFunctionData({ abi: venueAbi, data });
-  const isFutures = to === process.env.FUTURES_ADDRESS;
+  const isFutures = address === process.env.FUTURES_ADDRESS;
   switch (functionName) {
     case "getRiskView":
       return encodeFunctionResult({
         abi: venueAbi,
         functionName,
-        result: isFutures ? riskView(-15_000_000n, 0n) : riskView(4_000_000n, 1_000_000n),
+        result: isFutures
+          ? riskView(-15_000_000n, 0n)
+          : riskView(4_000_000n, 1_000_000n),
       });
     case "getActiveExpirationDates":
-      return encodeFunctionResult({ abi: venueAbi, functionName, result: [100n, 200n] });
+      return encodeFunctionResult({
+        abi: venueAbi,
+        functionName,
+        result: [100n, 200n],
+      });
     case "getUserPosition":
       // futures: expiry 100 → +2, expiry 200 → flat; perps → -7e6
       return encodeFunctionResult({
         abi: venueAbi,
         functionName,
-        result: isFutures ? { netQuantity: args?.[1] === 100n ? 2n : 0n, netEntryValue: 0n } : { netQuantity: -7_000_000n, netEntryValue: 0n },
+        result: isFutures
+          ? { netQuantity: args?.[1] === 100n ? 2n : 0n, netEntryValue: 0n }
+          : { netQuantity: -7_000_000n, netEntryValue: 0n },
       });
     default:
       throw new Error(`unexpected call ${functionName}`);
@@ -100,11 +146,22 @@ function rpc(request: { id: number; method: string; params: unknown[] }) {
       result = toHex(BLOCK + 3);
       break;
     case "eth_getBlockByNumber":
-      result = { number: toHex(BLOCK), timestamp: toHex(Math.floor(Date.now() / 1000) - 42), transactions: [] };
+      result = {
+        number: toHex(BLOCK),
+        timestamp: toHex(Math.floor(Date.now() / 1000) - 42),
+        transactions: [],
+      };
       break;
     case "eth_call": {
-      const [call, block] = params as [{ to: string; data: `0x${string}` }, string];
-      assert.equal(block, toHex(BLOCK), "every eth_call must be pinned to the subgraph block");
+      const [call, block] = params as [
+        { to: string; data: `0x${string}` },
+        string,
+      ];
+      assert.equal(
+        block,
+        toHex(BLOCK),
+        "every eth_call must be pinned to the subgraph block",
+      );
       result = ethCall(call.to, call.data);
       break;
     }
@@ -116,26 +173,53 @@ function rpc(request: { id: number; method: string; params: unknown[] }) {
 
 function graphql(url: string) {
   if (url.startsWith("https://vault.test")) return { data: vaultResponse };
-  if (url.startsWith("https://points.test")) return { data: { _meta: { block: { number: String(BLOCK - 7) }, hasIndexingErrors: true } } };
+  if (url.startsWith("https://points.test"))
+    return {
+      data: {
+        _meta: {
+          block: { number: String(BLOCK - 7) },
+          hasIndexingErrors: true,
+        },
+      },
+    };
   throw new Error(`unexpected url ${url}`);
 }
 
 const userAgents = new Set<string>();
 
-globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+globalThis.fetch = (async (
+  input: string | URL | Request,
+  init?: RequestInit,
+) => {
   const url = String(input);
   userAgents.add(new Headers(init?.headers).get("user-agent") ?? "");
   const body = JSON.parse(String(init?.body));
-  const payload = url.startsWith("https://rpc.test") ? (Array.isArray(body) ? body.map(rpc) : rpc(body)) : graphql(url);
-  return new Response(JSON.stringify(payload), { headers: { "Content-Type": "application/json" } });
+  const payload = url.startsWith("https://rpc.test")
+    ? Array.isArray(body)
+      ? body.map(rpc)
+      : rpc(body)
+    : graphql(url);
+  return new Response(JSON.stringify(payload), {
+    headers: { "Content-Type": "application/json" },
+  });
 }) as typeof fetch;
 
 describe("collect", () => {
-  let points: { MetricName?: string; Value?: number; Dimensions?: { Name?: string; Value?: string }[] }[];
+  let points: {
+    MetricName?: string;
+    Value?: number;
+    Dimensions?: { Name?: string; Value?: string }[];
+  }[];
   let summary: string;
 
   const value = (name: string, dimension?: string) => {
-    const hit = points.find((p) => p.MetricName === name && (dimension === undefined ? !p.Dimensions : p.Dimensions?.[0]?.Value === dimension));
+    const hit = points.find(
+      (p) =>
+        p.MetricName === name &&
+        (dimension === undefined
+          ? !p.Dimensions
+          : p.Dimensions?.[0]?.Value === dimension),
+    );
     assert.ok(hit, `missing metric ${name} ${dimension ?? ""}`);
     return hit.Value;
   };
@@ -146,6 +230,10 @@ describe("collect", () => {
 
   it("sends the User-Agent Goldsky requires", () => {
     assert.ok(userAgents.has("col-mar-vault-mon"));
+  });
+
+  it("batches contract reads into two multicalls", () => {
+    assert.deepEqual(multicallSizes, [5, 2]);
   });
 
   it("converts vault balances to USDC units", () => {
@@ -186,6 +274,9 @@ describe("collect", () => {
 
   it("tags per-venue bad debt with the venue address", () => {
     assert.equal(value("TraderBadDebtTotal", process.env.FUTURES_ADDRESS), 30);
-    assert.equal(value("BackstopBadDebtTotal", process.env.FUTURES_ADDRESS), 10);
+    assert.equal(
+      value("BackstopBadDebtTotal", process.env.FUTURES_ADDRESS),
+      10,
+    );
   });
 });
