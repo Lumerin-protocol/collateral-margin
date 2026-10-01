@@ -15,9 +15,9 @@
     "typeRoots": ["./node_modules/assemblyscript/std/types"],
     "types": ["assembly"],
     "paths": {
-      "*": ["./node_modules/assemblyscript/std/types/assembly/*"]
-    }
+      "*": ["./node_modules/assemblyscript/std/types/assembly/*"],
+    },
   },
   "include": ["src", "tests"],
-  "exclude": ["node_modules", "generated", "build"]
+  "exclude": ["node_modules", "generated", "build"],
 }
