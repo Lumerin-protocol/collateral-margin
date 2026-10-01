@@ -236,8 +236,8 @@ resource "aws_cloudwatch_metric_alarm" "vault_backstop_equity" {
   statistic           = "Minimum"
   threshold           = 0
   treat_missing_data  = "ignore"
-  alarm_actions       = local.vault_alert_actions
-  ok_actions          = local.vault_alert_actions
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Vault Backstop Equity"

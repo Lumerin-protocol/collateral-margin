@@ -3,13 +3,13 @@
   "files": {
     "includes": [
       "**",
-      "!!**/generated",
-      "!!**/build",
-      "!!**/node_modules",
-      "!!**/coverage",
-      "!!**/cache",
-      "!!**/artifacts",
-      "!!**/dist"
+      "!**/generated",
+      "!**/build",
+      "!**/node_modules",
+      "!**/coverage",
+      "!**/cache",
+      "!**/artifacts",
+      "!**/dist"
     ]
   },
   "overrides": [

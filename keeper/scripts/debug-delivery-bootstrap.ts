@@ -41,8 +41,7 @@ const dateLists = await client.multicall({
 
 type Pair = { user: Address; expirationAt: bigint };
 const pairs: Pair[] = [];
-for (let i = 0; i < USERS.length; i++) {
-  const user = USERS[i]!;
+for (const [i, user] of USERS.entries()) {
   const dates = dateLists[i] as readonly bigint[];
   console.log(`  ${user} → ${dates.length} expiries`);
   for (const expirationAt of dates) {
@@ -56,7 +55,9 @@ if (pairs.length === 0) {
   process.exit(0);
 }
 
-console.log(`\n--- Stage 2: getUserPosition for ${pairs.length} aggregates ---`);
+console.log(
+  `\n--- Stage 2: getUserPosition for ${pairs.length} aggregates ---`,
+);
 const positions = await client.multicall({
   contracts: pairs.map((p) => ({
     address: FUTURES,
@@ -73,8 +74,7 @@ console.log("wall-clock now:", now, "  block.timestamp:", block.timestamp);
 
 let live = 0;
 let pastDue = 0;
-for (let i = 0; i < pairs.length; i++) {
-  const pair = pairs[i]!;
+for (const [i, pair] of pairs.entries()) {
   const pos = positions[i] as { netQuantity: bigint; netEntryValue: bigint };
   if (pos.netQuantity === 0n) continue;
   live++;
