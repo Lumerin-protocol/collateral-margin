@@ -132,6 +132,35 @@ export const IPortfolioMarginEngineAbi = [
     "type": "function"
   },
   {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "user",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "maxIm",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "maxMmDeficit",
+        "type": "uint256"
+      }
+    ],
+    "name": "meetsTradeMargin",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [],
     "name": "mmSpotShock",
     "outputs": [
@@ -157,6 +186,30 @@ export const IPortfolioMarginEngineAbi = [
       {
         "internalType": "uint256",
         "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "user",
+        "type": "address"
+      }
+    ],
+    "name": "reduceLimits",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "maxIm",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "maxMmDeficit",
         "type": "uint256"
       }
     ],

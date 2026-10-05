@@ -34,6 +34,16 @@ contract MarginEngineMock is IPortfolioMarginEngine {
         return (_im[user], 0);
     }
 
+    /// @dev MM is always zero here, so there is never a shortfall to carry.
+    function reduceLimits(address user) external view returns (uint256 maxIm, uint256 maxMmDeficit) {
+        return (_im[user], 0);
+    }
+
+    function meetsTradeMargin(address user, uint256 maxIm, uint256) external view returns (bool) {
+        uint256 im = _im[user];
+        return vault.balanceOf(user) >= im || im <= maxIm;
+    }
+
     /// @dev Consistent with the zero shock below: this mock never charges order margin.
     function linearOrderMargin(uint256) external pure returns (uint256) {
         return 0;

@@ -41,7 +41,7 @@ export async function deployPortfolioMarginEngineStack(
   const futuresMock = await viem.deployContract("FuturesMock", []);
   // PME's own index oracle — spot source for stress math (6 decimals, $50k).
   const oracleMock = await viem.deployContract("PriceOracleMock", [DEFAULT_MARKET_PRICE, 6]);
-  const pmeImpl = await viem.deployContract("PortfolioMarginEngine", []);
+  const pmeImpl = await viem.deployContract("PortfolioMarginEngine", [vaultAddress]);
   const pmeProxy = await viem.deployContract("ERC1967Proxy", [
     pmeImpl.address as `0x${string}`,
     encodeFunctionData({
@@ -55,7 +55,6 @@ export async function deployPortfolioMarginEngineStack(
   await perpsMock.write.setVault([vaultAddress]);
   await futuresMock.write.setVault([vaultAddress]);
   await optionsMock.write.setVault([vaultAddress]);
-  await pme.write.setVault([vaultAddress]);
   await pme.write.addLinearMarket([perpsMock.address]);
   await pme.write.addLinearMarket([futuresMock.address]);
   await pme.write.setOptions([optionsMock.address]);

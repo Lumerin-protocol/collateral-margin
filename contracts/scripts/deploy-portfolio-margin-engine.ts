@@ -69,9 +69,9 @@ async function main() {
   // ── 1. Deploy implementation ────────────────────────────────────────────
   logInfo("Deploy PortfolioMarginEngine implementation", { contract: "PortfolioMarginEngine" });
   await logPrompt("Proceed?");
-  const pmeImpl = await viem.deployContract("PortfolioMarginEngine", [], { confirmations: 5 });
+  const pmeImpl = await viem.deployContract("PortfolioMarginEngine", [VAULT_ADDRESS], { confirmations: 5 });
   logStep("Deployed", addrUrl(pc, pmeImpl.address));
-  await verifyContract(pmeImpl.address, []);
+  await verifyContract(pmeImpl.address, [VAULT_ADDRESS]);
   logStep("Verified", addrUrl(pc, pmeImpl.address));
 
   // ── 2. Deploy proxy ─────────────────────────────────────────────────────
@@ -158,14 +158,6 @@ async function main() {
     logInfo("PME.setOracle", { oracle: PRICE_ORACLE_ADDRESS });
     await logPrompt("Proceed?");
     const sim = await pme.simulate.setOracle([PRICE_ORACLE_ADDRESS]);
-    const receipt = await writeAndWait(deployer, sim);
-    logStep("Done", txUrl(pc, receipt.transactionHash));
-  }
-
-  if (getAddress(data.vault) !== getAddress(VAULT_ADDRESS)) {
-    logInfo("PME.setVault", { vault: VAULT_ADDRESS });
-    await logPrompt("Proceed?");
-    const sim = await pme.simulate.setVault([VAULT_ADDRESS]);
     const receipt = await writeAndWait(deployer, sim);
     logStep("Done", txUrl(pc, receipt.transactionHash));
   }
