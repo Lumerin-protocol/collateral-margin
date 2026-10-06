@@ -23,9 +23,13 @@ async function main() {
   const pme = await viem.getContractAt("PortfolioMarginEngine", proxyAddress);
   const owner = await pme.read.owner();
   const deployerIsOwner = getAddress(owner) === getAddress(deployer.account.address);
+  // From 2.2.0 the vault is an immutable of the implementation. Building against anything
+  // but the proxy's current vault would point every margin read at another ledger.
+  const vaultAddress = getAddress(await pme.read.vault());
   logInfo("proxy", {
     Address: addrUrl(pc, proxyAddress),
     Version: await pme.read.VERSION(),
+    Vault: addrUrl(pc, vaultAddress),
     Owner: owner,
     "Deployer can upgrade": deployerIsOwner ? "yes" : "no (run upgrade via current owner)",
   });
@@ -37,10 +41,13 @@ async function main() {
     contract: "PortfolioMarginEngine",
   });
   await logPrompt("Proceed?");
-  const newImpl = await viem.deployContract("PortfolioMarginEngine", [], { confirmations: 5 });
+  const newImpl = await viem.deployContract("PortfolioMarginEngine", [vaultAddress], { confirmations: 5 });
   logStep("Deployed", addrUrl(pc, newImpl.address));
-  await verifyContract(newImpl.address, []);
+  await verifyContract(newImpl.address, [vaultAddress]);
   logStep("Verified", addrUrl(pc, newImpl.address));
+  if (getAddress(await newImpl.read.vault()) !== vaultAddress) {
+    throw new Error(`New implementation pins ${await newImpl.read.vault()}, proxy uses ${vaultAddress}`);
+  }
 
   // ── 2. Upgrade proxy ────────────────────────────────────────────────────
   logInfo("Upgrade proxy", {
@@ -54,7 +61,10 @@ async function main() {
     const receipt = await writeAndWait(deployer, sim);
     logStep("Upgraded", txUrl(pc, receipt.transactionHash));
 
-    logInfo("post-upgrade", { Version: await pme.read.VERSION() });
+    logInfo("post-upgrade", { Version: await pme.read.VERSION(), Vault: await pme.read.vault() });
+    if (getAddress(await pme.read.vault()) !== vaultAddress) {
+      throw new Error(`Post-upgrade vault ${await pme.read.vault()}, expected ${vaultAddress}`);
+    }
 
     if (PRICE_ORACLE_ADDRESS) {
       logInfo("PME.setOracle", { oracle: PRICE_ORACLE_ADDRESS });

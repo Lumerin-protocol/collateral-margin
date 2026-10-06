@@ -1,6 +1,12 @@
 [
   {
-    "inputs": [],
+    "inputs": [
+      {
+        "internalType": "contract ICollateralVault",
+        "name": "_vault",
+        "type": "address"
+      }
+    ],
     "stateMutability": "nonpayable",
     "type": "constructor"
   },
@@ -250,19 +256,6 @@
       }
     ],
     "name": "Upgraded",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": false,
-        "internalType": "address",
-        "name": "vault",
-        "type": "address"
-      }
-    ],
-    "name": "VaultUpdated",
     "type": "event"
   },
   {
@@ -520,6 +513,35 @@
     "type": "function"
   },
   {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "user",
+        "type": "address"
+      },
+      {
+        "internalType": "uint256",
+        "name": "maxIm",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "maxMmDeficit",
+        "type": "uint256"
+      }
+    ],
+    "name": "meetsTradeMargin",
+    "outputs": [
+      {
+        "internalType": "bool",
+        "name": "",
+        "type": "bool"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [],
     "name": "mmSpotShock",
     "outputs": [
@@ -620,6 +642,30 @@
     "inputs": [
       {
         "internalType": "address",
+        "name": "user",
+        "type": "address"
+      }
+    ],
+    "name": "reduceLimits",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "maxIm",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "maxMmDeficit",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
         "name": "_market",
         "type": "address"
       }
@@ -686,19 +732,6 @@
       }
     ],
     "name": "setShocks",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "_vault",
-        "type": "address"
-      }
-    ],
-    "name": "setVault",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
