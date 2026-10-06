@@ -51,6 +51,19 @@ export const ICollateralVaultAbi = [
   },
   {
     "inputs": [],
+    "name": "BACKSTOP_ADDR",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "pure",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "INSURANCE_FUND_ADDR",
     "outputs": [
       {
@@ -108,6 +121,24 @@ export const ICollateralVaultAbi = [
       }
     ],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "backstopParams",
+    "outputs": [
+      {
+        "internalType": "uint16",
+        "name": "unwindBandBps",
+        "type": "uint16"
+      },
+      {
+        "internalType": "uint16",
+        "name": "unwindFeeBps",
+        "type": "uint16"
+      }
+    ],
+    "stateMutability": "view",
     "type": "function"
   },
   {

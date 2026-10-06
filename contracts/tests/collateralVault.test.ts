@@ -753,9 +753,9 @@ describe("CollateralVault", () => {
       };
     }
 
-    it("reports version 1.2.0", async () => {
+    it("reports version 1.3.0", async () => {
       const { vault } = await networkHelpers.loadFixture(deployVaultFixture);
-      assert.equal(await vault.read.VERSION(), "1.2.0");
+      assert.equal(await vault.read.VERSION(), "1.3.0");
     });
 
     describe("settleTransfer", () => {
@@ -1109,6 +1109,123 @@ describe("CollateralVault", () => {
         halted: false,
       });
       await assertInvariants(vault, usdc);
+    });
+  });
+
+  // ── Backstop ────────────────────────────────────────────────────────────
+
+  describe("backstop", () => {
+    const BACKSTOP = "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB";
+
+    async function ready() {
+      const ctx = await networkHelpers.loadFixture(deployVaultFixture);
+      await ctx.vault.write.setAuthorizedCaller([ctx.engine.account.address, true], {
+        account: ctx.owner.account,
+      });
+      const fund = await ctx.vault.read.INSURANCE_FUND_ADDR();
+      return { ...ctx, fund };
+    }
+
+    it("exposes the vanity address and starts unfunded with zero params", async () => {
+      const { vault } = await ready();
+      assert.equal(await vault.read.BACKSTOP_ADDR(), getAddress(BACKSTOP));
+      assert.equal(await vault.read.balanceOf([BACKSTOP]), 0n);
+      assert.deepEqual(await vault.read.backstopParams(), [0, 0]);
+    });
+
+    it("records an uncoverable backstop loss as trader bad debt", async () => {
+      const { vault, engine, fund } = await ready();
+      const hash = await vault.write.settleTransfer([BACKSTOP, fund, 40n], { account: engine.account });
+      const receipt = await (await viem.getPublicClient()).waitForTransactionReceipt({ hash });
+      const [bad] = parseEventLogs({ abi: vault.abi, logs: receipt.logs, eventName: "BadDebt" });
+      assert.equal(bad.args.payer, getAddress(BACKSTOP));
+      assert.equal(bad.args.amount, 40n);
+      assert.equal(await vault.read.traderBadDebtTotal(), 40n);
+      assert.equal(await vault.read.uncoveredLoss(), 40n);
+      assert.equal(await vault.read.insuranceDebt(), 0n);
+    });
+
+    it("pays what it holds first and records only the remainder", async () => {
+      const { vault, engine, fund, owner } = await ready();
+      await vault.write.depositFor([BACKSTOP, 15n], { account: owner.account });
+      await vault.write.settleTransfer([BACKSTOP, fund, 40n], { account: engine.account });
+      assert.equal(await vault.read.balanceOf([BACKSTOP]), 0n);
+      assert.equal(await vault.read.insuranceFundBalance(), 15n);
+      assert.equal(await vault.read.traderBadDebtTotal(), 25n);
+    });
+
+    it("withdrawBackstop sweeps gains to the recipient and is owner-only", async () => {
+      const { vault, usdc, engine, fund, owner, bob, alice } = await ready();
+      await vault.write.depositInsuranceFund([30n], { account: owner.account });
+      await vault.write.settleTransfer([fund, BACKSTOP, 30n], { account: engine.account });
+      assert.equal(await vault.read.balanceOf([BACKSTOP]), 30n);
+
+      await viem.assertions.revertWithCustomError(
+        vault.write.withdrawBackstop([bob.account.address, 30n], { account: alice.account }),
+        vault,
+        "OwnableUnauthorizedAccount",
+      );
+
+      const before = await usdc.read.balanceOf([bob.account.address]);
+      const hash = await vault.write.withdrawBackstop([bob.account.address, 30n], { account: owner.account });
+      const receipt = await (await viem.getPublicClient()).waitForTransactionReceipt({ hash });
+      const [ev] = parseEventLogs({ abi: vault.abi, logs: receipt.logs, eventName: "BackstopWithdrawn" });
+      assert.equal(ev.args.recipient, getAddress(bob.account.address));
+      assert.equal(ev.args.amount, 30n);
+      assert.equal(await vault.read.balanceOf([BACKSTOP]), 0n);
+      assert.equal((await usdc.read.balanceOf([bob.account.address])) - before, 30n);
+      // Capital is untouched: the backstop is not protocol capital.
+      assert.equal(await vault.read.insuranceCapital(), 30n);
+    });
+
+    it("withdrawBackstop respects the halt", async () => {
+      const { vault, owner, bob } = await ready();
+      await vault.write.depositFor([BACKSTOP, 5n], { account: owner.account });
+      await vault.write.halt({ account: owner.account });
+      await viem.assertions.revertWithCustomError(
+        vault.write.withdrawBackstop([bob.account.address, 5n], { account: owner.account }),
+        vault,
+        "Halted",
+      );
+    });
+
+    it("setBackstopParams stores, emits, bounds and is owner-only", async () => {
+      const { vault, owner, alice } = await ready();
+      const hash = await vault.write.setBackstopParams([50, 10], { account: owner.account });
+      const receipt = await (await viem.getPublicClient()).waitForTransactionReceipt({ hash });
+      const [ev] = parseEventLogs({ abi: vault.abi, logs: receipt.logs, eventName: "BackstopParamsSet" });
+      assert.equal(ev.args.unwindBandBps, 50);
+      assert.equal(ev.args.unwindFeeBps, 10);
+      assert.deepEqual(await vault.read.backstopParams(), [50, 10]);
+      assert.equal(await vault.read.backstopUnwindBandBps(), 50);
+      assert.equal(await vault.read.backstopUnwindFeeBps(), 10);
+
+      const max = await vault.read.MAX_BACKSTOP_PARAM_BPS();
+      await vault.write.setBackstopParams([max, max], { account: owner.account });
+      await viem.assertions.revertWithCustomError(
+        vault.write.setBackstopParams([max + 1, 0], { account: owner.account }),
+        vault,
+        "BackstopParamOutOfBounds",
+      );
+      await viem.assertions.revertWithCustomError(
+        vault.write.setBackstopParams([0, max + 1], { account: owner.account }),
+        vault,
+        "BackstopParamOutOfBounds",
+      );
+      await viem.assertions.revertWithCustomError(
+        vault.write.setBackstopParams([1, 1], { account: alice.account }),
+        vault,
+        "OwnableUnauthorizedAccount",
+      );
+    });
+
+    it("keeps halted in its slot after the packed params", async () => {
+      const { vault, owner } = await ready();
+      await vault.write.setBackstopParams([100, 100], { account: owner.account });
+      assert.equal(await vault.read.halted(), false);
+      await vault.write.halt({ account: owner.account });
+      assert.equal(await vault.read.halted(), true);
+      assert.deepEqual(await vault.read.backstopParams(), [100, 100]);
     });
   });
 });

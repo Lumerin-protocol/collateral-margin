@@ -266,7 +266,7 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
 
   // ── PME (UUPS proxy) ──────────────────────────────────────────────────
   const pmeArt = artifacts.pme();
-  const pmeImpl = await deploy(publicClient, owner.client, pmeArt, []);
+  const pmeImpl = await deploy(publicClient, owner.client, pmeArt, [vault]);
   const pme = await deployProxy(
     publicClient,
     owner.client,
@@ -279,7 +279,6 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
   // ── Wire PME ↔ venues ↔ vault ─────────────────────────────────────────
   // PME -> learn about each venue so portfolio MM math includes both legs,
   // and point its own spot source at the shared hashprice oracle.
-  await write(publicClient, owner.client, pme, pmeArt.abi, "setVault", [vault]);
   await write(publicClient, owner.client, pme, pmeArt.abi, "addLinearMarket", [perps]);
   await write(publicClient, owner.client, pme, pmeArt.abi, "addLinearMarket", [
     futures,

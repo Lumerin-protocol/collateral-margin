@@ -187,6 +187,15 @@ Mitigations (contract already supports these):
 - Stale / foreign / already-closed ids in a Futures batch are **skipped**, not
   reverted, so a snapshot race degrades to "closed fewer than planned" (the
   planner's next iteration re-sizes) rather than a failed tx.
+- A matured futures leg is not liquidatable: `liquidatePosition` reverts
+  `PositionMatured`, `liquidatePositions` skips it, and the keeper's
+  `reduceToTarget` filters it out. It settles at the pinned price instead.
+- The closed quantity does not vanish. Every liquidation hands it to the
+  protocol backstop ledger (`BACKSTOP_ADDR`) at the same mark, so
+  `sum(users) + backstop == 0` per market and expiry. The keeper never targets
+  the backstop (`BackstopAccount` revert, and the tracker excludes both vanity
+  ledgers) and can optionally run the permissionless `unwindBackstop` loop. See
+  [protocol-liquidation-exposure.md](./protocol-liquidation-exposure.md).
 
 ---
 

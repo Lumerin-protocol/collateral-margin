@@ -445,6 +445,60 @@ describe("PortfolioMarginEngine", () => {
     });
   });
 
+  /**
+   * The venues' trade gate: read `reduceLimits` before a locally reducing order, then
+   * `meetsTradeMargin` after it. Every other order passes zero limits and needs full IM.
+   * One $50k lot carries IM $5k (10%) and MM $2.5k (5%) against a $50k balance.
+   */
+  describe("reduceLimits and meetsTradeMargin", () => {
+    const IM_PER_LOT = 5_000_000_000n;
+    const MM_PER_LOT = 2_500_000_000n;
+
+    async function withLots(lots: bigint) {
+      const fixture = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
+      const { perpsMock, vault, user } = fixture;
+      await perpsMock.write.setUserPosition([user, lots * ONE_LOT_QTY, DEFAULT_MARKET_PRICE]);
+      return { ...fixture, balance: await vault.read.balanceOf([user]) };
+    }
+
+    it("an account at or above IM has no MM shortfall and passes with zero limits", async () => {
+      const { pme, user } = await withLots(1n);
+      assert.deepEqual(await pme.read.reduceLimits([user]), [IM_PER_LOT, 0n]);
+      assert.equal(await pme.read.meetsTradeMargin([user, 0n, 0n]), true);
+    });
+
+    it("below IM but above MM: fails zero limits, passes while IM stays within the limit", async () => {
+      const { pme, user, balance } = await withLots(15n);
+      const im = 15n * IM_PER_LOT;
+      assert.ok(balance < im && balance >= 15n * MM_PER_LOT);
+
+      assert.deepEqual(await pme.read.reduceLimits([user]), [im, 0n]);
+      assert.equal(await pme.read.meetsTradeMargin([user, 0n, 0n]), false, "zero limits require full IM");
+      assert.equal(await pme.read.meetsTradeMargin([user, im, 0n]), true);
+      assert.equal(await pme.read.meetsTradeMargin([user, im - 1n, 0n]), false, "IM rose past the limit");
+    });
+
+    it("below MM: reports the shortfall and fails once it grows", async () => {
+      const { pme, user, balance } = await withLots(25n);
+      const im = 25n * IM_PER_LOT;
+      const deficit = 25n * MM_PER_LOT - balance;
+      assert.ok(deficit > 0n);
+
+      assert.deepEqual(await pme.read.reduceLimits([user]), [im, deficit]);
+      assert.equal(await pme.read.meetsTradeMargin([user, im, deficit]), true);
+      assert.equal(await pme.read.meetsTradeMargin([user, im, deficit - 1n]), false, "MM shortfall grew");
+    });
+
+    it("prices the limits from the same snapshot as computePortfolioMargins", async () => {
+      const { pme, perpsMock, user, balance } = await withLots(25n);
+      await perpsMock.write.setUnrealizedPnl([user, -3_000_000_000n]);
+      await perpsMock.write.setPendingFunding([user, 400_000_000n]);
+
+      const [im, mm] = await pme.read.computePortfolioMargins([user]);
+      assert.deepEqual(await pme.read.reduceLimits([user]), [im, mm - balance]);
+    });
+  });
+
   describe("linearOrderMargin", () => {
     it("applies the IM spot shock to a notional, in token decimals", async () => {
       const { pme } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
@@ -547,29 +601,9 @@ describe("PortfolioMarginEngine", () => {
       );
     });
 
-    it("rejects swapping the vault while a market pins the old one", async () => {
-      const { pme } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
-      const { vault: newVault } = await deployCollateralVaultProxy(conn);
-
-      await viem.assertions.revertWithCustomError(
-        pme.write.setVault([newVault.address]),
-        pme,
-        "VaultMismatch",
-      );
-    });
-
-    it("allows swapping the vault once the stale products are deregistered", async () => {
-      const { pme, perpsMock, futuresMock } = await networkHelpers.loadFixture(
-        deployPortfolioMarginEngineFixture,
-      );
-      const { vault: newVault } = await deployCollateralVaultProxy(conn);
-
-      await pme.write.removeLinearMarket([perpsMock.address]);
-      await pme.write.removeLinearMarket([futuresMock.address]);
-      await pme.write.setOptions([zeroAddress]);
-
-      await pme.write.setVault([newVault.address]);
-      assert.equal(await pme.read.vault(), getAddress(newVault.address));
+    it("pins the vault the implementation was built with", async () => {
+      const { pme, vault } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
+      assert.equal(await pme.read.vault(), getAddress(vault.address));
     });
 
     it("rejects an options engine settling into a different vault", async () => {
@@ -606,7 +640,18 @@ describe("PortfolioMarginEngine", () => {
       const { pme, usdc } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
 
       await viem.assertions.revertWithCustomError(
-        pme.write.setVault([usdc.address]),
+        viem.deployContract("PortfolioMarginEngine", [usdc.address]),
+        pme,
+        "InvalidDependency",
+      );
+    });
+
+    it("rejects a vault that is not a contract", async () => {
+      const { pme } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
+      const [, eoa] = await viem.getWalletClients();
+
+      await viem.assertions.revertWithCustomError(
+        viem.deployContract("PortfolioMarginEngine", [eoa.account.address]),
         pme,
         "InvalidDependency",
       );
@@ -616,7 +661,7 @@ describe("PortfolioMarginEngine", () => {
       const { pme } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
 
       await viem.assertions.revertWithCustomError(
-        pme.write.setVault([zeroAddress]),
+        viem.deployContract("PortfolioMarginEngine", [zeroAddress]),
         pme,
         "ZeroAddress",
       );

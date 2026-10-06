@@ -22,6 +22,16 @@ interface IPortfolioMarginEngine {
     /// @notice Portfolio Initial and Maintenance Margin from one shared market snapshot.
     function computePortfolioMargins(address user) external view returns (uint256 im, uint256 mm);
 
+    /// @notice IM and MM-shortfall limits for a locally reducing order, read before the
+    ///         order and passed to {meetsTradeMargin} after it.
+    function reduceLimits(address user) external view returns (uint256 maxIm, uint256 maxMmDeficit);
+
+    /// @notice Whether the account may finish a trade: at or above IM, or below IM within
+    ///         the limits from {reduceLimits}. Zero limits require full IM.
+    /// @dev Venues revert with their own error when this is false, so the margin rule lives
+    ///      here and the venues' ABIs stay unchanged.
+    function meetsTradeMargin(address user, uint256 maxIm, uint256 maxMmDeficit) external view returns (bool);
+
     /// @notice Whether the account is liquidatable: vault balance below portfolio MM.
     /// @dev The canonical cross-venue health predicate — liquidatability is a property of
     ///      the portfolio, not of any single venue, so it lives here. No venue-local state

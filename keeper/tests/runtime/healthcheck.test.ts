@@ -59,6 +59,7 @@ const STUB_CONFIG: Config = {
     bootstrapUsers: [],
     maxBatchSize: 50,
   },
+  backstop: { enabled: false, intervalMs: 60_000, maxQtyFutures: 0n, maxQtyPerps: 0n },
 };
 
 interface Knobs {
@@ -255,6 +256,7 @@ describe("runtime/healthcheck: info", () => {
       discoveryMode: "events",
       dryRun: "false",
       deliveryEnabled: "false",
+      backstopUnwindEnabled: "false",
       signer: SIGNER,
       vault: config.vault.address,
       perps: config.perps.address,

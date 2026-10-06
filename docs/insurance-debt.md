@@ -9,6 +9,7 @@ Winners are paid in full. The debt cap is a circuit breaker, not a haircut.
 Venues call `settleTransfer(from, to, amount)` on the vault.
 
 - Trader payer (a loss, funding owed, or a fee): the vault moves `min(balance, amount)` and emits `BadDebt` for the rest. `traderBadDebtTotal` increases only when the receiver is the insurance fund. A fee shortfall is lost revenue, not a reserve loss.
+- Backstop payer (`BACKSTOP_ADDR`, the ledger that inherits liquidated positions): same path as a trader. The ledger is unfunded, so a loss it realizes is almost always `BadDebt` in full. It counts in `traderBadDebtTotal` and is split out as `backstopBadDebtTotal` on the dashboard. See [protocol-liquidation-exposure.md](./protocol-liquidation-exposure.md).
 - Insurance-fund payer (a winner's profit, or funding the fund owes): the vault pays the fund balance first, mints the rest to the winner, and adds it to `insuranceDebt`. There is no borrow limit, so the winner is always paid.
 
 Any inflow to the insurance fund repays debt first. The repaid amount is burned. While `insuranceDebt > 0`, the fund balance is 0, so `withdrawInsuranceFund` cannot move money.
@@ -60,6 +61,7 @@ Amounts below are USDC on the `col-mar-vault-{env}` dashboard. Alarm text matche
 | --- | --- | --- |
 | Timing debt above 0 | none | Backed by open losers. Leave it. |
 | Uncovered loss above 0 | critical | Top up exactly that amount with `depositInsuranceFund`. The alarm clears on its own. Never raise the cap to cover it. |
+| Backstop equity below 0 | warning | Positions the backstop inherited from liquidations are losing at the mark. Nothing is booked yet; it becomes uncovered loss when the legs unwind, offset, or settle. Make sure unwinds are flowing (keeper `BACKSTOP_UNWIND_ENABLED`, or call `unwindBackstop`) and plan the top-up. Do not deposit into the backstop. |
 | Utilization at or above 50% | warning | Confirm uncovered loss is 0 and the keeper and oracle are healthy. If it is only timing debt, raise the cap. |
 | Utilization at or above 80% | critical | Same checks. Raise the cap or top up before a borrow crosses 100% and halts the vault. |
 | Vault halted | critical | Follow [Resume](#resume). |
@@ -79,6 +81,8 @@ Scheduled hashprice steps (difficulty retarget, about every two weeks, and the h
 Fee balances (`FuturesFeeBalance`, `PerpsFeeBalance` on the dashboard) are the venues' vault balances. They can be withdrawn with `withdrawCollectedFees` and then deposited into the fund. That withdrawal reverts while the vault is halted, so fees cannot fund a top-up until after `resume()`. While debt is outstanding and the vault is not halted, check the dashboard before taking fees out: once withdrawn, they are no longer available if part of the debt turns out to be uncollectible.
 
 A top-up against timing debt is not lost. As losers pay in, the fund balance grows again and can be taken back with `withdrawInsuranceFund`.
+
+The backstop ledger's own balance (`BackstopBalance`) is profit from inherited positions that closed in the money. `withdrawBackstop(recipient, amount)` moves it out; deposit it into the fund with `depositInsuranceFund`. It reverts while halted, like every withdrawal.
 
 ## Resume
 
@@ -108,7 +112,8 @@ Levers:
 
 By cause:
 
-- Losses not recorded yet (late keeper, price gap). This is not necessarily a bug. Keep the halt on, restart the keeper, and let liquidations and settlement reduce exposure and record any bad debt. Top up the final uncovered loss, then raise the cap if needed and resume.
+- Losses not recorded yet (late keeper, price gap). This is not necessarily a bug. Keep the halt on, restart the keeper, and let liquidations and settlement reduce exposure and record any bad debt. Liquidated quantity lands on the backstop; its loss is recorded when it unwinds or settles, so watch `BackstopEquity` too. Top up the final uncovered loss, then raise the cap if needed and resume.
+- Residual exposure that no ledger holds (positions liquidated before the backstop existed, or a venue bug that broke conservation). While halted, the owner calls `forceClosePositions` on the venue to close the listed positions at the mark against the fund, then tops up `insuranceDebt`, then resumes. This is the migration path for the backstop upgrade and a last resort afterwards.
 - Venue profit-and-loss bug. Fix and upgrade the venue, reverse the overpayments, then resume.
 - Bug in liquidation, settlement, or funding. Revoke the affected venue immediately. Fix and upgrade it, correct affected transfers, then re-authorize and resume.
 - Wrong but fresh oracle price. Halt, revoke every venue using that oracle so liquidations and settlement stop, fix the oracle, reverse fake payouts, and compensate wrongly liquidated accounts before re-authorizing and resuming.

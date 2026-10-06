@@ -5,6 +5,7 @@ import type pino from "pino";
 import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
 import { FuturesExpiryIndex } from "../../src/discovery/futuresExpiryIndex.ts";
+import { BACKSTOP_ADDR } from "../../src/protocolAccounts.ts";
 
 const FUTURES = "0x000000000000000000000000000000000000F00d" as Address;
 const SIGNER = "0x0000000000000000000000000000000000009999" as Address;
@@ -220,6 +221,65 @@ describe("FuturesExpiryIndex", () => {
         .positionEntries()
         .some((entry) => entry.expirationAt === PREVIOUS),
       true,
+    );
+    index.stop();
+  });
+
+  it("tracks the backstop's positions for settlement but never as a participant", async () => {
+    const state: StubState = { activeExpiries: [ACTIVE_A], watchers: {} };
+    const index = new FuturesExpiryIndex(makeChain(state), makeConfig(), silentLogger);
+    await index.start();
+    const added: Address[] = [];
+    index.onAdded((user) => added.push(user));
+
+    // A backstop unwind is an OrderMatched with the backstop as taker.
+    state.watchers.OrderMatched?.([
+      {
+        args: {
+          maker: USER_B,
+          taker: BACKSTOP_ADDR,
+          expirationAt: ACTIVE_A,
+          makerNetQtyAfter: 3n,
+          takerNetQtyAfter: -3n,
+        },
+      },
+    ]);
+
+    assert.equal(index.has(BACKSTOP_ADDR), false, "not a liquidation candidate");
+    assert.equal(added.includes(BACKSTOP_ADDR), false);
+    assert.ok(
+      index
+        .positionEntries()
+        .some((e) => e.user === BACKSTOP_ADDR && e.expirationAt === ACTIVE_A),
+      "the backstop's leg is tracked for expiry settlement",
+    );
+    index.stop();
+  });
+
+  it("re-reads the backstop's leg after a liquidation at that expiry", async () => {
+    const state: StubState = { activeExpiries: [ACTIVE_A], watchers: {} };
+    const chain = makeChain(state);
+    const reads: Address[] = [];
+    const inner = chain.publicClient.readContract;
+    chain.publicClient.readContract = (async (call: { functionName: string; args?: readonly unknown[] }) => {
+      if (call.functionName === "getUserPosition") {
+        const user = getAddress(call.args?.[0] as Address);
+        reads.push(user);
+        if (user === BACKSTOP_ADDR) return { netQuantity: -5n, netEntryValue: 1n };
+      }
+      return inner(call as never);
+    }) as typeof inner;
+    const index = new FuturesExpiryIndex(chain, makeConfig(), silentLogger);
+    await index.start();
+
+    state.watchers.PositionLiquidated?.([{ args: { user: USER_A, expirationAt: ACTIVE_A } }]);
+    await new Promise((r) => setImmediate(r));
+
+    assert.ok(reads.includes(BACKSTOP_ADDR), "backstop position reconciled");
+    assert.ok(
+      index
+        .positionEntries()
+        .some((e) => e.user === BACKSTOP_ADDR && e.expirationAt === ACTIVE_A),
     );
     index.stop();
   });

@@ -68,11 +68,25 @@ contract PortfolioMarginEngine is
     using EnumerableSet for EnumerableSet.AddressSet;
 
     uint256 private constant MAX_ORACLE_STALENESS = 1 hours;
-    string public constant VERSION = "2.1.0";
+    string public constant VERSION = "2.2.0";
+
+    /// @notice The collateral vault this engine aggregates balances from.
+    /// @dev Fixed per implementation, like the products' own vault pins: every registered
+    ///      product settles into this one ledger, so moving it means redeploying the stack.
+    ///      An upgrade must build the new implementation against the proxy's current vault.
+    /// @custom:oz-upgrades-unsafe-allow state-variable-immutable
+    ICollateralVault public immutable vault;
+
+    /// @dev Decimals of the vault's collateral token — the shared quote unit for all
+    ///      product prices/PnL.
+    /// @custom:oz-upgrades-unsafe-allow state-variable-immutable
+    uint8 private immutable collateralDecimals;
 
     // ── Storage ─────────────────────────────────────────────────────────────
 
-    ICollateralVault public vault;
+    /// @dev Deprecated storage-layout placeholder (legacy `vault` slot) — superseded by the
+    ///      `vault` immutable. Never read.
+    ICollateralVault private __deprecated_vault;
     /// @dev Deprecated storage-layout placeholder (legacy `perpsDex` slot) — superseded
     ///      by `linearMarkets`. Read once by initializeV2 during migration; never written.
     ILinearMarket private __deprecated_perpsDex;
@@ -89,9 +103,9 @@ contract PortfolioMarginEngine is
     /// @dev Vol shock for MM.
     uint256 public mmVolShock;
 
-    /// @dev Cached decimals of the vault's collateral token — the shared quote unit for
-    ///      all product prices/PnL. Cached so product contracts don't need to re-expose it.
-    uint8 private collateralDecimals;
+    /// @dev Deprecated storage-layout placeholder (legacy `collateralDecimals` slot) —
+    ///      superseded by the `collateralDecimals` immutable. Never read.
+    uint8 private __deprecated_collateralDecimals;
 
     /// @dev Registered linear markets (delta-one products). Margin math iterates
     ///      this set; the engine has no product-specific knowledge. Duplicates are
@@ -109,7 +123,6 @@ contract PortfolioMarginEngine is
     event LinearMarketAdded(address indexed market);
     event LinearMarketRemoved(address indexed market);
     event OptionsEngineUpdated(address optionsEngine);
-    event VaultUpdated(address vault);
     event OracleUpdated(address oracle);
 
     // ── Errors ──────────────────────────────────────────────────────────────
@@ -128,8 +141,14 @@ contract PortfolioMarginEngine is
 
     // ── Initializer ─────────────────────────────────────────────────────────
 
+    /// @dev Smoke-tests the vault's read surface before adopting it. A wrong address here
+    ///      breaks every margin computation, and so every withdrawal gate, at once.
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    constructor(ICollateralVault _vault) {
+        _validateNotZeroAddress(address(_vault));
+        _requireContract(address(_vault));
+        vault = _vault;
+        collateralDecimals = _readDecimals(_validateVaultContract(address(_vault)));
         _disableInitializers();
     }
 
@@ -143,13 +162,10 @@ contract PortfolioMarginEngine is
         mmVolShock = WAD / 20; // 5 vol points
     }
 
-    /// @notice Backfills `collateralDecimals` and migrates the legacy perps/futures
-    ///         registrations into `linearMarkets` on proxies initialized before those
-    ///         were introduced. Must run before the upgrade serves margin calls —
-    ///         decimals stay 0 and no linear market is registered otherwise.
+    /// @notice Migrates the legacy perps/futures registrations into `linearMarkets` on
+    ///         proxies initialized before it was introduced. Must run before the upgrade
+    ///         serves margin calls — no linear market is registered otherwise.
     function initializeV2() external reinitializer(2) {
-        collateralDecimals = _readDecimals(address(vault.collateralToken()));
-
         if (address(__deprecated_perpsDex) != address(0)) {
             linearMarkets.add(address(__deprecated_perpsDex));
         }
@@ -171,19 +187,6 @@ contract PortfolioMarginEngine is
         imVolShock = _imVolShock;
         mmVolShock = _mmVolShock;
         emit ShocksUpdated(_imSpotShock, _mmSpotShock, _imVolShock, _mmVolShock);
-    }
-
-      /// @dev Smoke-tests the vault's read surface before adopting it. A wrong address here
-      ///      breaks every margin computation, and so every withdrawal gate, at once.
-    function setVault(address _vault) external onlyOwner {
-      _validateNotZeroAddress(_vault);
-      _requireContract(_vault);
-      address token = _validateVaultContract(_vault);
-      _validateMarketsUseSameVault(_vault);
-
-      vault = ICollateralVault(_vault);
-      collateralDecimals = _readDecimals(token);
-      emit VaultUpdated(_vault);
     }
 
     /// @notice Register a linear market (any delta-one product). Reverts if already
@@ -259,6 +262,35 @@ contract PortfolioMarginEngine is
         uint256 spotPrice = _getSpotPriceWad();
         im = _marginFromInputs(inputs, true, spotPrice);
         mm = _marginFromInputs(inputs, false, spotPrice);
+    }
+
+    /// @notice Limits a locally reducing order must stay within if it leaves the account
+    ///         below IM: the current IM, and the current shortfall of the balance below MM.
+    /// @dev Venues read this before placing the order and pass it to {meetsTradeMargin}
+    ///      afterwards. MM is priced only below IM. At or above IM the shortfall is taken as
+    ///      zero, which holds while IM shocks are at least the MM shocks; otherwise it only
+    ///      makes the check stricter.
+    function reduceLimits(address user) external view returns (uint256 maxIm, uint256 maxMmDeficit) {
+        (MarginInputs memory inputs, uint256 spotPrice, uint256 balance) = _accountSnapshot(user);
+        maxIm = _marginFromInputs(inputs, true, spotPrice);
+        if (balance < maxIm) {
+            uint256 mm = _marginFromInputs(inputs, false, spotPrice);
+            if (mm > balance) maxMmDeficit = mm - balance;
+        }
+    }
+
+    /// @notice Whether the account may finish a trade as it stands: at or above IM, or below
+    ///         IM with IM at most `maxIm` and the shortfall below MM at most `maxMmDeficit`.
+    ///         Zero limits require full IM.
+    /// @dev The MM bound stops an off-market reduce from spending the equity that backs the
+    ///      remaining position. A reduce near the mark frees more MM than it realizes, so it
+    ///      still passes for an account already below MM.
+    function meetsTradeMargin(address user, uint256 maxIm, uint256 maxMmDeficit) external view returns (bool) {
+        (MarginInputs memory inputs, uint256 spotPrice, uint256 balance) = _accountSnapshot(user);
+        uint256 im = _marginFromInputs(inputs, true, spotPrice);
+        if (balance >= im) return true;
+        if (im > maxIm) return false;
+        return _marginFromInputs(inputs, false, spotPrice) <= balance + maxMmDeficit;
     }
 
     /// @notice Margin charged against a delta-one resting order's notional (both token
@@ -366,6 +398,18 @@ contract PortfolioMarginEngine is
 
     function _computeMargin(address user, bool isIM) private view returns (uint256) {
         return _marginFromAggregate(user, _linearAggregate(user), isIM);
+    }
+
+    /// @dev Inputs, spot and balance read once, so IM and MM priced from them describe the
+    ///      same account state.
+    function _accountSnapshot(address user)
+        private
+        view
+        returns (MarginInputs memory inputs, uint256 spotPrice, uint256 balance)
+    {
+        inputs = _marginInputs(user, _linearAggregate(user));
+        spotPrice = _getSpotPriceWad();
+        balance = vault.balanceOf(user);
     }
 
     /// @dev Fold options into an already-collected linear snapshot.
@@ -522,19 +566,6 @@ contract PortfolioMarginEngine is
 
     function _validateNotZeroAddress(address addr) private view {
       if (addr == address(0)) revert ZeroAddress();
-    }
-
-    function _validateMarketsUseSameVault(address _vault) private view {
-      // Products pin their vault at construction, so swapping the engine's vault out
-      // from under live registrations can only mean the two have diverged. Deregister
-      // the stale products first.
-      uint256 len = linearMarkets.length();
-      for (uint256 i = 0; i < len; i++) {
-          _requireVaultPin(linearMarkets.at(i), ICollateralVault(_vault));
-      }
-      if (address(optionsEngine) != address(0)) {
-        _requireVaultPin(address(optionsEngine), ICollateralVault(_vault));
-      }
     }
 
     function _validateVaultContract(address _vault) private view returns (address token){

@@ -31,7 +31,10 @@ type KnownRevert =
   | "OrderNotBelongToUser"
   | "OrderNotBelongToParticipant"
   | "PositionNotBelongToParticipant"
-  | "PositionNotExists";
+  | "PositionNotExists"
+  | "BackstopAccount"
+  | "PositionMatured"
+  | "TimeInForceNotFilled";
 
 const RECOVERABLE_REVERTS = new Set<KnownRevert>([
   "NotLiquidatable",
@@ -44,6 +47,13 @@ const RECOVERABLE_REVERTS = new Set<KnownRevert>([
   "OrderNotBelongToParticipant",
   "PositionNotBelongToParticipant",
   "PositionNotExists",
+  // The backstop ledger is excluded from discovery, but a stale queue entry or
+  // an operator-injected address can still reach a liquidate call.
+  "BackstopAccount",
+  // A futures leg matured between snapshot and send; it belongs to settlement.
+  "PositionMatured",
+  // `unwindBackstop` found nothing inside the band — try again next tick.
+  "TimeInForceNotFilled",
 ]);
 
 interface SendLiquidateOptions<S extends string> {

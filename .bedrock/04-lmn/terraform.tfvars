@@ -19,13 +19,15 @@ perps_mm_service = {
   task_ram        = 512
 }
 
-# Futures Market Maker
+# Futures Market Maker. 1024 CPU is 1 vCPU. Fargate's minimum memory at
+# that size is 2048 MB.
 futures_mm_service = {
   create          = true
   task_worker_qty = 1
   cnt_port        = 3001
-  task_cpu        = 256
-  task_ram        = 512
+  task_cpu        = 1024
+  task_ram        = 2048
+  ghcr_vers       = "auto" # newest col-mar-mm release tag, unless the running task is newer
 }
 
 keeper_service = {

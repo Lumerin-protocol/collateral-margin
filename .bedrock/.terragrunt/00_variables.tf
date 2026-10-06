@@ -10,13 +10,18 @@ variable "create_core" {
 # Two independent ECS services running the same Docker image but different
 # entry points (MAKER_APP=perps vs MAKER_APP=futures). Terraform owns ONLY
 # the scaffolding (security groups, ALB, target group, listener, Route53,
-# log group, service shell, initial task-def stub).
+# log group, service shell, task definition).
 #
 # Personality (image, public env vars, desired count) is owned by
-# deploy-col-mar-mm.yml. Private keys and the Alchemy key live in Secrets
-# Manager (01_secrets_manager.tf) and are injected with ECS valueFrom.
-# Both ECS service.task_definition and container_definitions are in
-# lifecycle.ignore_changes; Terraform never updates them after first apply.
+# deploy-col-mar-mm.yml between applies. Private keys and the Alchemy key
+# live in Secrets Manager (01_secrets_manager.tf) and are injected with ECS
+# valueFrom. The service ignores task_definition, and the task definition
+# ignores container_definitions, so a routine plan does not fight CI.
+#
+# A CPU or memory change forces a new task revision, and ignore_changes does
+# not apply to that create. The futures revision is built from the GitHub
+# tag (00_data_github_release.tf) and config/<env>.env (public_env), which
+# is the same file CI injects. See 04_futures_mm_svc.tf.
 #
 # Service map fields (all scaffolding):
 #   create           bool   - toggle the entire service stack
@@ -24,6 +29,7 @@ variable "create_core" {
 #   cnt_port         number - container port + target-group port + SG ingress rule
 #   task_cpu         number - Fargate CPU units for the task
 #   task_ram         number - Fargate memory (MB) for the task
+#   ghcr_vers        string - futures image tag; "auto" follows GitHub tags
 ################################################################################
 
 variable "perps_mm_service" {
@@ -52,6 +58,7 @@ variable "futures_mm_service" {
     cnt_port        = number
     task_cpu        = number
     task_ram        = number
+    ghcr_vers       = string
   })
   default = {
     create          = false
@@ -59,7 +66,13 @@ variable "futures_mm_service" {
     cnt_port        = 3001
     task_cpu        = 256
     task_ram        = 512
+    ghcr_vers       = "auto"
   }
+}
+
+variable "public_env" {
+  description = "Public KEY=VALUE pairs from config/<env>.env, parsed by public-config.hcl. The futures task definition injects the non-empty, non-secret keys when it registers a revision."
+  type        = map(string)
 }
 
 ################################################################################
@@ -198,11 +211,21 @@ variable "vault_monitoring" {
 }
 
 variable "vault_env" {
-  description = "Vault monitor addresses and subgraph URL from config/dev.env or config/prd.env (VAULT_ADDRESS, FUTURES_ADDRESS, PERPS_ADDRESS, VAULT_SUBGRAPH_URL)."
+  description = "Vault monitor addresses and subgraph URLs from config/dev.env or config/prd.env (VAULT_ADDRESS, FUTURES_ADDRESS, PERPS_ADDRESS, VAULT_SUBGRAPH_URL, POINTS_SUBGRAPH_URL). All required; the Lambda does not validate its environment."
   type = object({
-    subgraph_url    = string
-    vault_address   = string
-    futures_address = string
-    perps_address   = string
+    subgraph_url        = string
+    points_subgraph_url = string
+    vault_address       = string
+    futures_address     = string
+    perps_address       = string
   })
+  validation {
+    condition     = alltrue([for value in values(var.vault_env) : value != ""])
+    error_message = "Every vault_env value must be set in config/<env>.env."
+  }
+}
+
+variable "vault_mon_dir" {
+  description = "Absolute path to the vault monitor package (monitor/), zipped as-is after a prod install. Set by public-config.hcl."
+  type        = string
 }

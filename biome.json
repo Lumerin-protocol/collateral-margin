@@ -3,13 +3,13 @@
   "files": {
     "includes": [
       "**",
-      "!!**/generated",
-      "!!**/build",
-      "!!**/node_modules",
-      "!!**/coverage",
-      "!!**/cache",
-      "!!**/artifacts",
-      "!!**/dist"
+      "!**/generated",
+      "!**/build",
+      "!**/node_modules",
+      "!**/coverage",
+      "!**/cache",
+      "!**/artifacts",
+      "!**/dist"
     ]
   },
   "overrides": [
@@ -65,7 +65,7 @@
     }
   },
   "formatter": {
-    "enabled": false,
+    "enabled": true,
     "indentStyle": "space",
     "indentWidth": 2
   }
