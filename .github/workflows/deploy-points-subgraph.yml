@@ -306,12 +306,14 @@ jobs:
 
           echo "$DEPLOY_OUTPUT"
 
-          SKIP_DEPLOY=false
           if [ $DEPLOY_EXIT -ne 0 ]; then
             if echo "$DEPLOY_OUTPUT" | grep -qi "already exists"; then
+              # Goldsky versions are immutable: a name collision means this build
+              # was NOT deployed. Re-tagging the old version would silently keep
+              # stale config (addresses, start block) live, so stop here.
               echo ""
-              echo "ℹ️  Version ${SUBGRAPH_VERSION} already exists — skipping to tag"
-              SKIP_DEPLOY=true
+              echo "::error::${GOLDSKY_SUBGRAPH_NAME}/${SUBGRAPH_VERSION} already exists on Goldsky — this build was not deployed. Re-run via workflow_dispatch to get a -runN version, or bump the version."
+              exit 1
             elif echo "$DEPLOY_OUTPUT" | grep -qi "already deployed"; then
               CONFLICT=$(echo "$DEPLOY_OUTPUT" | grep -oP 'under the name \K\S+(?=\.)' || true)
               echo ""
@@ -332,9 +334,7 @@ jobs:
           fi
 
           # Brief pause for Goldsky to register the new deployment
-          if [ "$SKIP_DEPLOY" = "false" ]; then
-            sleep 5
-          fi
+          sleep 5
 
           # --- Roll the rolling tag ---
           echo ""
@@ -369,11 +369,7 @@ jobs:
           echo ""
           echo "✅ ${GOLDSKY_SUBGRAPH_NAME}/${SUBGRAPH_VERSION} deployed and tagged as ${GOLDSKY_ROLLING_TAG}"
 
-          if [ "$SKIP_DEPLOY" = "true" ]; then
-            echo "deploy_status=already_exists" >> $GITHUB_OUTPUT
-          else
-            echo "deploy_status=deployed" >> $GITHUB_OUTPUT
-          fi
+          echo "deploy_status=deployed" >> $GITHUB_OUTPUT
 
           echo "## 🚀 Goldsky Deployment" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -382,7 +378,7 @@ jobs:
           echo "| Subgraph | \`${GOLDSKY_SUBGRAPH_NAME}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Version | \`${SUBGRAPH_VERSION}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Tag | \`${GOLDSKY_ROLLING_TAG}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Status | $([ "$SKIP_DEPLOY" = "true" ] && echo "Already existed" || echo "Deployed") |" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | Deployed |" >> $GITHUB_STEP_SUMMARY
 
   verify:
     name: 🔍 Verify
