@@ -1,44 +1,44 @@
-name: 'Generate Version Tag'
-description: 'Generates component-based version tags for monorepo deployments'
+name: "Generate Version Tag"
+description: "Generates component-based version tags for monorepo deployments"
 
 inputs:
   component:
-    description: 'Component name (folder name, e.g., indexer, ui, oracle-update)'
+    description: "Component name (folder name, e.g., indexer, ui, oracle-update)"
     required: true
   major_version:
-    description: 'Target major version (triggers major bump if greater than current)'
+    description: "Target major version (triggers major bump if greater than current)"
     required: false
-    default: '3'
+    default: "3"
   environment_override:
-    description: 'Override environment (for workflow_dispatch). Leave empty for branch-based detection.'
+    description: "Override environment (for workflow_dispatch). Leave empty for branch-based detection."
     required: false
-    default: ''
+    default: ""
 
 outputs:
   tag_name:
-    description: 'Full tag name (e.g., indexer-v2.0.5-dev)'
+    description: "Full git tag name (e.g., indexer-v2.1.0, indexer-v2.0.5-dev, indexer-v2.1.0-run123)"
     value: ${{ steps.gen_tag.outputs.tag_name }}
   vtag:
-    description: 'Version tag (same as tag_name)'
+    description: "Version tag (same as tag_name)"
     value: ${{ steps.gen_tag.outputs.vtag }}
   version:
-    description: 'Version string with v prefix (e.g., v2.0.5-dev)'
+    description: "Deployed version string without component prefix (e.g., v2.1.0, v2.0.5-dev, v2.1.0-run123)"
     value: ${{ steps.gen_tag.outputs.version }}
   vfull:
-    description: 'Semantic version without prefix (e.g., 2.0.5)'
+    description: "Semantic version without prefix (e.g., 2.0.5)"
     value: ${{ steps.gen_tag.outputs.vfull }}
   environment:
-    description: 'Deployment environment (dev, stg, main)'
+    description: "Deployment environment (dev, stg, main)"
     value: ${{ steps.determine_env.outputs.environment }}
   should_create_release:
-    description: 'Whether to create a GitHub release (true for main)'
+    description: "Whether to create a GitHub release (true for main)"
     value: ${{ steps.determine_env.outputs.should_create_release }}
   is_cicd_branch:
-    description: 'Whether this is a CI/CD test branch'
+    description: "Whether this is a CI/CD test branch"
     value: ${{ steps.determine_env.outputs.is_cicd_branch }}
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Determine environment
       id: determine_env
@@ -46,12 +46,19 @@ runs:
       run: |
         ENV_OVERRIDE="${{ inputs.environment_override }}"
         IS_CICD="false"
-        
+
         if [ -n "$ENV_OVERRIDE" ]; then
           # Use override from workflow_dispatch
           ENV="$ENV_OVERRIDE"
           CREATE_RELEASE="false"
           [ "$ENV" == "main" ] && CREATE_RELEASE="true"
+
+          # Feature branches may only target the shared dev environment.
+          BRANCH="${{ github.ref_name }}"
+          if [[ "$BRANCH" != "dev" && "$BRANCH" != "stg" && "$BRANCH" != "main" && "$ENV" != "dev" ]]; then
+            echo "::error::Feature branch '$BRANCH' can only deploy to dev (got '$ENV'). Staging and production stay locked to their own branches."
+            exit 1
+          fi
         else
           # Detect from branch name
           BRANCH="${{ github.ref_name }}"
@@ -80,18 +87,20 @@ runs:
       shell: bash
       run: |
         # Component-based versioning for monorepo
-        # Pattern: <component>-v<major>.<minor>.<patch>[-env]
+        # Pattern: <component>-v<major>.<minor>.<patch>[-branch][-runN]
+        # The git tag carries the component prefix; the deployed version
+        # string does not (e.g. tag indexer-v3.2.0 → version v3.2.0).
         COMPONENT="${{ inputs.component }}"
         VMAJ_NEW=${{ inputs.major_version }}
         VMIN_NEW=0
         VPAT_NEW=0
-        
+
         set +o pipefail
-        
+
         # Find the last production tag for this component (without -dev/-stg suffix)
         # Use git tag -l with sort to find latest, not git describe (which requires reachability)
         VLAST=$(git tag -l "${COMPONENT}-v[0-9]*" | grep -E "^${COMPONENT}-v[0-9]+\.[0-9]+\.[0-9]+$" | sort -V | tail -n 1 | sed "s/${COMPONENT}-v//" || echo "")
-        
+
         if [ -n "$VLAST" ]; then
             # Parse existing version
             eval $(echo "$VLAST" | awk -F '.' '{print "VMAJ="$1" VMIN="$2" VPAT="$3}')
@@ -101,9 +110,11 @@ runs:
             VMIN=0
             VPAT=0
         fi
-        
+
         ENV="${{ steps.determine_env.outputs.environment }}"
-        
+        RNAME=${GITHUB_REF_NAME##*/}
+        [ "$GITHUB_EVENT_NAME" = "pull_request" ] && RNAME=pr${GITHUB_REF_NAME%/merge}
+
         if [ "$ENV" = "main" ]; then
             # Production release - increment version
             if [ "$VMAJ_NEW" -gt "$VMAJ" ]; then
@@ -117,25 +128,44 @@ runs:
                 VPAT=0
             fi
             VFULL=${VMAJ}.${VMIN}.${VPAT}
-            VTAG=${COMPONENT}-v${VFULL}
             VERSION="v${VFULL}"
+            # Exact form of a production tag on HEAD (used to detect a redeploy).
+            DEPLOYED_RE="^${COMPONENT}-v[0-9]+\.[0-9]+\.[0-9]+$"
         else
             # Non-production - use commit count as patch for uniqueness
-            MB=$(git merge-base refs/remotes/origin/main HEAD 2>/dev/null || git rev-parse HEAD)
-            VPAT=$(git rev-list --count --no-merges ${MB}..HEAD 2>/dev/null || echo "0")
+            if git rev-parse refs/remotes/origin/main &>/dev/null; then
+              MB=$(git merge-base refs/remotes/origin/main HEAD)
+              VPAT=$(git rev-list --count --no-merges ${MB}..HEAD 2>/dev/null || echo "0")
+            else
+              VPAT=$(git rev-list --count --no-merges HEAD 2>/dev/null || echo "0")
+            fi
             VFULL=${VMAJ}.${VMIN}.${VPAT}
-            RNAME=${GITHUB_REF_NAME##*/}
-            [ "$GITHUB_EVENT_NAME" = "pull_request" ] && RNAME=pr${GITHUB_REF_NAME%/merge}
-            VTAG=${COMPONENT}-v${VFULL}-${RNAME}
             VERSION="v${VFULL}-${RNAME}"
+            DEPLOYED_RE="^${COMPONENT}-v[0-9]+\.[0-9]+\.[0-9]+-${RNAME}$"
         fi
-        
+        VTAG=${COMPONENT}-${VERSION}
+
+        # Manual redeploy of an already-deployed commit (e.g. changed START_BLOCK):
+        # Goldsky versions are immutable, so reuse the version that was deployed
+        # from this commit and make it unique with the run number. A first deploy
+        # of a commit gets no suffix.
+        if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            DEPLOYED_TAG=$(git tag --points-at HEAD -l "${COMPONENT}-v*" | grep -E "$DEPLOYED_RE" | sort -V | tail -n 1)
+            if [ -n "$DEPLOYED_TAG" ]; then
+                RUN_NUM=${{ github.run_number }}
+                VTAG="${DEPLOYED_TAG}-run${RUN_NUM}"
+                VERSION="${DEPLOYED_TAG#${COMPONENT}-}-run${RUN_NUM}"
+                VFULL=$(echo "$DEPLOYED_TAG" | sed -E "s/^${COMPONENT}-v([0-9]+\.[0-9]+\.[0-9]+).*/\1/")
+                echo "🔁 Redeploy of ${DEPLOYED_TAG} as ${VERSION}"
+            fi
+        fi
+
         # Output variables
         echo "tag_name=${VTAG}" >> $GITHUB_OUTPUT
         echo "vtag=${VTAG}" >> $GITHUB_OUTPUT
         echo "version=${VERSION}" >> $GITHUB_OUTPUT
         echo "vfull=${VFULL}" >> $GITHUB_OUTPUT
-        
+
         # Summary
         echo "📦 Component: ${COMPONENT}" >> $GITHUB_STEP_SUMMARY
         echo "🌍 Environment: ${ENV}" >> $GITHUB_STEP_SUMMARY
