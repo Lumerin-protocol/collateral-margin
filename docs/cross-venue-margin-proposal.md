@@ -237,73 +237,113 @@ HPDX's net exposure changes and the executor adjusts the hedge.
 ## How HPDX talks to Hyperliquid
 
 Base and Hyperliquid share nothing. A contract on Base cannot place an order
-on Hyperliquid, and nothing on Hyperliquid can call a contract on Base. Every
-"HPDX knows X" below means "someone submitted a transaction on Base saying X,
-and the contract decided whether to believe it". Three things cross the gap,
-each with its own mechanism and trust story.
+on Hyperliquid, and nothing on Hyperliquid can call a contract on Base.
+Everything that crosses is a transaction someone submits on the other side,
+and the receiving contract decides whether to believe it. There are two data
+flows, and they are deliberately different.
 
-**The hedge account is a contract.** Hyperliquid runs an EVM chain, HyperEVM,
-whose contracts have accounts on the exchange itself. The hedge account is
-such a contract, `HedgeAccount`: it places and cancels orders and moves USDC
-between its spot and perp balances through Hyperliquid's `CoreWriter` system
-contract, and reads its own position, margin and the oracle price through
-read precompiles. USDC arrives from Base by Circle's CCTP, which is live on
-HyperEVM and forwards into the exchange balance, and leaves the same way.
-Every one of these is a contract call, so nobody holds a Hyperliquid private
-key: the treasury worker is whoever pays gas to call `topUp()` or
-`sendHome()`, with amounts and destinations fixed in the contract.
+| | HPDX → Hyperliquid | Hyperliquid → HPDX |
+| --- | --- | --- |
+| Carries | One order, one fill | The hedge account's position and margin |
+| When | On every trade | Every few minutes, and on demand |
+| Who relays | HPDX's executor (trusted) | LayerZero or Chainlink CCIP (decentralised) |
+| Speed | 2–4 seconds | 30 seconds to a few minutes |
+| Why believed | The contract bounds what it can say | Hyperliquid's consensus, attested by the relayer network's verifiers |
+| If it stops | Orders expire unfilled | Market goes close-only |
 
-**Orders go HPDX → Hyperliquid through the executor, fast and bounded.** The
-executor watches `BrokeredPerp` events, trades, watches Hyperliquid's fill
-stream, and submits fills to Base, as in the trading steps above. This is a
-trusted HPDX service — it is telling Base what it did — but the contract
-bounds what it can say: the trader's limit, a band around the relayed mark,
-the order size, an expiry. A fill takes two to four seconds end to end.
+**The Hyperliquid end is a contract.** Hyperliquid runs an EVM chain,
+HyperEVM, whose contracts have accounts on the exchange itself. The hedge
+account is such a contract, `HedgeAccount`. It trades and moves USDC between
+its spot and perp balances through Hyperliquid's `CoreWriter` system contract,
+reads its own position, margin and the oracle price through read precompiles,
+and receives and sends USDC through Circle's CCTP, which is live on HyperEVM.
+Nobody holds a Hyperliquid private key; every action is a contract call.
 
-**State goes Hyperliquid → HPDX through `report()`, slow and verified.** Every
-trader position on `BrokeredPerp` is a claim on `BROKER_ADDR`, and
-`BROKER_ADDR` is solvent only if the hedge is real. The executor's fills are
-HPDX's own account of that; `report()` is Hyperliquid's.
+### Fast path: HPDX → Hyperliquid, one order at a time
 
-- `HedgeAccount.report()` takes no arguments and anyone can call it. It reads
-  the precompiles — position, margin, oracle price — and hands the result,
-  with the HyperEVM block number and the caller's address, to a cross-chain
-  messaging layer (LayerZero, which has an endpoint on HyperEVM, or
-  Hyperlane, which anyone can deploy) addressed to `BrokeredPerp`.
-- The layer's verifiers attest that the message was really emitted on
-  HyperEVM; a relayer — again anyone — delivers it to Base, where the
-  endpoint calls `BrokeredPerp` after checking the sender is `HedgeAccount`.
-- `BrokeredPerp` runs the three checks in [Accounting](#accounting) and
-  records the time. If a check fails, or no report has arrived for ten
-  minutes, the market is close-only until a passing one lands.
+```mermaid
+sequenceDiagram
+    actor T as Trader
+    participant BP as BrokeredPerp (Base)
+    participant X as Executor (HPDX server)
+    participant HL as Hyperliquid
+    T->>BP: accept quote (size, price limit)
+    BP->>BP: margin check, reserve margin,<br/>store pending order
+    BP-->>X: event OrderPlaced
+    X->>HL: IOC order for the net change
+    HL-->>X: fill (price, size) on fill stream
+    X->>BP: recordFill(orderId, price, size)
+    BP->>BP: check limit, mark band, size,<br/>then book position vs BROKER_ADDR
+    BP-->>T: position live
+```
 
-The caller cannot influence the contents; `report()` reads chain state and
-nothing else. Authenticity comes from Hyperliquid's consensus and the
-messaging layer's verifiers, not from whoever paid the gas. Silence is not
-trusted either — it degrades the market — so reports being optional is safe,
-and the only question is who keeps them flowing: HPDX runs a cron as the
-baseline, and `BrokeredPerp` pays a small bounty from `BROKER_ADDR` to the
-caller of any accepted report, so a market maker or a trader can keep the
-market open if HPDX's cron dies. What remains trusted is the verifier set,
-which HPDX configures: with LayerZero, two verifiers, one HPDX runs and one
-independent, both required. That replaces "trust HPDX's reporter key" with
-"trust that HPDX and an independent party did not collude".
+The executor is an HPDX service and the only thing on this path that is
+trusted: it is telling Base what it did. The contract limits what it can say
+— the trader's price limit, a band around the relayed mark, the order size,
+an expiry after which the pending order lapses and the margin is released.
+If another trader already holds the opposite side, step four is skipped and
+the fill is booked at the mark plus spread.
 
-**Why fills are not verified the same way.** A report round trip is thirty
-seconds or more; a trader wants a fill in two. So fills stay on the fast,
-bounded, trusted path, and `report()` is what makes lying on it unprofitable:
-fills that were never hedged show up as a coverage mismatch within minutes.
-Moving execution itself into `HedgeAccount` — `BrokeredPerp` sends the target
-exposure through the messaging layer and the contract trades on receipt —
-would remove the executor's trust entirely at the cost of that latency. It
-is a later hardening, not v1.
+A limit order on `BrokeredPerp` rests on Base, not on Hyperliquid: the
+executor watches the price and sends an IOC when it crosses. Base cannot see
+resting orders on Hyperliquid (the precompiles expose position and margin, not
+open orders), and a resting hedge would tie up margin and capacity
+indefinitely.
 
-**Maker orders are not offered** because Base cannot see them. The precompiles
-expose position and margin, not open orders, so even `report()` cannot tell
-"this order is resting" from "this order was never placed", and a resting
-hedge order would tie up Hyperliquid margin and HPDX capacity indefinitely.
-A limit order on `BrokeredPerp` therefore rests on Base; the executor watches
-the Hyperliquid price and sends an immediate-or-cancel order when it crosses.
+### Slow path: Hyperliquid → HPDX, the hedge as a whole
+
+```mermaid
+sequenceDiagram
+    actor A as Anyone
+    participant HA as HedgeAccount (HyperEVM)
+    participant N as LayerZero / CCIP
+    participant BP as BrokeredPerp (Base)
+    A->>HA: report()
+    HA->>HA: read precompiles:<br/>position, margin, oracle price
+    HA->>N: send(payload, block number, caller)
+    N->>N: verifiers attest the HyperEVM tx
+    N->>BP: deliver(payload), sender must be HedgeAccount
+    BP->>BP: coverage, funding, explained-change checks,<br/>then record report time
+    BP->>A: bounty
+```
+
+What the report carries is the hedge account's *aggregate* state: net BTC
+position, entry notional, margin used, account value, oracle price. It does
+not carry per-trader positions, because those never leave Base — each
+trader's `BrokeredPerp` position is booked by the fast path and the margin
+engine reads it there. The report's job is to confirm that the sum of those
+bookings is matched by a real hedge.
+
+Why this path is believed although anyone can trigger it:
+
+- `report()` takes no arguments and reads chain state only. The caller
+  cannot influence the contents.
+- The relayer network's verifiers attest that the payload was really emitted
+  by `HedgeAccount` on HyperEVM; a verifier set HPDX configures (for LayerZero,
+  one verifier HPDX runs plus one independent, both required). Forging a
+  report means those parties colluding.
+- Silence is not trusted. If no passing report arrives within the staleness
+  limit (ten minutes, say), the market is close-only until one does. So
+  reports being optional is safe, and the only question is liveness: HPDX
+  runs a cron as the baseline, and `BrokeredPerp` pays a small bounty from
+  `BROKER_ADDR` to the caller of any accepted report so that a market maker
+  or a trader wanting to withdraw can keep the market open if the cron dies.
+
+### Why the two paths differ
+
+A verified round trip is thirty seconds or more; a trader wants a fill in two.
+So fills take the fast, bounded, trusted path, and the slow path makes
+cheating on it unprofitable: fills recorded but never hedged show up as a
+coverage mismatch within minutes and freeze new risk. Moving execution itself
+into `HedgeAccount` — `BrokeredPerp` sends the target exposure over the
+relayer network and the contract trades on receipt — would remove the
+executor's trust entirely at the cost of that latency. It is a later
+hardening, not v1.
+
+**Money** follows the slow path's trust but its own rails: `HedgeAccount`'s
+`topUp()` and `sendHome()` move USDC between the HPDX vault and the hedge
+account over CCTP, within rate limits fixed in the contract. The treasury
+worker is whoever calls them.
 
 None of this exists on Aster: no EVM, no precompiles, API only. A report from
 Aster is whoever queried the API saying so.
@@ -512,7 +552,7 @@ public mode, multiple signers, and tighter caps.
 
 ## Open questions
 
-- LayerZero or Hyperlane for HyperEVM → Base, which verifiers to require,
+- LayerZero or Chainlink CCIP for HyperEVM → Base, which verifiers to require,
   the report cadence and staleness limit, and the bounty size.
 - Calibration of the hashprice–Bitcoin sensitivity and the basis stress from
   historical data.
