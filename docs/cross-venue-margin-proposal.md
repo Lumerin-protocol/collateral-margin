@@ -83,10 +83,10 @@ non-custodial alternatives do not get there.
 | Hashpower market | HPDX, exists today | Unchanged. |
 | `BrokeredPerp` | HPDX, new | The Bitcoin perpetual market. Looks like any other HPDX market to the vault and margin engine. Enforces the hedge capacity. |
 | `BROKER_ADDR` | HPDX, new | HPDX's own account inside the vault, the counterparty to every `BrokeredPerp` position. Traders' Bitcoin losses flow into it; their gains are paid out of it. Holds HPDX's capital on Base. |
-| Hedge account | External DEX, new | HPDX's single account holding the net Bitcoin hedge. Holds HPDX's capital on the external DEX. |
+| `HedgeAccount` | HyperEVM, new | A contract whose exchange account holds the net Bitcoin hedge and HPDX's capital there. Trades via `CoreWriter`; exposes `report()`, `topUp()`, `sendHome()`. On Aster, a plain account under a key. |
 | HPDX UI | HPDX servers | Shows the external DEX's Bitcoin book with HPDX's spread, cut off at capacity; quotes an all-in price and sends accepted orders to `BrokeredPerp`. |
 | Executor | HPDX servers | Watches HPDX's net Bitcoin exposure and keeps the hedge account's position matching it. |
-| Reporter | External DEX + HPDX | Reads the hedge account's balance and position and reports them to `BrokeredPerp`, so HPDX can check the hedge is real. |
+| Reporter | Anyone | Calls `HedgeAccount.report()` and relays the result to `BrokeredPerp` through the messaging layer. HPDX runs one; a bounty lets others step in. |
 | Treasury worker | HPDX servers | Keeps the hedge account's balance inside its band by moving HPDX capital to and from the external DEX. |
 | Treasury | HPDX | Sets how much capital HPDX commits in total and the band the worker targets. Acts rarely. |
 
@@ -175,12 +175,12 @@ flowchart LR
         keeps HPDX capital on both sides in band"]
         EXEC["Executor
         mirrors net exposure on the external DEX"]
-        REP["Reporter
-        relays hedge account balance and position"]
+        REP["Reporter (anyone)
+        relays report() to HPDX"]
     end
 
     subgraph EX["Hyperliquid / Aster"]
-        OMNI["HPDX hedge account
+        OMNI["HedgeAccount contract
         holds the net hedge and HPDX capital"]
     end
 
@@ -201,16 +201,26 @@ which the UI can embed.
 ### Trading Bitcoin
 
 1. The trader takes a quote in the HPDX UI and accepts it (see [What the
-   trader sees](#what-the-trader-sees)); the order goes to `BrokeredPerp`.
-   The margin engine checks their collateral against all their positions
-   together. For a trader long hashpower, a short Bitcoin order mostly cancels
-   existing risk and needs little extra collateral.
-2. The executor adjusts the hedge: nothing if another trader already holds
-   the opposite side, otherwise it trades the difference on the external DEX.
-3. It records the fill on `BrokeredPerp` at the hedged price plus spread; the
-   contract rejects fills outside the trader's tolerance.
-4. If it cannot hedge — external DEX down, price moved — the order is rejected.
-   HPDX never carries more unhedged exposure than a small configured limit.
+   trader sees](#what-the-trader-sees)). `BrokeredPerp` checks their
+   collateral against all their positions together — for a trader long
+   hashpower, a short Bitcoin order mostly cancels existing risk and needs
+   little extra — then records a *pending* order with the trader's price
+   limit, reserves margin for it, and emits an event.
+2. The executor sees the event and adjusts the hedge: nothing if another
+   trader already holds the opposite side, otherwise an immediate-or-cancel
+   order on the external DEX for the difference.
+3. The executor sees the fill on the external DEX's fill stream and submits it
+   to `BrokeredPerp`, which books the trader's position at that price plus
+   spread. The contract rejects fills above the trader's limit, outside a
+   band around the relayed mark, or larger than the order.
+4. If no fill is submitted before the order expires — external DEX down,
+   price moved — the pending order lapses and the margin is released. HPDX
+   never carries more unhedged exposure than a small configured limit.
+
+Nothing on the external DEX ever calls Base; step 3 is the executor telling
+Base what happened, inside bounds the contract enforces. How that is kept
+honest is the subject of [How HPDX talks to
+Hyperliquid](#how-hpdx-talks-to-hyperliquid).
 
 Funding is passed through at the external DEX's rate. HPDX earns the spread and a
 small fee.
@@ -223,6 +233,80 @@ together. The existing keeper gains `BrokeredPerp` as a third market to reduce,
 using the same step-by-step approach described in
 `docs/liquidation-orchestration.md`. When a trader's Bitcoin leg is closed,
 HPDX's net exposure changes and the executor adjusts the hedge.
+
+## How HPDX talks to Hyperliquid
+
+Base and Hyperliquid share nothing. A contract on Base cannot place an order
+on Hyperliquid, and nothing on Hyperliquid can call a contract on Base. Every
+"HPDX knows X" below means "someone submitted a transaction on Base saying X,
+and the contract decided whether to believe it". Three things cross the gap,
+each with its own mechanism and trust story.
+
+**The hedge account is a contract.** Hyperliquid runs an EVM chain, HyperEVM,
+whose contracts have accounts on the exchange itself. The hedge account is
+such a contract, `HedgeAccount`: it places and cancels orders and moves USDC
+between its spot and perp balances through Hyperliquid's `CoreWriter` system
+contract, and reads its own position, margin and the oracle price through
+read precompiles. USDC arrives from Base by Circle's CCTP, which is live on
+HyperEVM and forwards into the exchange balance, and leaves the same way.
+Every one of these is a contract call, so nobody holds a Hyperliquid private
+key: the treasury worker is whoever pays gas to call `topUp()` or
+`sendHome()`, with amounts and destinations fixed in the contract.
+
+**Orders go HPDX → Hyperliquid through the executor, fast and bounded.** The
+executor watches `BrokeredPerp` events, trades, watches Hyperliquid's fill
+stream, and submits fills to Base, as in the trading steps above. This is a
+trusted HPDX service — it is telling Base what it did — but the contract
+bounds what it can say: the trader's limit, a band around the relayed mark,
+the order size, an expiry. A fill takes two to four seconds end to end.
+
+**State goes Hyperliquid → HPDX through `report()`, slow and verified.** Every
+trader position on `BrokeredPerp` is a claim on `BROKER_ADDR`, and
+`BROKER_ADDR` is solvent only if the hedge is real. The executor's fills are
+HPDX's own account of that; `report()` is Hyperliquid's.
+
+- `HedgeAccount.report()` takes no arguments and anyone can call it. It reads
+  the precompiles — position, margin, oracle price — and hands the result,
+  with the HyperEVM block number and the caller's address, to a cross-chain
+  messaging layer (LayerZero, which has an endpoint on HyperEVM, or
+  Hyperlane, which anyone can deploy) addressed to `BrokeredPerp`.
+- The layer's verifiers attest that the message was really emitted on
+  HyperEVM; a relayer — again anyone — delivers it to Base, where the
+  endpoint calls `BrokeredPerp` after checking the sender is `HedgeAccount`.
+- `BrokeredPerp` runs the three checks in [Accounting](#accounting) and
+  records the time. If a check fails, or no report has arrived for ten
+  minutes, the market is close-only until a passing one lands.
+
+The caller cannot influence the contents; `report()` reads chain state and
+nothing else. Authenticity comes from Hyperliquid's consensus and the
+messaging layer's verifiers, not from whoever paid the gas. Silence is not
+trusted either — it degrades the market — so reports being optional is safe,
+and the only question is who keeps them flowing: HPDX runs a cron as the
+baseline, and `BrokeredPerp` pays a small bounty from `BROKER_ADDR` to the
+caller of any accepted report, so a market maker or a trader can keep the
+market open if HPDX's cron dies. What remains trusted is the verifier set,
+which HPDX configures: with LayerZero, two verifiers, one HPDX runs and one
+independent, both required. That replaces "trust HPDX's reporter key" with
+"trust that HPDX and an independent party did not collude".
+
+**Why fills are not verified the same way.** A report round trip is thirty
+seconds or more; a trader wants a fill in two. So fills stay on the fast,
+bounded, trusted path, and `report()` is what makes lying on it unprofitable:
+fills that were never hedged show up as a coverage mismatch within minutes.
+Moving execution itself into `HedgeAccount` — `BrokeredPerp` sends the target
+exposure through the messaging layer and the contract trades on receipt —
+would remove the executor's trust entirely at the cost of that latency. It
+is a later hardening, not v1.
+
+**Maker orders are not offered** because Base cannot see them. The precompiles
+expose position and margin, not open orders, so even `report()` cannot tell
+"this order is resting" from "this order was never placed", and a resting
+hedge order would tie up Hyperliquid margin and HPDX capacity indefinitely.
+A limit order on `BrokeredPerp` therefore rests on Base; the executor watches
+the Hyperliquid price and sends an immediate-or-cancel order when it crosses.
+
+None of this exists on Aster: no EVM, no precompiles, API only. A report from
+Aster is whoever queried the API saying so.
 
 ## Where the external DEX's liquidity goes
 
@@ -301,11 +385,10 @@ keeps both inside bands by moving HPDX's capital across the bridge.
   is at risk in that window; traders' money is not. A cap on how much HPDX
   capital may sit on the external DEX bounds the damage.
 
-On Hyperliquid, the hedge account can belong to an HPDX smart contract on
-HyperEVM rather than to a private key. The worker triggers transfers by
-calling that contract, which only allows moves between the hedge account and
-the HPDX vault, within rate limits: it can nudge, not steal. Aster has
-no equivalent; there the worker holds a live key to HPDX's master account.
+On Hyperliquid the worker is just a caller of `HedgeAccount.topUp()` and
+`sendHome()`, which only move money between the hedge account and the HPDX
+vault, within rate limits: it can nudge, not steal. On Aster the worker holds
+a live key to HPDX's master account.
 
 ## Accounting
 
@@ -371,11 +454,8 @@ Traders are trusting that the hedge account really holds the position and
 margin HPDX says it does. Whether anyone other than HPDX can check this
 depends on the external DEX.
 
-**Hyperliquid.** Contracts on HyperEVM, Hyperliquid's smart contract chain,
-can read any account's positions and margin, consistent with the external DEX at
-the start of each block. A small HPDX contract reads the hedge account and
-sends the result to HPDX through a cross-chain messaging service; anyone can
-trigger it. What HPDX receives is backed by Hyperliquid's consensus, not
+**Hyperliquid.** Yes, via `report()` as described above: what HPDX receives
+is backed by Hyperliquid's consensus and the messaging layer's verifiers, not
 HPDX's word — as close to a public proof of reserves as a centralised hedge
 can get.
 
@@ -410,8 +490,9 @@ public mode, multiple signers, and tighter caps.
   DEX itself could fail. Either way the loss is capped at the HPDX capital
   sitting there, traders' deposits are unaffected, and traders' HPDX positions
   would have to be re-hedged or closed.
-- **Reports being wrong.** Mostly an Aster concern; bad reports stop new risk
-  but cannot recover funds.
+- **Reports being wrong.** On Hyperliquid this needs the messaging layer's
+  verifiers to collude; on Aster it needs one reporter to lie. Either way a
+  bad report can only stop new risk, not recover funds.
 - **Regulation.** HPDX holds funds on behalf of traders and is the other side
   of their Bitcoin trades. That is a broker's role, and the obligations land
   on Titan as the operator. The legal view is outside this document; it is
@@ -431,8 +512,8 @@ public mode, multiple signers, and tighter caps.
 
 ## Open questions
 
-- Which cross-chain messaging service to use from HyperEVM to Base, and what
-  it costs per report at the cadence we want.
+- LayerZero or Hyperlane for HyperEVM → Base, which verifiers to require,
+  the report cadence and staleness limit, and the bounty size.
 - Calibration of the hashprice–Bitcoin sensitivity and the basis stress from
   historical data.
 - Whether `BrokeredPerp` needs any resting orders on HPDX at all, given the
