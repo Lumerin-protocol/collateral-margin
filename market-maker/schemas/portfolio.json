@@ -7,6 +7,7 @@
   "required": [
     "nodeEnv",
     "commitHash",
+    "imageTag",
     "logLevel",
     "dryRun",
     "cancelOrdersOnShutdown",
@@ -36,8 +37,8 @@
     },
     "imageTag": {
       "default": "unknown",
-      "type": "string",
-      "description": "Image tag this process was deployed as. Reported on /health."
+      "description": "Image tag this process was deployed as (for example v1.4.0). Surfaced on /health so deploy verification can reject a rollback.",
+      "type": "string"
     },
     "logLevel": {
       "default": "info",
@@ -158,7 +159,7 @@
             "required": [
               "kind",
               "address",
-              "maxPositionSize",
+              "maxPositionNotionalUsd",
               "pricing",
               "sizing"
             ],
@@ -181,8 +182,8 @@
                 ],
                 "description": "Deployed HashPowerPerpsDEX address."
               },
-              "maxPositionSize": {
-                "description": "USD. Per-venue net position cap for perps.",
+              "maxPositionNotionalUsd": {
+                "description": "USD. Cap on |net position| × oracle price for perps. Beyond it only risk-reducing quotes are placed.",
                 "anyOf": [
                   {
                     "anyOf": [
@@ -372,7 +373,7 @@
             "required": [
               "kind",
               "address",
-              "maxPositionSize",
+              "maxPositionNotionalUsd",
               "pricing",
               "sizing"
             ],
@@ -395,8 +396,8 @@
                 ],
                 "description": "Deployed Futures address."
               },
-              "maxPositionSize": {
-                "description": "USD. Per-expiry net position cap for futures markets.",
+              "maxPositionNotionalUsd": {
+                "description": "USD. Cap on |net contracts| × oracle price, applied to each futures expiry separately. Beyond it only risk-reducing quotes are placed.",
                 "anyOf": [
                   {
                     "anyOf": [
@@ -671,7 +672,6 @@
       "description": "Risk caps, circuit-breakers, and gas-price guards. One shared budget spanning every market in the process, not a per-venue allowance.",
       "type": "object",
       "required": [
-        "maxPositionSize",
         "maxUtilizationPct",
         "minCollateralBalance",
         "maxDailyLossUsd",
@@ -682,36 +682,6 @@
         "urgentRequoteThresholdTicks"
       ],
       "properties": {
-        "maxPositionSize": {
-          "description": "USD. Hard cap on |net position notional|. Beyond this, only risk-reducing quotes are placed.",
-          "anyOf": [
-            {
-              "anyOf": [
-                {
-                  "pattern": "^-?\\d+(\\.\\d+)?$",
-                  "type": "string"
-                },
-                {
-                  "type": "string",
-                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
-                  "description": "Environment variable interpolation (resolved at startup)"
-                }
-              ]
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "string",
-                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
-                  "description": "Environment variable interpolation (resolved at startup)"
-                }
-              ]
-            }
-          ]
-        },
         "maxUtilizationPct": {
           "anyOf": [
             {

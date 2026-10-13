@@ -115,9 +115,11 @@ function buildMarket(
 ): MarketRuntime {
   const { config, gas, risk, logger } = ctx;
   const oracle = buildOracle(instrument, ctx);
+  const quantityScale = venue.kind === "futures" ? 1n : QUANTITY_SCALE;
   const inventory = new InventoryManager(
     instrument,
-    { maxPositionSize: venue.maxPositionSize },
+    { maxPositionNotional: venue.maxPositionNotional, quantityScale },
+    oracle,
     logger,
   );
   const book = new BookTracker(
@@ -152,7 +154,7 @@ function buildMarket(
       urgentRequoteThresholdTicks: config.risk.urgentRequoteThresholdTicks,
       staleBandAllowance: config.timing.staleBandAllowance,
       staleSizeAllowance: config.timing.staleSizeAllowance,
-      quantityScale: venue.kind === "futures" ? 1n : QUANTITY_SCALE,
+      quantityScale,
       dryRun: config.dryRun,
     },
     quoter,
@@ -247,7 +249,6 @@ async function main(): Promise<void> {
   );
   const risk = new RiskManager(
     {
-      maxPositionSize: config.risk.maxPositionSize,
       maxUtilizationPct: config.risk.maxUtilizationPct,
       minCollateralBalance: config.risk.minCollateralBalance,
       maxDailyLossUsd: config.risk.maxDailyLossUsd,

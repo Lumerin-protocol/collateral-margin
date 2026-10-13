@@ -31,7 +31,7 @@ network:
 venues:
   - kind: perps
     address: ${PERPS_ADDRESS}
-    maxPositionSize: 50
+    maxPositionNotionalUsd: 20000
     pricing:
       # No padding on dev: lean entirely on the 1-tick separation that oracle
       # rounding already gives (see minSpreadBps in the schema) so the book
@@ -49,7 +49,7 @@ venues:
 
   - kind: futures
     address: ${FUTURES_ADDRESS}
-    maxPositionSize: 50
+    maxPositionNotionalUsd: 20000
     marketSelection:
       mode: nearest
       count: 3
@@ -70,7 +70,6 @@ venues:
       expirySizeDecay: 0.6
 
 risk:
-  maxPositionSize: 50
   maxUtilizationPct: 80
   minCollateralBalance: 10
   maxDailyLossUsd: 500

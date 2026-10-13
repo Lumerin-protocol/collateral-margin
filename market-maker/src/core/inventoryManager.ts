@@ -1,11 +1,18 @@
 import type pino from "pino";
 import Fraction from "fraction.js";
 import type { InstrumentAdapter } from "./adapter.ts";
-import { bigAbs } from "./math.ts";
+import { bigAbs, notionalToSize } from "./math.ts";
 
 export interface InventoryManagerConfig {
-  /** Max absolute net position; used for skew normalisation. */
-  maxPositionSize: bigint;
+  /** Max absolute net position notional, 6dp USD. */
+  maxPositionNotional: bigint;
+  /** Venue size scale: `notional = price * size / quantityScale` (perps 1e6, futures 1). */
+  quantityScale: bigint;
+}
+
+/** Source of the price the notional cap is converted at. */
+export interface PriceSource {
+  readonly currentPrice: bigint;
 }
 
 /**
@@ -15,21 +22,35 @@ export interface InventoryManagerConfig {
  * combined in the legacy code and split for the vault era so that position
  * (one instrument) and balance (one wallet, many instruments) can evolve
  * independently.
+ *
+ * The position cap is configured as USD notional so one number means the same
+ * risk on every venue. It is re-expressed in venue-native units at the oracle
+ * price on each `update()`, so the oracle must be refreshed first.
  */
 export class InventoryManager {
   netQuantity = 0n;
   entryPrice = 0n;
+
+  /** Notional cap converted to venue-native units at the last oracle price. */
+  maxPositionSize = 0n;
 
   /** netQuantity / maxPositionSize as a Fraction in [-1, 1]. */
   inventorySkew: Fraction = new Fraction(0n);
 
   private readonly instrument: InstrumentAdapter;
   private readonly cfg: InventoryManagerConfig;
+  private readonly price: PriceSource;
   private readonly logger: pino.Logger;
 
-  constructor(instrument: InstrumentAdapter, cfg: InventoryManagerConfig, logger: pino.Logger) {
+  constructor(
+    instrument: InstrumentAdapter,
+    cfg: InventoryManagerConfig,
+    price: PriceSource,
+    logger: pino.Logger,
+  ) {
     this.instrument = instrument;
     this.cfg = cfg;
+    this.price = price;
     this.logger = logger.child({ component: "inventory", instrument: instrument.id });
   }
 
@@ -38,7 +59,13 @@ export class InventoryManager {
     this.netQuantity = pos.netQuantity;
     this.entryPrice = pos.entryPrice;
 
-    const maxPos = this.cfg.maxPositionSize;
+    this.maxPositionSize = notionalToSize(
+      this.price.currentPrice,
+      this.cfg.maxPositionNotional,
+      this.cfg.quantityScale,
+    );
+
+    const maxPos = this.maxPositionSize;
     if (maxPos > 0n) {
       const raw = new Fraction(this.netQuantity, maxPos);
       const one = new Fraction(1n);
@@ -51,6 +78,7 @@ export class InventoryManager {
     this.logger.debug(
       {
         net: this.netQuantity.toString(),
+        maxPos: maxPos.toString(),
         skew: this.inventorySkew.valueOf(),
       },
       "inventory tick",
@@ -63,10 +91,5 @@ export class InventoryManager {
 
   get absPosition(): bigint {
     return bigAbs(this.netQuantity);
-  }
-
-  /** Configured position cap for this market (venue-native units). */
-  get maxPositionSize(): bigint {
-    return this.cfg.maxPositionSize;
   }
 }

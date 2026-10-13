@@ -29,7 +29,7 @@ network:
 venues:
   - kind: perps
     address: ${PERPS_ADDRESS}
-    maxPositionSize: 1000
+    maxPositionNotionalUsd: 3000
     pricing:
       strategy: effective-spread
       minSpreadBps: 10
@@ -44,7 +44,7 @@ venues:
 
   - kind: futures
     address: ${FUTURES_ADDRESS}
-    maxPositionSize: 1000
+    maxPositionNotionalUsd: 1000
     marketSelection:
       mode: nearest
       count: 3
@@ -65,10 +65,9 @@ venues:
       expirySizeDecay: 0.6
 
 risk:
-  maxPositionSize: 1000
   maxUtilizationPct: 75
   minCollateralBalance: 100
-  maxDailyLossUsd: 1000
+  maxDailyLossUsd: 300
   maxGasBudgetPerHourUsd: 50
   maxGasBudgetPerDayUsd: 500
   gasSpikeThresholdPct: 200
