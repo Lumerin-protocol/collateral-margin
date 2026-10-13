@@ -22,7 +22,7 @@ network:
 venues:
   - kind: perps
     address: "0x1111111111111111111111111111111111111111"
-    maxPositionSize: 10
+    maxPositionNotionalUsd: 10
     pricing:
       strategy: effective-spread
       minSpreadBps: 15
@@ -36,7 +36,7 @@ venues:
       taperRatio: 0.6
   - kind: futures
     address: "0x2222222222222222222222222222222222222222"
-    maxPositionSize: 5
+    maxPositionNotionalUsd: 5
     marketSelection:
       mode: nearest
       count: 3
@@ -54,7 +54,6 @@ venues:
       taperRatio: 0.6
       expirySizeDecay: 0.6
 risk:
-  maxPositionSize: 50
   maxUtilizationPct: 80
   minCollateralBalance: 10
   maxDailyLossUsd: 500
@@ -81,7 +80,8 @@ describe("loadPortfolioConfig", () => {
     assert.equal(cfg.venues[0].kind, "perps");
     assert.equal(cfg.venues[1].kind, "futures");
     // USD parsed to 6-decimal bigint.
-    assert.equal(cfg.venues[0].maxPositionSize, 10_000_000n);
+    assert.equal(cfg.venues[0].maxPositionNotional, 10_000_000n);
+    assert.equal(cfg.venues[1].maxPositionNotional, 5_000_000n);
     // Futures market selection + baseQuantity bigint.
     const fut = cfg.venues[1] as ParsedFuturesVenue;
     assert.deepEqual(fut.marketSelection, { mode: "nearest", count: 3 });
@@ -151,6 +151,22 @@ describe("loadPortfolioConfig", () => {
       .replace("      expirySizeDecay: 0.6\n", "");
     const path = writeTmp(tmpDir, "test.yml", yaml);
     assert.throws(() => loadPortfolioConfig({ path }), /duplicate venue kind/);
+  });
+
+  it("rejects the legacy unit-less maxPositionSize key on venues and risk", () => {
+    const onVenue = VALID_YAML.replace(
+      "    maxPositionNotionalUsd: 10\n",
+      "    maxPositionSize: 10\n",
+    );
+    assert.throws(
+      () => loadPortfolioConfig({ path: writeTmp(tmpDir, "venue.yml", onVenue) }),
+      /Config validation failed/,
+    );
+    const onRisk = VALID_YAML.replace("risk:\n", "risk:\n  maxPositionSize: 50\n");
+    assert.throws(
+      () => loadPortfolioConfig({ path: writeTmp(tmpDir, "risk.yml", onRisk) }),
+      /Config validation failed/,
+    );
   });
 
   it("rejects an empty venues array", () => {

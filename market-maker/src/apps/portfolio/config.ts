@@ -79,8 +79,9 @@ const perpsVenueSchema = Type.Object(
   {
     kind: Type.Literal("perps"),
     address: TypeEthAddress({ description: "Deployed HashPowerPerpsDEX address." }),
-    maxPositionSize: TypeUsdAmount({
-      description: "USD. Per-venue net position cap for perps.",
+    maxPositionNotionalUsd: TypeUsdAmount({
+      description:
+        "USD. Cap on |net position| × oracle price for perps. Beyond it only risk-reducing quotes are placed.",
     }),
     pricing: perpsPricingSchema,
     sizing: perpsSizingSchema,
@@ -92,8 +93,9 @@ const futuresVenueSchema = Type.Object(
   {
     kind: Type.Literal("futures"),
     address: TypeEthAddress({ description: "Deployed Futures address." }),
-    maxPositionSize: TypeUsdAmount({
-      description: "USD. Per-expiry net position cap for futures markets.",
+    maxPositionNotionalUsd: TypeUsdAmount({
+      description:
+        "USD. Cap on |net contracts| × oracle price, applied to each futures expiry separately. Beyond it only risk-reducing quotes are placed.",
     }),
     marketSelection: Type.Optional(marketSelectionSchema),
     pricing: futuresPricingSchema,
@@ -249,7 +251,8 @@ type RawFuturesVenue = Extract<RawVenue, { kind: "futures" }>;
 export interface ParsedPerpsVenue {
   kind: "perps";
   address: `0x${string}`;
-  maxPositionSize: bigint;
+  /** 6dp USD. */
+  maxPositionNotional: bigint;
   pricing: RawPerpsVenue["pricing"];
   sizing: Omit<RawPerpsVenue["sizing"], "baseQuantity"> & { baseQuantity: bigint };
 }
@@ -257,7 +260,8 @@ export interface ParsedPerpsVenue {
 export interface ParsedFuturesVenue {
   kind: "futures";
   address: `0x${string}`;
-  maxPositionSize: bigint;
+  /** 6dp USD, per expiry. */
+  maxPositionNotional: bigint;
   marketSelection: FuturesMarketSelection;
   pricing: RawFuturesVenue["pricing"];
   sizing: Omit<RawFuturesVenue["sizing"], "baseQuantity"> & { baseQuantity: bigint };
@@ -304,7 +308,11 @@ function parseVenue(raw: RawVenue): ParsedVenue {
     return {
       kind: "perps",
       address: raw.address,
-      maxPositionSize: parseUsd(raw.maxPositionSize, USD_DECIMALS, "venue.maxPositionSize"),
+      maxPositionNotional: parseUsd(
+        raw.maxPositionNotionalUsd,
+        USD_DECIMALS,
+        "venue.maxPositionNotionalUsd",
+      ),
       pricing: raw.pricing,
       sizing: {
         ...raw.sizing,
@@ -315,7 +323,11 @@ function parseVenue(raw: RawVenue): ParsedVenue {
   return {
     kind: "futures",
     address: raw.address,
-    maxPositionSize: parseUsd(raw.maxPositionSize, USD_DECIMALS, "venue.maxPositionSize"),
+    maxPositionNotional: parseUsd(
+      raw.maxPositionNotionalUsd,
+      USD_DECIMALS,
+      "venue.maxPositionNotionalUsd",
+    ),
     marketSelection: parseMarketSelection(raw.marketSelection),
     pricing: raw.pricing,
     sizing: {

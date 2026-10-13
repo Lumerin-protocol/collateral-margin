@@ -22,6 +22,7 @@ venue:
   kind: perps
   wallet: default
   address: "0x1234567890123456789012345678901234567890"
+  maxPositionNotionalUsd: 50
 pricing:
   strategy: effective-spread
   minSpreadBps: 10
@@ -34,7 +35,6 @@ sizing:
   numLevelsPerSide: 5
   taperRatio: 0.6
 risk:
-  maxPositionSize: 50
   maxUtilizationPct: 80
   minCollateralBalance: 10
   maxDailyLossUsd: 500

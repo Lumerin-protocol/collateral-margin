@@ -141,12 +141,13 @@
     },
     "venue": {
       "additionalProperties": false,
-      "description": "Perps venue identification and signer selection.",
+      "description": "Perps venue identification, signer selection, and position cap.",
       "type": "object",
       "required": [
         "kind",
         "address",
-        "wallet"
+        "wallet",
+        "maxPositionNotionalUsd"
       ],
       "properties": {
         "kind": {
@@ -171,6 +172,36 @@
         "wallet": {
           "description": "Key in the top-level `wallets` map identifying the signer for this venue.",
           "type": "string"
+        },
+        "maxPositionNotionalUsd": {
+          "description": "USD. Cap on |net position| × oracle price. Beyond it only risk-reducing quotes are placed.",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "pattern": "^-?\\d+(\\.\\d+)?$",
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            },
+            {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+                  "description": "Environment variable interpolation (resolved at startup)"
+                }
+              ]
+            }
+          ]
         }
       }
     },
@@ -331,7 +362,6 @@
       "description": "Risk caps, circuit-breakers, and gas-price guards. One shared budget spanning every market in the process, not a per-venue allowance.",
       "type": "object",
       "required": [
-        "maxPositionSize",
         "maxUtilizationPct",
         "minCollateralBalance",
         "maxDailyLossUsd",
@@ -342,36 +372,6 @@
         "urgentRequoteThresholdTicks"
       ],
       "properties": {
-        "maxPositionSize": {
-          "description": "USD. Hard cap on |net position notional|. Beyond this, only risk-reducing quotes are placed.",
-          "anyOf": [
-            {
-              "anyOf": [
-                {
-                  "pattern": "^-?\\d+(\\.\\d+)?$",
-                  "type": "string"
-                },
-                {
-                  "type": "string",
-                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
-                  "description": "Environment variable interpolation (resolved at startup)"
-                }
-              ]
-            },
-            {
-              "anyOf": [
-                {
-                  "type": "number"
-                },
-                {
-                  "type": "string",
-                  "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
-                  "description": "Environment variable interpolation (resolved at startup)"
-                }
-              ]
-            }
-          ]
-        },
         "maxUtilizationPct": {
           "anyOf": [
             {
