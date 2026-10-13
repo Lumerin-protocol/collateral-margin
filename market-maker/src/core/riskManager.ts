@@ -7,7 +7,8 @@
  *      breach, daily loss limit, minimum collateral floor.
  *   2. Throttle — slow down quoting (longer cooldown, wider requote threshold).
  *      Conditions: hourly/daily gas budget exceeded.
- *   3. Side gating — refuse to add to a side already at max position.
+ *   3. Side gating — refuse to add to a side already at the market's notional
+ *      position cap (see InventoryManager).
  *
  * # Relationship to on-chain margin
  *
@@ -49,7 +50,6 @@ import type { ErrorInfo } from "./errors.ts";
 export type ThrottleReason = "gas_hourly" | "gas_daily" | "none";
 
 export interface RiskManagerConfig {
-  maxPositionSize: bigint;
   /** Stop quoting both sides when utilization exceeds this percentage. */
   maxUtilizationPct: number;
   minCollateralBalance: bigint;
@@ -192,17 +192,14 @@ export class RiskManager {
 
   /**
    * Sides allowed to quote for a market. Utilization is portfolio-wide (shared
-   * collateral), while the direction and the position cap are per-market:
-   * pass the market's inventory + cap. Single-market callers may omit both to
-   * fall back to the injected defaults.
+   * collateral), while the direction and the position cap are per-market and
+   * both come from the market's inventory. Single-market callers may omit it
+   * to fall back to the injected one.
    */
-  allowedSides(
-    inventory?: InventoryManager,
-    maxPositionSize?: bigint,
-  ): { quoteBid: boolean; quoteAsk: boolean } {
+  allowedSides(inventory?: InventoryManager): { quoteBid: boolean; quoteAsk: boolean } {
     const inv = inventory ?? this.inventory;
     if (!inv) return { quoteBid: false, quoteAsk: false };
-    const maxPos = maxPositionSize ?? this.cfg.maxPositionSize;
+    const maxPos = inv.maxPositionSize;
     const net = inv.netQuantity;
 
     if (this.collateral.utilizationPct > this.cfg.maxUtilizationPct) {

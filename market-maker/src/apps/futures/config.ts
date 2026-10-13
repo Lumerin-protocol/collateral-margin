@@ -5,6 +5,8 @@ import {
   type ParsedRiskConfig,
   type ParsedTimingConfig,
   TypeEthAddress,
+  TypeUsdAmount,
+  USD_DECIMALS,
   collateralSchema,
   configBigint,
   gasSchema,
@@ -20,6 +22,7 @@ import {
   timingSchema,
   walletSchema,
 } from "../../core/config/base.ts";
+import { parseUsd } from "../../core/config/units.ts";
 import { ConfigError } from "../../core/errors.ts";
 
 /**
@@ -46,10 +49,14 @@ const futuresVenueSchema = Type.Object(
       description:
         "Key in the top-level `wallets` map identifying the signer for this venue.",
     }),
+    maxPositionNotionalUsd: TypeUsdAmount({
+      description:
+        "USD. Cap on |net contracts| × oracle price. Beyond it only risk-reducing quotes are placed.",
+    }),
   },
   {
     ...Closed,
-    description: "Futures venue identification and signer selection.",
+    description: "Futures venue identification, signer selection, and position cap.",
   },
 );
 
@@ -193,8 +200,12 @@ type RawFuturesConfig = Static<typeof futuresRootSchema>;
 /** Parsed futures config: bigints/ms substituted in for human-friendly inputs. */
 export type FuturesMakerConfig = Omit<
   RawFuturesConfig,
-  "risk" | "timing" | "collateral" | "sizing" | "oracle"
+  "venue" | "risk" | "timing" | "collateral" | "sizing" | "oracle"
 > & {
+  venue: Omit<RawFuturesConfig["venue"], "maxPositionNotionalUsd"> & {
+    /** 6dp USD. */
+    maxPositionNotional: bigint;
+  };
   risk: ParsedRiskConfig;
   timing: ParsedTimingConfig;
   collateral: ParsedCollateralConfig;
@@ -211,8 +222,16 @@ export function loadFuturesConfig(
     schema: futuresRootSchema,
     path: opts.path,
     env: opts.env,
-    parse: (raw) => ({
+    parse: ({ venue: { maxPositionNotionalUsd, ...venue }, ...raw }) => ({
       ...raw,
+      venue: {
+        ...venue,
+        maxPositionNotional: parseUsd(
+          maxPositionNotionalUsd,
+          USD_DECIMALS,
+          "venue.maxPositionNotionalUsd",
+        ),
+      },
       risk: parseRiskConfig(raw.risk),
       timing: parseTimingConfig(raw.timing),
       collateral: parseCollateralConfig(raw.collateral),

@@ -13,7 +13,7 @@ import { parseUsd, secondsToMs } from "./units.ts";
 export const USD_DECIMALS = 6;
 
 /** Schema fragment that accepts a decimal string or number for a USD value. */
-const TypeUsdAmount = (opts?: { default?: string | number; description?: string }) =>
+export const TypeUsdAmount = (opts?: { default?: string | number; description?: string }) =>
   Type.Union(
     [Type.String({ pattern: "^-?\\d+(\\.\\d+)?$" }), Type.Number()],
     opts as Record<string, unknown> | undefined,
@@ -80,10 +80,6 @@ export const networkSchema = Type.Object(
 // avoid them for sub-cent values where float rounding matters.
 export const riskSchema = Type.Object(
   {
-    maxPositionSize: TypeUsdAmount({
-      description:
-        "USD. Hard cap on |net position notional|. Beyond this, only risk-reducing quotes are placed.",
-    }),
     maxUtilizationPct: Type.Number({
       minimum: 0,
       maximum: 100,
@@ -293,7 +289,6 @@ export function expandEnv(value: unknown, env: NodeJS.ProcessEnv): unknown {
  * the loader transforms those into the bigint/ms forms core code consumes.
  */
 export interface ParsedRiskConfig {
-  maxPositionSize: bigint;
   maxUtilizationPct: number;
   minCollateralBalance: bigint;
   maxDailyLossUsd: bigint;
@@ -334,7 +329,6 @@ export interface ParsedOracleConfig {
 }
 
 interface RawRisk {
-  maxPositionSize: string | number;
   maxUtilizationPct: number;
   minCollateralBalance: string | number;
   maxDailyLossUsd: string | number;
@@ -366,7 +360,6 @@ interface RawOracle {
 
 export function parseRiskConfig(raw: RawRisk): ParsedRiskConfig {
   return {
-    maxPositionSize: parseUsd(raw.maxPositionSize, USD_DECIMALS, "risk.maxPositionSize"),
     maxUtilizationPct: raw.maxUtilizationPct,
     minCollateralBalance: parseUsd(raw.minCollateralBalance, USD_DECIMALS, "risk.minCollateralBalance"),
     maxDailyLossUsd: parseUsd(raw.maxDailyLossUsd, USD_DECIMALS, "risk.maxDailyLossUsd"),

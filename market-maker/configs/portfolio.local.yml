@@ -26,7 +26,7 @@ network:
 venues:
   - kind: perps
     address: ${PERPS_ADDRESS}
-    maxPositionSize: 10
+    maxPositionNotionalUsd: 400
     pricing:
       strategy: effective-spread
       minSpreadBps: 20
@@ -41,7 +41,7 @@ venues:
 
   - kind: futures
     address: ${FUTURES_ADDRESS}
-    maxPositionSize: 10
+    maxPositionNotionalUsd: 400
     marketSelection:
       mode: nearest
       count: 3
@@ -61,7 +61,6 @@ venues:
       expirySizeDecay: 0.6
 
 risk:
-  maxPositionSize: 10
   maxUtilizationPct: 80
   minCollateralBalance: 1
   maxDailyLossUsd: 100

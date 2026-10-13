@@ -22,6 +22,7 @@ venue:
   kind: futures
   wallet: default
   address: "0x1234567890123456789012345678901234567890"
+  maxPositionNotionalUsd: 50
 pricing:
   strategy: reservation-price
   riskAversion: 0.001
@@ -35,7 +36,6 @@ sizing:
   numLevelsPerSide: 4
   taperRatio: 0.6
 risk:
-  maxPositionSize: 50
   maxUtilizationPct: 80
   minCollateralBalance: 10
   maxDailyLossUsd: 500

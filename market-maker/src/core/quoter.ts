@@ -137,10 +137,7 @@ export class Quoter {
         });
 
     const { bidMid, askMid, spreadBps } = midQuote;
-    const { quoteBid, quoteAsk } = this.risk.allowedSides(
-      this.inventory,
-      this.inventory.maxPositionSize,
-    );
+    const { quoteBid, quoteAsk } = this.risk.allowedSides(this.inventory);
 
     const intents: OrderIntent[] = [];
     const spacing = BigInt(this.cfg.levelSpacingTicks) * this.tick;

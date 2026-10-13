@@ -77,7 +77,8 @@ async function main(): Promise<void> {
   );
   const inventory = new InventoryManager(
     instrument,
-    { maxPositionSize: config.risk.maxPositionSize },
+    { maxPositionNotional: config.venue.maxPositionNotional, quantityScale: QUANTITY_SCALE },
+    oracle,
     logger,
   );
   const collateral = new CollateralTracker(
@@ -92,7 +93,6 @@ async function main(): Promise<void> {
   );
   const risk = new RiskManager(
     {
-      maxPositionSize: config.risk.maxPositionSize,
       maxUtilizationPct: config.risk.maxUtilizationPct,
       minCollateralBalance: config.risk.minCollateralBalance,
       maxDailyLossUsd: config.risk.maxDailyLossUsd,

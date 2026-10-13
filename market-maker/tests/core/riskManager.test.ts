@@ -14,7 +14,6 @@ function makeLogger(): never {
 
 function makeConfig(overrides: Partial<RiskManagerConfig> = {}): RiskManagerConfig {
   return {
-    maxPositionSize: 100_000_000n,
     maxUtilizationPct: 80,
     minCollateralBalance: 100_000_000n,
     maxDailyLossUsd: 500_000_000n,
@@ -27,6 +26,7 @@ function makeConfig(overrides: Partial<RiskManagerConfig> = {}): RiskManagerConf
 function makeInventory(overrides: Partial<InventoryManager> = {}): InventoryManager {
   return {
     netQuantity: 0n,
+    maxPositionSize: 100_000_000n,
     inventorySkew: new Fraction(0n),
     ...overrides,
   } as InventoryManager;
@@ -135,7 +135,7 @@ describe("RiskManager", () => {
 
   it("allowedSides: blocks bid at max long with high utilization", () => {
     const r = new RiskManager(
-      makeConfig({ maxPositionSize: 100_000_000n, maxUtilizationPct: 80 }),
+      makeConfig({ maxUtilizationPct: 80 }),
       makeInventory({ netQuantity: 100_000_000n }),
       makeCollateral({ utilizationPct: 90 }),
       dummyGas,
@@ -147,7 +147,7 @@ describe("RiskManager", () => {
 
   it("allowedSides: blocks ask at max short with high utilization", () => {
     const r = new RiskManager(
-      makeConfig({ maxPositionSize: 100_000_000n, maxUtilizationPct: 80 }),
+      makeConfig({ maxUtilizationPct: 80 }),
       makeInventory({ netQuantity: -100_000_000n }),
       makeCollateral({ utilizationPct: 90 }),
       dummyGas,
@@ -169,19 +169,31 @@ describe("RiskManager", () => {
     assert.deepEqual(r.allowedSides(), { quoteBid: false, quoteAsk: false });
   });
 
-  it("allowedSides: uses the per-market inventory and cap over the shared ones", () => {
-    // Shared inventory is neutral with a large cap; the per-market override is
-    // at its own (smaller) long cap, so bids must be blocked for THIS market.
+  it("allowedSides: blocks only the adding side once past the cap at low utilization", () => {
     const r = new RiskManager(
-      makeConfig({ maxPositionSize: 1_000_000_000n }),
-      makeInventory({ netQuantity: 0n }),
+      makeConfig(),
+      makeInventory({ netQuantity: 100_000_001n, maxPositionSize: 100_000_000n }),
       makeCollateral({ utilizationPct: 10 }),
       dummyGas,
       dummyOracle,
       makeLogger(),
     );
-    const perMarket = makeInventory({ netQuantity: 5_000_000n });
-    assert.deepEqual(r.allowedSides(perMarket, 5_000_000n), {
+    assert.deepEqual(r.allowedSides(), { quoteBid: false, quoteAsk: true });
+  });
+
+  it("allowedSides: uses the per-market inventory and its cap over the shared one", () => {
+    // Shared inventory is neutral with a large cap; the per-market one is at
+    // its own (smaller) long cap, so bids must be blocked for THIS market.
+    const r = new RiskManager(
+      makeConfig(),
+      makeInventory({ netQuantity: 0n, maxPositionSize: 1_000_000_000n }),
+      makeCollateral({ utilizationPct: 10 }),
+      dummyGas,
+      dummyOracle,
+      makeLogger(),
+    );
+    const perMarket = makeInventory({ netQuantity: 5_000_000n, maxPositionSize: 5_000_000n });
+    assert.deepEqual(r.allowedSides(perMarket), {
       quoteBid: false, // net == cap → cannot add more long
       quoteAsk: true,
     });
