@@ -51,6 +51,12 @@ vault_monitoring = {
   oracle_metric_namespace  = "HashpriceOracle-DEV"
   dev_alerts_topic_name    = "titanio-dev-dev-alerts" # Slack; dev has no separate phone topic
   devops_alerts_topic_name = "titanio-dev-dev-alerts"
+  # Market maker. Position thresholds are 80% of portfolio.dev.yml caps.
+  mm_futures_markets           = 3
+  mm_min_eth                   = 0.015
+  mm_util_warn_pct             = 70
+  mm_perps_position_warn_usd   = 16000
+  mm_futures_position_warn_usd = 16000
 }
 
 ########################################

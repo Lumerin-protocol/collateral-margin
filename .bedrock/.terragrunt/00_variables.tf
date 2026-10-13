@@ -196,28 +196,42 @@ variable "vault_monitoring" {
     oracle_metric_namespace  = string
     dev_alerts_topic_name    = string
     devops_alerts_topic_name = string
+    # Market maker (MM_ADDRESS). The futures count mirrors the MM's
+    # marketSelection; the position thresholds should sit below the
+    # maxPositionNotionalUsd caps in market-maker/configs/portfolio.<env>.yml.
+    mm_futures_markets           = number
+    mm_min_eth                   = number
+    mm_util_warn_pct             = number
+    mm_perps_position_warn_usd   = number
+    mm_futures_position_warn_usd = number
   })
   default = {
-    create                   = false
-    notifications_enabled    = false
-    rate_minutes             = 5
-    debt_util_warn_pct       = 50
-    debt_util_crit_pct       = 80
-    max_subgraph_age_minutes = 15
-    oracle_metric_namespace  = ""
-    dev_alerts_topic_name    = ""
-    devops_alerts_topic_name = ""
+    create                       = false
+    notifications_enabled        = false
+    rate_minutes                 = 5
+    debt_util_warn_pct           = 50
+    debt_util_crit_pct           = 80
+    max_subgraph_age_minutes     = 15
+    oracle_metric_namespace      = ""
+    dev_alerts_topic_name        = ""
+    devops_alerts_topic_name     = ""
+    mm_futures_markets           = 3
+    mm_min_eth                   = 0.05
+    mm_util_warn_pct             = 70
+    mm_perps_position_warn_usd   = 1000
+    mm_futures_position_warn_usd = 1000
   }
 }
 
 variable "vault_env" {
-  description = "Vault monitor addresses and subgraph URLs from config/dev.env or config/prd.env (VAULT_ADDRESS, FUTURES_ADDRESS, PERPS_ADDRESS, VAULT_SUBGRAPH_URL, POINTS_SUBGRAPH_URL). All required; the Lambda does not validate its environment."
+  description = "Vault monitor addresses and subgraph URLs from config/dev.env or config/prd.env (VAULT_ADDRESS, FUTURES_ADDRESS, PERPS_ADDRESS, MM_ADDRESS, VAULT_SUBGRAPH_URL, POINTS_SUBGRAPH_URL). All required; the Lambda does not validate its environment."
   type = object({
     subgraph_url        = string
     points_subgraph_url = string
     vault_address       = string
     futures_address     = string
     perps_address       = string
+    mm_address          = string
   })
   validation {
     condition     = alltrue([for value in values(var.vault_env) : value != ""])

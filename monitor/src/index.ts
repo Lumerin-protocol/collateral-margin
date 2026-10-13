@@ -1,5 +1,6 @@
 /**
- * Insurance-fund debt and protocol-backstop monitor.
+ * Insurance-fund debt and protocol-backstop monitor, plus order-book liquidity
+ * and market-maker funds.
  *
  * One GraphQL query against the vault subgraph, then eth_calls pinned to the
  * subgraph's block: the vault's USDC balance for the backing check, and the
@@ -14,9 +15,11 @@
  */
 import type { MetricDatum } from "@aws-sdk/client-cloudwatch";
 import {
+  type MarketMakerState,
   readBlockNumber,
   readBlockTimestamp,
   readChainState,
+  readMarketMaker,
   readPointsMeta,
   readVault,
 } from "./gateway.ts";
@@ -57,7 +60,7 @@ export async function collect(): Promise<{
 
   // Chain reads, all pinned to the subgraph block.
   const at = { blockNumber: BigInt(block) };
-  const [{ usdcRaw, ...backstop }, timestamp, headBlock, pointsMeta] =
+  const [{ usdcRaw, ...backstop }, timestamp, headBlock, pointsMeta, maker] =
     await Promise.all([
       readChainState(at, vault.collateralToken),
       // Goldsky leaves _meta.block.timestamp null; the age alarm needs the real one.
@@ -68,6 +71,11 @@ export async function collect(): Promise<{
       readPointsMeta().catch((error) => {
         // Best-effort: a points failure must not fail the vault debt check.
         log(`points drift failed: ${error}`);
+        return null;
+      }),
+      // Best-effort for the same reason; MarketCheckSuccess=0 flags it.
+      readMarketMaker(at, vault.marginEngine).catch((error) => {
+        log(`market maker check failed: ${error?.shortMessage ?? error}`);
         return null;
       }),
     ]);
@@ -173,8 +181,65 @@ export async function collect(): Promise<{
     );
   }
 
+  const book = maker ? marketMakerMetrics(maker, decimals) : null;
+  points.push(...(book?.points ?? []));
+  points.push(metric("MarketCheckSuccess", book ? 1 : 0, "Count"));
+
   const summary =
     `block=${block} head=${head} behind=${behind} age=${age}s debt=${vault.insuranceDebt} gap_raw=${gapRaw} ` +
-    `halted=${vault.halted} backstop_equity=${equity}`;
+    `halted=${vault.halted} backstop_equity=${equity} ${book?.summary ?? "mm=failed"}`;
+  return { points, summary };
+}
+
+/**
+ * Book liquidity and market-maker funds. A book with an empty side is what
+ * traders see when the market maker stops quoting one way (position cap,
+ * utilization gate, halt, or a dead process), so it is measured on-chain
+ * rather than trusted from the market maker's own logs.
+ */
+function marketMakerMetrics(
+  maker: MarketMakerState,
+  decimals: number,
+): { points: MetricDatum[]; summary: string } {
+  const usdc = (raw: bigint) => toUnits(raw, decimals);
+  const points: MetricDatum[] = [];
+  let minSide = Number.POSITIVE_INFINITY;
+  let futuresMaxNotional = 0;
+  let perpsNotional = 0;
+
+  for (const book of maker.markets) {
+    const market = dim("Market", book.market);
+    const absNet = book.mmNet < 0n ? -book.mmNet : book.mmNet;
+    const notional = usdc((absNet * book.markPrice) / book.quantityScale);
+    minSide = Math.min(minSide, book.bids.length, book.asks.length);
+    if (book.market === "perps") perpsNotional = notional;
+    else futuresMaxNotional = Math.max(futuresMaxNotional, notional);
+
+    points.push(
+      metric("BookBidLevels", book.bids.length, "Count", market),
+      metric("BookAskLevels", book.asks.length, "Count", market),
+      metric("MmPositionNotional", notional, "None", market),
+    );
+    const [bid, ask] = [book.bids[0], book.asks[0]];
+    if (bid !== undefined && ask !== undefined) {
+      const mid = Number(bid + ask) / 2;
+      points.push(
+        metric("BookSpreadBps", (Number(ask - bid) / mid) * 10_000, "None", market),
+      );
+    }
+  }
+
+  const utilization = utilizationPct(maker.portfolioIM, maker.vaultBalance);
+  points.push(
+    metric("BookMinSideLevels", minSide, "Count"),
+    metric("MmPerpsPositionNotional", perpsNotional),
+    metric("MmFuturesMaxPositionNotional", futuresMaxNotional),
+    metric("MmVaultBalance", usdc(maker.vaultBalance)),
+    metric("MmPortfolioIM", usdc(maker.portfolioIM)),
+    metric("MmUtilizationPct", utilization),
+    metric("MmEthBalance", toUnits(maker.ethBalance, 18)),
+  );
+
+  const summary = `book_min_side=${minSide} mm_util=${utilization.toFixed(1)}% mm_eth=${toUnits(maker.ethBalance, 18)}`;
   return { points, summary };
 }

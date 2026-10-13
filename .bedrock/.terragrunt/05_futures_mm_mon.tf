@@ -226,68 +226,10 @@ resource "aws_cloudwatch_log_metric_filter" "futures_mm_cancel_all_triggered" {
 }
 
 ################################################################################
-# METRIC FILTERS - VALUES EXTRACTED FROM TICK
+# Balances, positions, and book depth come from the vault monitor
+# (07_col_mar_vault_mon.tf), which reads them on-chain. The portfolio app logs
+# "portfolio tick" without those fields, so log filters cannot supply them.
 ################################################################################
-
-resource "aws_cloudwatch_log_metric_filter" "futures_mm_collateral" {
-  count          = var.futures_mm_service.create ? 1 : 0
-  provider       = aws.use1
-  name           = "${local.shortname}-futures-mm-collateral"
-  log_group_name = aws_cloudwatch_log_group.futures_mm_use1[0].name
-  pattern        = "{ $.msg = \"tick\" }"
-
-  metric_transformation {
-    name          = "CollateralBalance"
-    namespace     = local.futures_mm_metric_ns
-    value         = "$.collateralBalance"
-    default_value = "0"
-  }
-}
-
-resource "aws_cloudwatch_log_metric_filter" "futures_mm_eth_balance" {
-  count          = var.futures_mm_service.create ? 1 : 0
-  provider       = aws.use1
-  name           = "${local.shortname}-futures-mm-eth-balance"
-  log_group_name = aws_cloudwatch_log_group.futures_mm_use1[0].name
-  pattern        = "{ $.msg = \"tick\" }"
-
-  metric_transformation {
-    name          = "EthBalance"
-    namespace     = local.futures_mm_metric_ns
-    value         = "$.ethBalance"
-    default_value = "0"
-  }
-}
-
-resource "aws_cloudwatch_log_metric_filter" "futures_mm_active_orders" {
-  count          = var.futures_mm_service.create ? 1 : 0
-  provider       = aws.use1
-  name           = "${local.shortname}-futures-mm-active-orders"
-  log_group_name = aws_cloudwatch_log_group.futures_mm_use1[0].name
-  pattern        = "{ $.msg = \"tick\" }"
-
-  metric_transformation {
-    name          = "ActiveOrders"
-    namespace     = local.futures_mm_metric_ns
-    value         = "$.orders"
-    default_value = "0"
-  }
-}
-
-resource "aws_cloudwatch_log_metric_filter" "futures_mm_oracle_price" {
-  count          = var.futures_mm_service.create ? 1 : 0
-  provider       = aws.use1
-  name           = "${local.shortname}-futures-mm-oracle-price"
-  log_group_name = aws_cloudwatch_log_group.futures_mm_use1[0].name
-  pattern        = "{ $.msg = \"tick\" }"
-
-  metric_transformation {
-    name          = "OraclePrice"
-    namespace     = local.futures_mm_metric_ns
-    value         = "$.oracle"
-    default_value = "0"
-  }
-}
 
 ################################################################################
 # ALARMS
@@ -515,12 +457,12 @@ resource "aws_cloudwatch_dashboard" "futures_mm" {
         height = 4
         properties = {
           metrics = [
-            [local.futures_mm_metric_ns, "ActiveOrders", { stat = "Average", label = "Orders" }]
+            [local.vault_mon_ns, "BookMinSideLevels", { stat = "Minimum", label = "Levels" }]
           ]
           view   = "singleValue"
           region = var.default_region
-          period = 60
-          title  = "Active Orders"
+          period = 300
+          title  = "Emptiest Book Side"
         }
       },
       {
@@ -560,7 +502,7 @@ resource "aws_cloudwatch_dashboard" "futures_mm" {
         }
       },
 
-      # Row 3: Balances & Oracle
+      # Row 3: Balances & Positions
       {
         type   = "metric"
         x      = 0
@@ -569,12 +511,13 @@ resource "aws_cloudwatch_dashboard" "futures_mm" {
         height = 6
         properties = {
           metrics = [
-            [local.futures_mm_metric_ns, "CollateralBalance", { stat = "Average", label = "Collateral (raw)" }]
+            [local.vault_mon_ns, "MmVaultBalance", { stat = "Average", label = "Vault balance" }],
+            [local.vault_mon_ns, "MmPortfolioIM", { stat = "Average", label = "Portfolio IM" }]
           ]
           view   = "timeSeries"
           region = var.default_region
-          period = 60
-          title  = "Collateral Balance"
+          period = 300
+          title  = "Collateral (USDC)"
           yAxis  = { left = { min = 0 } }
         }
       },
@@ -586,12 +529,11 @@ resource "aws_cloudwatch_dashboard" "futures_mm" {
         height = 6
         properties = {
           metrics = [
-            [{ expression = "m1/1000000000000000000", label = "ETH", id = "e1" }],
-            [local.futures_mm_metric_ns, "EthBalance", { stat = "Average", id = "m1", visible = false }]
+            [local.vault_mon_ns, "MmEthBalance", { stat = "Minimum", label = "ETH" }]
           ]
           view   = "timeSeries"
           region = var.default_region
-          period = 60
+          period = 300
           title  = "ETH Balance"
           yAxis  = { left = { min = 0 } }
         }
@@ -604,13 +546,12 @@ resource "aws_cloudwatch_dashboard" "futures_mm" {
         height = 6
         properties = {
           metrics = [
-            [{ expression = "m1/100", label = "Oracle ($)", id = "e1" }],
-            [local.futures_mm_metric_ns, "OraclePrice", { stat = "Average", id = "m1", visible = false }]
+            [{ expression = "SEARCH('{${local.vault_mon_ns},Market} MetricName=\"MmPositionNotional\"', 'Maximum', 300)", id = "pos", label = "" }]
           ]
           view   = "timeSeries"
           region = var.default_region
-          period = 60
-          title  = "Oracle Price (ETH/USD)"
+          period = 300
+          title  = "Position Notional by Market (USDC)"
           yAxis  = { left = { min = 0 } }
         }
       },
@@ -715,12 +656,13 @@ resource "aws_cloudwatch_dashboard" "futures_mm" {
         height = 6
         properties = {
           metrics = [
-            [local.futures_mm_metric_ns, "ActiveOrders", { stat = "Average", label = "Active Orders", color = "#1f77b4" }]
+            [{ expression = "SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BookBidLevels\"', 'Minimum', 300)", id = "bids", label = "bids" }],
+            [{ expression = "SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BookAskLevels\"', 'Minimum', 300)", id = "asks", label = "asks" }]
           ]
           view   = "timeSeries"
           region = var.default_region
-          period = 60
-          title  = "Active Orders Over Time"
+          period = 300
+          title  = "Book Levels by Market"
           yAxis  = { left = { min = 0 } }
         }
       },

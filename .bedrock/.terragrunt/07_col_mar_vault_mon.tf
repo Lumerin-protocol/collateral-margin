@@ -95,7 +95,7 @@ resource "aws_lambda_function" "vault_mon" {
   count         = var.vault_monitoring.create ? 1 : 0
   provider      = aws.use1
   function_name = local.vault_mon_name
-  description   = "Publishes insurance-fund debt, halt, backing, and protocol-backstop metrics from the vault subgraph and venue views"
+  description   = "Publishes insurance-fund debt, halt, backing, protocol-backstop, order-book liquidity, and market-maker funds metrics"
   role          = aws_iam_role.vault_mon[0].arn
   handler       = "index.handler"
   runtime       = "nodejs24.x"
@@ -112,6 +112,8 @@ resource "aws_lambda_function" "vault_mon" {
       VAULT_ADDRESS       = var.vault_env.vault_address
       FUTURES_ADDRESS     = var.vault_env.futures_address
       PERPS_ADDRESS       = var.vault_env.perps_address
+      MM_ADDRESS          = var.vault_env.mm_address
+      MM_FUTURES_MARKETS  = tostring(var.vault_monitoring.mm_futures_markets)
       ETH_RPC_URL         = "${local.vault_rpc_host}/${var.alchemy_api_key}"
       CW_NAMESPACE        = local.vault_mon_ns
     }
@@ -539,6 +541,145 @@ resource "aws_cloudwatch_metric_alarm" "keeper_errors" {
 }
 
 ################################################################################
+# ORDER BOOK AND MARKET MAKER
+# Read on-chain, so they fire whether the market maker is quoting one side,
+# halted, or not running at all. Missing data means the market check failed,
+# which MarketCheckSuccess reports on its own.
+################################################################################
+
+resource "aws_cloudwatch_metric_alarm" "book_one_sided" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-book-one-sided-${local.vault_mon_env}"
+  alarm_description   = "A perps or quoted futures book has had no bids or no asks for 15 minutes, so traders can only trade one way. Find the empty side on the vault dashboard (Book levels by market). Usual causes: the market maker hit its maxPositionNotionalUsd cap (check MM position), its utilization gate (check MM utilization), it halted, or it is not running."
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 3
+  metric_name         = "BookMinSideLevels"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = 1
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Book One-Sided"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "mm_perps_position" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-mm-perps-position-${local.vault_mon_env}"
+  alarm_description   = "Market-maker perps position notional is above ${var.vault_monitoring.mm_perps_position_warn_usd} USD, close to its maxPositionNotionalUsd cap. At the cap it stops quoting the side that adds to the position and the book goes one-sided. Raise the cap in market-maker/configs/portfolio.<env>.yml if collateral allows, or take the other side to flatten it. Warning only."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "MmPerpsPositionNotional"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = var.vault_monitoring.mm_perps_position_warn_usd
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar MM Perps Position"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "mm_futures_position" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-mm-futures-position-${local.vault_mon_env}"
+  alarm_description   = "Market-maker position notional in one futures expiry is above ${var.vault_monitoring.mm_futures_position_warn_usd} USD, close to its per-expiry maxPositionNotionalUsd cap. At the cap that expiry's book goes one-sided. Raise the cap in market-maker/configs/portfolio.<env>.yml if collateral allows. Warning only."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "MmFuturesMaxPositionNotional"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = var.vault_monitoring.mm_futures_position_warn_usd
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar MM Futures Position"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "mm_utilization" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-mm-utilization-${local.vault_mon_env}"
+  alarm_description   = "Market-maker margin utilization (portfolio IM / vault balance) is above ${var.vault_monitoring.mm_util_warn_pct}%. Past its maxUtilizationPct it only quotes risk-reducing sides, and on a flat position it quotes nothing. Send USDC to the market-maker wallet (auto-deposit moves it into the vault) or lower its caps. Warning only."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 2
+  metric_name         = "MmUtilizationPct"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = var.vault_monitoring.mm_util_warn_pct
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar MM Utilization"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "mm_eth_low" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-mm-eth-low-${local.vault_mon_env}"
+  alarm_description   = "Market-maker wallet has less than ${var.vault_monitoring.mm_min_eth} ETH for gas. When it runs out it stops quoting and every book empties. Send ETH to the MM_ADDRESS in config/<env>.env. Warning only."
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "MmEthBalance"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Minimum"
+  threshold           = var.vault_monitoring.mm_min_eth
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar MM ETH Low"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "market_check_success" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-market-check-success-${local.vault_mon_env}"
+  alarm_description   = "The monitor has not read the order books and market-maker wallet for 15 minutes, so book and market-maker alarms are blind. The vault checks are unaffected. Read the vault monitor Lambda log for \"market maker check failed\"."
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "MarketCheckSuccess"
+  namespace           = local.vault_mon_ns
+  period              = 900
+  statistic           = "Maximum"
+  threshold           = 1
+  treat_missing_data  = "breaching"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Market Check Success"
+    Capability = "Monitoring"
+  })
+}
+
+################################################################################
 # DASHBOARD
 ################################################################################
 
@@ -574,6 +715,12 @@ resource "aws_cloudwatch_dashboard" "vault" {
               aws_cloudwatch_metric_alarm.keeper_unhealthy[*].arn,
               aws_cloudwatch_metric_alarm.keeper_silent[*].arn,
               aws_cloudwatch_metric_alarm.keeper_errors[*].arn,
+              aws_cloudwatch_metric_alarm.book_one_sided[*].arn,
+              aws_cloudwatch_metric_alarm.mm_perps_position[*].arn,
+              aws_cloudwatch_metric_alarm.mm_futures_position[*].arn,
+              aws_cloudwatch_metric_alarm.mm_utilization[*].arn,
+              aws_cloudwatch_metric_alarm.mm_eth_low[*].arn,
+              aws_cloudwatch_metric_alarm.market_check_success[*].arn,
             )
           }
         },
@@ -725,7 +872,122 @@ resource "aws_cloudwatch_dashboard" "vault" {
               [local.vault_mon_ns, "CheckSuccess", { label = "Check success", stat = "Minimum" }],
               [local.vault_mon_ns, "SubgraphIndexingErrors", { label = "Indexing errors", stat = "Maximum" }],
               [local.vault_mon_ns, "SubgraphDataAgeSeconds", { label = "Subgraph age (s)", stat = "Maximum" }],
+              [local.vault_mon_ns, "MarketCheckSuccess", { label = "Market check success", stat = "Minimum" }],
             ]
+          }
+        },
+        {
+          type   = "metric"
+          x      = 0
+          y      = 28
+          width  = 12
+          height = 6
+          properties = {
+            title  = "Book levels by market (bids / asks)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [{ expression = "SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BookBidLevels\"', 'Minimum', 300)", id = "bids", label = "bids" }],
+              [{ expression = "SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BookAskLevels\"', 'Minimum', 300)", id = "asks", label = "asks" }],
+              [local.vault_mon_ns, "BookMinSideLevels", { label = "Emptiest side", stat = "Minimum", color = "#d62728" }],
+            ]
+            annotations = { horizontal = [{ label = "one-sided", value = 1 }] }
+            yAxis       = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 12
+          y      = 28
+          width  = 12
+          height = 6
+          properties = {
+            title  = "Market-maker position notional (USDC)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [{ expression = "SEARCH('{${local.vault_mon_ns},Market} MetricName=\"MmPositionNotional\"', 'Maximum', 300)", id = "pos", label = "" }],
+            ]
+            annotations = {
+              horizontal = [
+                { label = "perps warn", value = var.vault_monitoring.mm_perps_position_warn_usd },
+                { label = "futures warn", value = var.vault_monitoring.mm_futures_position_warn_usd },
+              ]
+            }
+            yAxis = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 0
+          y      = 34
+          width  = 8
+          height = 6
+          properties = {
+            title  = "Market-maker collateral (USDC)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "MmVaultBalance", { label = "Vault balance" }],
+              [local.vault_mon_ns, "MmPortfolioIM", { label = "Portfolio IM" }],
+            ]
+            yAxis = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 8
+          y      = 34
+          width  = 8
+          height = 6
+          properties = {
+            title  = "Market-maker utilization %"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "MmUtilizationPct", { label = "IM / vault balance", stat = "Maximum" }],
+            ]
+            annotations = { horizontal = [{ label = "warn", value = var.vault_monitoring.mm_util_warn_pct }] }
+            yAxis       = { left = { min = 0, max = 100 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 16
+          y      = 34
+          width  = 8
+          height = 6
+          properties = {
+            title  = "Market-maker ETH for gas"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "MmEthBalance", { label = "ETH", stat = "Minimum" }],
+            ]
+            annotations = { horizontal = [{ label = "low", value = var.vault_monitoring.mm_min_eth }] }
+            yAxis       = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 0
+          y      = 40
+          width  = 12
+          height = 6
+          properties = {
+            title  = "Top-of-book spread (bps)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [{ expression = "SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BookSpreadBps\"', 'Maximum', 300)", id = "spread", label = "" }],
+            ]
+            yAxis = { left = { min = 0 } }
           }
         },
         {
