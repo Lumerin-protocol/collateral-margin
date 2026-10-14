@@ -42,7 +42,7 @@ keeper_service = {
 # Notifications stay off until the dashboard has been checked.
 vault_monitoring = {
   create                   = true
-  notifications_enabled    = false
+  notifications_enabled    = true
   rate_minutes             = 5
   debt_util_warn_pct       = 50
   debt_util_crit_pct       = 80
