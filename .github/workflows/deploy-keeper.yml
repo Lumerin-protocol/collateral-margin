@@ -419,13 +419,34 @@ jobs:
           # rolloutState is COMPLETED only when the new tasks passed health
           # checks; FAILED means the circuit breaker tripped (and may have
           # rolled back). We assert BOTH the task-def ARN and the rollout state.
-          PRIMARY=$(aws ecs describe-services \
-            --cluster "$CLUSTER" --services "$SERVICE" --region "$REGION" \
-            --query 'services[0].deployments[?status==`PRIMARY`] | [0]' \
-            --output json)
+          #
+          # `wait services-stable` returns as soon as runningCount==desiredCount
+          # and only one deployment remains; ECS flips rolloutState to
+          # COMPLETED a few seconds *after* that (once the ALB target is
+          # healthy). A single read here races that flip, so poll until the
+          # state is terminal (COMPLETED / FAILED) or we time out.
+          ROLLOUT_TIMEOUT_SECS=300
+          ROLLOUT_POLL_SECS=10
+          ELAPSED=0
+          while :; do
+            PRIMARY=$(aws ecs describe-services \
+              --cluster "$CLUSTER" --services "$SERVICE" --region "$REGION" \
+              --query 'services[0].deployments[?status==`PRIMARY`] | [0]' \
+              --output json)
+            ROLLOUT=$(echo "$PRIMARY" | jq -r '.rolloutState // "UNKNOWN"')
+            case "$ROLLOUT" in
+              COMPLETED|FAILED) break ;;
+            esac
+            if [ "$ELAPSED" -ge "$ROLLOUT_TIMEOUT_SECS" ]; then
+              echo "   ⚠️ rolloutState still '${ROLLOUT}' after ${ROLLOUT_TIMEOUT_SECS}s"
+              break
+            fi
+            echo "   rolloutState=${ROLLOUT}; waiting ${ROLLOUT_POLL_SECS}s (${ELAPSED}/${ROLLOUT_TIMEOUT_SECS}s)..."
+            sleep "$ROLLOUT_POLL_SECS"
+            ELAPSED=$((ELAPSED + ROLLOUT_POLL_SECS))
+          done
 
           LIVE_ARN=$(echo "$PRIMARY" | jq -r '.taskDefinition // ""')
-          ROLLOUT=$(echo "$PRIMARY" | jq -r '.rolloutState // "UNKNOWN"')
           ROLLOUT_REASON=$(echo "$PRIMARY" | jq -r '.rolloutStateReason // ""')
           RUNNING=$(echo "$PRIMARY" | jq -r '.runningCount // 0')
           DESIRED=$(echo "$PRIMARY" | jq -r '.desiredCount // 0')
