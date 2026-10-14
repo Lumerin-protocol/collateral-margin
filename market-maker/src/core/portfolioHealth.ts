@@ -43,6 +43,8 @@ export class PortfolioHealthCheck {
   status: "initializing" | "init-error" | "running" | "error" | "stopped" = "initializing";
   lastError: ErrorInfo | null = null;
   paused = false;
+  /** Shared inputs stale past grace: resting orders stay, nothing new is placed. */
+  pauseNew = false;
 
   /** Live market set provider, wired by the runner. */
   markets: () => MarketRuntime[] = () => [];
@@ -133,6 +135,7 @@ export class PortfolioHealthCheck {
         risk: {
           throttled: risk.throttled,
           throttleReason: risk.throttleReason,
+          pauseNew: this.pauseNew,
           cumulativeGasCostUsdc: formatUsdcAmount(risk.cumulativeGasCostUsd),
         },
         markets: this.markets().map((m) => {
@@ -190,6 +193,7 @@ export class PortfolioHealthCheck {
         risk: {
           throttled: risk.throttled,
           throttleReason: risk.throttleReason,
+          pauseNew: this.pauseNew,
           cumulativeGasCostUsd: risk.cumulativeGasCostUsd.toString(),
         },
         markets: this.markets().map((m) => m.healthState()),

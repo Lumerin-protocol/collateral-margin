@@ -29,6 +29,7 @@ inputs = {
     vault_address       = local.config_env["VAULT_ADDRESS"]
     futures_address     = local.config_env["FUTURES_ADDRESS"]
     perps_address       = local.config_env["PERPS_ADDRESS"]
+    mm_address          = local.config_env["MM_ADDRESS"]
   }
   # Lambda package is monitor/ itself. Absolute because terraform runs from
   # .terragrunt-cache, where path.module is not the repo.

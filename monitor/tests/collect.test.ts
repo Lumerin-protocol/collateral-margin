@@ -11,6 +11,7 @@ import {
   erc20Abi,
   multicall3Abi,
   parseAbi,
+  toFunctionSelector,
   toHex,
 } from "viem";
 
@@ -21,6 +22,9 @@ process.env.ETH_RPC_URL = "https://rpc.test/v2/key";
 process.env.VAULT_ADDRESS = "0x0000000000000000000000000000000000000001";
 process.env.FUTURES_ADDRESS = "0x0000000000000000000000000000000000000002";
 process.env.PERPS_ADDRESS = "0x0000000000000000000000000000000000000003";
+process.env.MM_ADDRESS = "0x0000000000000000000000000000000000000004";
+process.env.MM_FUTURES_MARKETS = "3";
+process.env.MM_HEALTH_URL = "https://mm.test/health/raw";
 
 const venueAbi = parseAbi([
   "struct RiskView { int256 netPositionDelta; int256 unrealizedPnl; int256 pendingFunding; uint256 buyOrderDelta; uint256 sellOrderDelta; uint256 buyOrderFillLoss; uint256 sellOrderFillLoss; }",
@@ -29,8 +33,36 @@ const venueAbi = parseAbi([
   "function getActiveExpirationDates(address user) view returns (uint256[])",
   "function getUserPosition(address user, uint256 expirationAt) view returns (Position)",
   "function getUserPosition(address user) view returns (Position)",
+  "function getOrderBookPrices(uint256 maxLevels) view returns (uint256[] bids, uint256[] asks)",
+  "function getOrderBookPrices(uint256 expirationAt, uint256 maxLevels) view returns (uint256[] bids, uint256[] asks)",
+  "function getMarketPrice() view returns (uint256)",
+  "function getExpirationDates() view returns (uint256[])",
 ]);
+const mmAbi = parseAbi([
+  "function balanceOf(address user) view returns (uint256)",
+  "function computePortfolioIM(address user) view returns (uint256)",
+  "function getEthBalance(address addr) view returns (uint256)",
+]);
+const MARGIN_ENGINE = "0x0000000000000000000000000000000000000009";
+let failMarketMaker = false;
+let failHealth = false;
 
+const healthResponse = () => ({
+  status: "running",
+  uptimeSeconds: 3_600,
+  risk: { throttled: false, pauseNew: true },
+  markets: [
+    { id: "perps", breaker: "active", ownOrders: 20 },
+    { id: "futures:100", breaker: "quarantined", ownOrders: 0 },
+    { id: "futures:200", breaker: "degraded", ownOrders: 7 },
+    { id: "futures:300", breaker: "active", ownOrders: 12 },
+  ],
+  stats: { lastTickAt: Date.now() - 30_000 },
+});
+
+const getEthBalanceSelector = toFunctionSelector(
+  "function getEthBalance(address addr)",
+);
 const BLOCK = 1_000;
 const USDC = 6;
 const MULTICALL3 = "0xca11bde05977b3631167028862be2a173976ca11";
@@ -83,8 +115,28 @@ const riskView = (unrealizedPnl: bigint, pendingFunding: bigint) => ({
 
 function ethCall(to: string, data: `0x${string}`): `0x${string}` {
   const address = to.toLowerCase();
-  if (address === process.env.VAULT_ADDRESS)
-    throw new Error("no calls to the vault expected");
+  if (address === process.env.VAULT_ADDRESS) {
+    // Only the market maker's own vault balance is read from the vault.
+    const { args } = decodeFunctionData({ abi: mmAbi, data });
+    assert.equal(args?.[0], process.env.MM_ADDRESS);
+    return encodeFunctionResult({
+      abi: mmAbi,
+      functionName: "balanceOf",
+      result: BigInt(u(1_800)),
+    });
+  }
+  if (address === MARGIN_ENGINE)
+    return encodeFunctionResult({
+      abi: mmAbi,
+      functionName: "computePortfolioIM",
+      result: BigInt(u(900)),
+    });
+  if (address === MULTICALL3 && data.startsWith(getEthBalanceSelector))
+    return encodeFunctionResult({
+      abi: mmAbi,
+      functionName: "getEthBalance",
+      result: 175_000_000_000_000_000n,
+    });
   if (address === MULTICALL3) {
     const decoded = decodeFunctionData({ abi: multicall3Abi, data });
     assert.equal(decoded.functionName, "aggregate3");
@@ -109,7 +161,32 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
   }
   const { functionName, args } = decodeFunctionData({ abi: venueAbi, data });
   const isFutures = address === process.env.FUTURES_ADDRESS;
+  const isMm = args?.[0] === process.env.MM_ADDRESS;
   switch (functionName) {
+    case "getOrderBookPrices": {
+      if (failMarketMaker) throw new Error("book read reverted");
+      // perps two-sided; futures 100 two-sided, 200 bids only, 300 two-sided.
+      const expiry = isFutures ? args?.[0] : undefined;
+      const bids = [39_500_000n, 39_490_000n];
+      const asks = expiry === 200n ? [] : [39_510_000n];
+      return encodeFunctionResult({
+        abi: venueAbi,
+        functionName,
+        result: [bids, asks],
+      });
+    }
+    case "getMarketPrice":
+      return encodeFunctionResult({
+        abi: venueAbi,
+        functionName,
+        result: 40_000_000n,
+      });
+    case "getExpirationDates":
+      return encodeFunctionResult({
+        abi: venueAbi,
+        functionName,
+        result: [100n, 200n, 300n, 400n],
+      });
     case "getRiskView":
       return encodeFunctionResult({
         abi: venueAbi,
@@ -125,6 +202,20 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
         result: [100n, 200n],
       });
     case "getUserPosition":
+      if (isMm) {
+        // MM: perps +56 units; futures 100 → -9, 200 → flat, 300 → +25.
+        const byExpiry: Record<string, bigint> = { "100": -9n, "300": 25n };
+        return encodeFunctionResult({
+          abi: venueAbi,
+          functionName,
+          result: {
+            netQuantity: isFutures
+              ? (byExpiry[String(args?.[1])] ?? 0n)
+              : 56_000_000n,
+            netEntryValue: 0n,
+          },
+        });
+      }
       // futures: expiry 100 → +2, expiry 200 → flat; perps → -7e6
       return encodeFunctionResult({
         abi: venueAbi,
@@ -192,6 +283,10 @@ globalThis.fetch = (async (
   init?: RequestInit,
 ) => {
   const url = String(input);
+  if (url.startsWith("https://mm.test"))
+    return failHealth
+      ? new Response("busy", { status: 503 })
+      : Response.json(healthResponse());
   userAgents.add(new Headers(init?.headers).get("user-agent") ?? "");
   const body = JSON.parse(String(init?.body));
   const payload = url.startsWith("https://rpc.test")
@@ -232,8 +327,12 @@ describe("collect", () => {
     assert.ok(userAgents.has("col-mar-vault-mon"));
   });
 
-  it("batches contract reads into two multicalls", () => {
-    assert.deepEqual(multicallSizes, [5, 2]);
+  it("batches contract reads into two multicalls per check", () => {
+    // backstop 5 + 2 legs; market maker 8 + 2 reads for each of 3 expiries
+    assert.deepEqual(
+      [...multicallSizes].sort((a, b) => a - b),
+      [2, 5, 6, 8],
+    );
   });
 
   it("converts vault balances to USDC units", () => {
@@ -278,5 +377,98 @@ describe("collect", () => {
       value("BackstopBadDebtTotal", process.env.FUTURES_ADDRESS),
       10,
     );
+  });
+
+  it("counts book levels per market and flags the emptiest side", () => {
+    assert.equal(value("BookBidLevels", "perps"), 2);
+    assert.equal(value("BookAskLevels", "perps"), 1);
+    assert.equal(value("BookAskLevels", "futures-200"), 0);
+    assert.equal(value("BookMinSideLevels"), 0);
+    // only the nearest MM_FUTURES_MARKETS expiries are watched
+    assert.ok(!points.some((p) => p.Dimensions?.[0]?.Value === "futures-400"));
+    const spread = value("BookSpreadBps", "perps") ?? 0;
+    assert.ok(Math.abs(spread - 2.53) < 0.01, `spread ${spread}`);
+  });
+
+  it("measures how far each book's mid sits from the mark", () => {
+    // mid 39.505 against a $40 mark
+    const drift = value("BookMidDriftBps", "perps") ?? 0;
+    assert.ok(Math.abs(drift - 123.75) < 0.01, `drift ${drift}`);
+    assert.ok(Math.abs((value("BookMaxMidDriftBps") ?? 0) - 123.75) < 0.01);
+    // a one-sided book has no mid
+    assert.ok(
+      !points.some(
+        (p) =>
+          p.MetricName === "BookMidDriftBps" &&
+          p.Dimensions?.[0]?.Value === "futures-200",
+      ),
+    );
+  });
+
+  it("reports the market maker's own state from /health", () => {
+    assert.equal(value("MmHealthCheckSuccess"), 1);
+    assert.equal(value("MmRunning"), 1);
+    const tickAge = value("MmTickAgeSeconds") ?? 0;
+    assert.ok(tickAge >= 30 && tickAge < 40, `tick age ${tickAge}`);
+    assert.equal(value("MmThrottled"), 0);
+    assert.equal(value("MmPausedNew"), 1);
+    assert.equal(value("MmQuarantinedMarkets"), 1);
+    assert.equal(value("MmMarketCount"), 4);
+    assert.equal(value("MmMinOwnOrders"), 0);
+    assert.equal(value("MmOwnOrders", "perps"), 20);
+    assert.equal(value("MmOwnOrders", "futures-100"), 0);
+    assert.match(summary, /mm_status=running quarantined=1 min_own_orders=0/);
+  });
+
+  it("reports market-maker position notional in USDC", () => {
+    assert.equal(value("MmPositionNotional", "perps"), 2_240); // 56 × $40
+    assert.equal(value("MmPositionNotional", "futures-100"), 360); // 9 × $40
+    assert.equal(value("MmPerpsPositionNotional"), 2_240);
+    assert.equal(value("MmFuturesMaxPositionNotional"), 1_000); // 25 × $40
+  });
+
+  it("reports market-maker funds", () => {
+    assert.equal(value("MmVaultBalance"), 1_800);
+    assert.equal(value("MmPortfolioIM"), 900);
+    assert.equal(value("MmUtilizationPct"), 50);
+    assert.equal(value("MmEthBalance"), 0.175);
+    assert.equal(value("MarketCheckSuccess"), 1);
+  });
+
+  it("keeps the vault check alive when the market-maker reads fail", async () => {
+    failMarketMaker = true;
+    try {
+      const { collect } = await import("../src/index.ts");
+      const result = await collect();
+      const names = result.points.map((p) => p.MetricName);
+      assert.ok(names.includes("InsuranceDebt"));
+      assert.ok(!names.includes("BookMinSideLevels"));
+      const check = result.points.find(
+        (p) => p.MetricName === "MarketCheckSuccess",
+      );
+      assert.equal(check?.Value, 0);
+      assert.match(result.summary, /mm=failed/);
+    } finally {
+      failMarketMaker = false;
+    }
+  });
+
+  it("keeps the other checks alive when /health is unreachable", async () => {
+    failHealth = true;
+    try {
+      const { collect } = await import("../src/index.ts");
+      const result = await collect();
+      const names = result.points.map((p) => p.MetricName);
+      assert.ok(names.includes("InsuranceDebt"));
+      assert.ok(names.includes("BookMinSideLevels"));
+      assert.ok(!names.includes("MmRunning"));
+      const check = result.points.find(
+        (p) => p.MetricName === "MmHealthCheckSuccess",
+      );
+      assert.equal(check?.Value, 0);
+      assert.match(result.summary, /mm_health=failed/);
+    } finally {
+      failHealth = false;
+    }
   });
 });
