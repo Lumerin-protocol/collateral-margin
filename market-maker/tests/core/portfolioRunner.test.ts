@@ -103,7 +103,7 @@ interface DepOverrides {
 
 interface Tracked {
   deps: PortfolioTickDeps;
-  health: { status: string; lastError: unknown };
+  health: { status: string; lastError: unknown; pauseNew?: boolean };
   spies: {
     gasUpdates: number;
     collateralUpdates: number;
@@ -115,7 +115,7 @@ interface Tracked {
 }
 
 function makeDeps(over: DepOverrides = {}): Tracked {
-  const health = { status: "init", lastError: null as unknown };
+  const health: Tracked["health"] = { status: "init", lastError: null };
   const spies: Tracked["spies"] = {
     gasUpdates: 0,
     collateralUpdates: 0,
@@ -210,6 +210,7 @@ describe("runPortfolioTick", () => {
     assert.equal(health.status, "running");
     assert.equal(health.lastError, null, "clears stale error after a clean tick");
     assert.equal(res.state.pauseNew, false);
+    assert.equal(health.pauseNew, false);
   });
 
   it("skips submission and clears a stale error on an idle tick", async () => {
@@ -253,7 +254,7 @@ describe("runPortfolioTick", () => {
     const withWork = makeMarket("perps", { cancels: 1, creates: 2 });
     const cancelsOnly = makeMarket("futures", { cancels: 3, creates: 0 });
     const createsOnly = makeMarket("futures2", { cancels: 0, creates: 4 });
-    const { deps, spies } = makeDeps({ sharedThrows: true, graceMs: 10_000 });
+    const { deps, health, spies } = makeDeps({ sharedThrows: true, graceMs: 10_000 });
 
     const res = await runPortfolioTick(
       100_000,
@@ -262,6 +263,7 @@ describe("runPortfolioTick", () => {
     );
 
     assert.equal(res.state.pauseNew, true);
+    assert.equal(health.pauseNew, true, "surfaced on /health");
     const submitted = spies.submits[0];
     // createsOnly is filtered out (no cancels, creates stripped); others keep cancels only.
     assert.equal(submitted.length, 2);

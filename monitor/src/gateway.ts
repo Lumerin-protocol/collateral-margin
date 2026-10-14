@@ -21,6 +21,11 @@ const { VAULT_SUBGRAPH_URL, POINTS_SUBGRAPH_URL } = process.env as Record<
 const VAULT_ADDRESS = process.env.VAULT_ADDRESS?.toLowerCase() as Address;
 const FUTURES_ADDRESS = process.env.FUTURES_ADDRESS?.toLowerCase() as Address;
 const PERPS_ADDRESS = process.env.PERPS_ADDRESS?.toLowerCase() as Address;
+const MM_ADDRESS = process.env.MM_ADDRESS?.toLowerCase() as Address;
+/** Futures expiries the market maker quotes: the nearest N, like its `marketSelection: nearest`. */
+const MM_FUTURES_MARKETS = Number(process.env.MM_FUTURES_MARKETS ?? 3);
+/** Price levels read per book side; only emptiness and the top of book matter. */
+const BOOK_LEVELS = 50n;
 
 /** CollateralVault.BACKSTOP_ADDR: keyless ledger that inherits liquidated positions. */
 const BACKSTOP: Address = "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB";
@@ -60,6 +65,7 @@ export interface VaultState {
   indexingErrors: boolean;
   decimals: number;
   collateralToken: Address;
+  marginEngine: Address;
   marginEngineUnset: boolean;
   halted: boolean;
   totalSupply: bigint;
@@ -107,6 +113,7 @@ export async function readVault(): Promise<VaultState> {
     indexingErrors: Boolean(_meta.hasIndexingErrors),
     decimals: Number(vault.decimals ?? 6),
     collateralToken: vault.collateralToken as Address,
+    marginEngine: vault.marginEngine as Address,
     marginEngineUnset: isUnset(vault.marginEngine),
     halted: Boolean(vault.halted),
     totalSupply: big(vault.totalSupply),
@@ -217,6 +224,184 @@ export async function readChainState(
     pendingFunding: perpsRisk.pendingFunding,
     futuresLegs,
     perpsNet: perpsPosition.netQuantity,
+  };
+}
+
+/** One order book and the market maker's position in it. Prices are collateral-token units. */
+export interface MarketBook {
+  /** "perps" or "futures-<expirationAt>". */
+  market: string;
+  /** notional = price * |net| / quantityScale: perps 1e6, futures whole contracts. */
+  quantityScale: bigint;
+  markPrice: bigint;
+  /** Best first: bids descending, asks ascending. */
+  bids: readonly bigint[];
+  asks: readonly bigint[];
+  mmNet: bigint;
+}
+
+/** Market-maker wallet funds and the books it is supposed to keep two-sided. Raw units. */
+export interface MarketMakerState {
+  ethBalance: bigint;
+  vaultBalance: bigint;
+  portfolioIM: bigint;
+  markets: MarketBook[];
+}
+
+export async function readMarketMaker(
+  at: { blockNumber: bigint },
+  marginEngine: Address,
+): Promise<MarketMakerState> {
+  const abi = parseAbi([
+    "struct Position { int256 netQuantity; int256 netEntryValue; }",
+    "function getOrderBookPrices(uint256 maxLevels) view returns (uint256[] bids, uint256[] asks)",
+    "function getOrderBookPrices(uint256 expirationAt, uint256 maxLevels) view returns (uint256[] bids, uint256[] asks)",
+    "function getMarketPrice() view returns (uint256)",
+    "function getExpirationDates() view returns (uint256[])",
+    "function getUserPosition(address user, uint256 expirationAt) view returns (Position)",
+    "function getUserPosition(address user) view returns (Position)",
+    "function balanceOf(address user) view returns (uint256)",
+    "function computePortfolioIM(address user) view returns (uint256)",
+    "function getEthBalance(address addr) view returns (uint256)",
+  ]);
+  const futures = { ...at, abi, address: FUTURES_ADDRESS };
+  const perps = { ...at, abi, address: PERPS_ADDRESS };
+
+  const [
+    ethBalance,
+    vaultBalance,
+    portfolioIM,
+    [perpsBids, perpsAsks],
+    perpsPrice,
+    perpsPosition,
+    expiries,
+    futuresPrice,
+  ] = await chain.multicall({
+    ...at,
+    multicallAddress: MULTICALL3,
+    allowFailure: false,
+    contracts: [
+      {
+        address: MULTICALL3,
+        abi,
+        functionName: "getEthBalance",
+        args: [MM_ADDRESS],
+      },
+      {
+        address: VAULT_ADDRESS,
+        abi,
+        functionName: "balanceOf",
+        args: [MM_ADDRESS],
+      },
+      {
+        address: marginEngine,
+        abi,
+        functionName: "computePortfolioIM",
+        args: [MM_ADDRESS],
+      },
+      { ...perps, functionName: "getOrderBookPrices", args: [BOOK_LEVELS] },
+      { ...perps, functionName: "getMarketPrice" },
+      { ...perps, functionName: "getUserPosition", args: [MM_ADDRESS] },
+      { ...futures, functionName: "getExpirationDates" },
+      { ...futures, functionName: "getMarketPrice" },
+    ],
+  });
+
+  const quoted = expiries.slice(0, MM_FUTURES_MARKETS);
+  const futuresReads = (await chain.multicall({
+    ...at,
+    multicallAddress: MULTICALL3,
+    allowFailure: false,
+    contracts: quoted.flatMap((expirationAt) => [
+      {
+        ...futures,
+        functionName: "getOrderBookPrices",
+        args: [expirationAt, BOOK_LEVELS],
+      },
+      {
+        ...futures,
+        functionName: "getUserPosition",
+        args: [MM_ADDRESS, expirationAt],
+      },
+    ]),
+  })) as unknown as (
+    | readonly [readonly bigint[], readonly bigint[]]
+    | { netQuantity: bigint }
+  )[];
+
+  const markets: MarketBook[] = [
+    {
+      market: "perps",
+      quantityScale: 1_000_000n,
+      markPrice: perpsPrice,
+      bids: perpsBids,
+      asks: perpsAsks,
+      mmNet: perpsPosition.netQuantity,
+    },
+    ...quoted.map((expirationAt, index) => {
+      const [bids, asks] = futuresReads[2 * index] as readonly [
+        readonly bigint[],
+        readonly bigint[],
+      ];
+      const position = futuresReads[2 * index + 1] as { netQuantity: bigint };
+      return {
+        market: `futures-${expirationAt}`,
+        quantityScale: 1n,
+        markPrice: futuresPrice,
+        bids,
+        asks,
+        mmNet: position.netQuantity,
+      };
+    }),
+  ];
+
+  return { ethBalance, vaultBalance, portfolioIM, markets };
+}
+
+/**
+ * The market maker's own view from /health/raw: what it is doing, which no
+ * chain read shows (quarantined markets, gas throttle, paused placements).
+ */
+export interface MarketMakerHealth {
+  status: string;
+  uptimeSeconds: number;
+  /** Epoch ms; 0 until the first tick completes. */
+  lastTickAt: number;
+  throttled: boolean;
+  /** Absent on images older than the field. */
+  pauseNew: boolean | undefined;
+  markets: { market: string; breaker: string; ownOrders: number }[];
+}
+
+/** /health can stall behind a tick on 0.25 vCPU; the ALB check allows 10s too. */
+const HEALTH_TIMEOUT_MS = 10_000;
+
+export async function readMarketMakerHealth(
+  url: string,
+): Promise<MarketMakerHealth> {
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`${url} answered ${response.status}`);
+  const body = (await response.json()) as {
+    status: string;
+    uptimeSeconds: number;
+    risk: { throttled: boolean; pauseNew?: boolean };
+    markets: { id: string; breaker: string; ownOrders: number }[];
+    stats: { lastTickAt: number };
+  };
+  return {
+    status: body.status,
+    uptimeSeconds: body.uptimeSeconds,
+    lastTickAt: body.stats.lastTickAt,
+    throttled: body.risk.throttled,
+    pauseNew: body.risk.pauseNew,
+    markets: body.markets.map((market) => ({
+      // Same ids as the book metrics: "futures:<exp>" becomes "futures-<exp>".
+      market: market.id.replace(":", "-"),
+      breaker: market.breaker,
+      ownOrders: market.ownOrders,
+    })),
   };
 }
 

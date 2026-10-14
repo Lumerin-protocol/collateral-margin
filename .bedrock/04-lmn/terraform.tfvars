@@ -50,6 +50,13 @@ vault_monitoring = {
   oracle_metric_namespace  = "HashpriceOracle-LMN"
   dev_alerts_topic_name    = "titanio-lmn-dev-alerts"    # Slack
   devops_alerts_topic_name = "titanio-lmn-devops-alerts" # Phone
+  # Market maker. Position thresholds are 80% of portfolio.prd.yml caps.
+  mm_futures_markets           = 3
+  mm_min_eth                   = 0.1
+  mm_util_warn_pct             = 70
+  mm_perps_position_warn_usd   = 2400
+  mm_futures_position_warn_usd = 800
+  book_drift_warn_bps          = 100
 }
 
 ########################################
