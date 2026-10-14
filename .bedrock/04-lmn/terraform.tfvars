@@ -56,6 +56,7 @@ vault_monitoring = {
   mm_util_warn_pct             = 70
   mm_perps_position_warn_usd   = 2400
   mm_futures_position_warn_usd = 800
+  book_drift_warn_bps          = 100
 }
 
 ########################################

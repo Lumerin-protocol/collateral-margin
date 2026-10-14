@@ -130,6 +130,7 @@ export async function runPortfolioTick(
       );
     }
   }
+  health.pauseNew = state.pauseNew;
 
   // Stage 3: per-market update (each isolated by its circuit breaker).
   for (const m of state.markets) await m.update(now);

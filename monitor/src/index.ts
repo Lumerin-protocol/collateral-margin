@@ -8,6 +8,10 @@
  * backstop equity. Every read describes the same block, so indexer lag cannot
  * open a false gap.
  *
+ * The market maker's /health/raw (reached inside the VPC through its internal
+ * ALB) adds what the chain cannot show: quarantined markets, gas throttle,
+ * paused placements, and its own resting orders.
+ *
  * On any failure this publishes CheckSuccess=0 and no value metrics. Value
  * alarms treat missing data as ignore and keep their last state.
  *
@@ -15,11 +19,13 @@
  */
 import type { MetricDatum } from "@aws-sdk/client-cloudwatch";
 import {
+  type MarketMakerHealth,
   type MarketMakerState,
   readBlockNumber,
   readBlockTimestamp,
   readChainState,
   readMarketMaker,
+  readMarketMakerHealth,
   readPointsMeta,
   readVault,
 } from "./gateway.ts";
@@ -35,6 +41,8 @@ import {
 
 // Terraform sets and validates this (var.vault_env); nothing is optional here.
 const { CW_NAMESPACE } = process.env as Record<string, string>;
+/** Empty where the market maker service is not deployed. */
+const MM_HEALTH_URL = process.env.MM_HEALTH_URL ?? "";
 
 export async function handler(): Promise<{ statusCode: number; body: string }> {
   log(`vault monitor ${new Date().toISOString()}`);
@@ -60,8 +68,14 @@ export async function collect(): Promise<{
 
   // Chain reads, all pinned to the subgraph block.
   const at = { blockNumber: BigInt(block) };
-  const [{ usdcRaw, ...backstop }, timestamp, headBlock, pointsMeta, maker] =
-    await Promise.all([
+  const [
+    { usdcRaw, ...backstop },
+    timestamp,
+    headBlock,
+    pointsMeta,
+    maker,
+    makerHealth,
+  ] = await Promise.all([
       readChainState(at, vault.collateralToken),
       // Goldsky leaves _meta.block.timestamp null; the age alarm needs the real one.
       vault.timestamp
@@ -78,6 +92,12 @@ export async function collect(): Promise<{
         log(`market maker check failed: ${error?.shortMessage ?? error}`);
         return null;
       }),
+      MM_HEALTH_URL
+        ? readMarketMakerHealth(MM_HEALTH_URL).catch((error) => {
+            log(`market maker health failed: ${error}`);
+            return null;
+          })
+        : undefined,
     ]);
   const head = Number(headBlock);
 
@@ -185,9 +205,17 @@ export async function collect(): Promise<{
   points.push(...(book?.points ?? []));
   points.push(metric("MarketCheckSuccess", book ? 1 : 0, "Count"));
 
+  let healthSummary = "";
+  if (makerHealth !== undefined) {
+    const health = makerHealth ? healthMetrics(makerHealth) : null;
+    points.push(...(health?.points ?? []));
+    points.push(metric("MmHealthCheckSuccess", health ? 1 : 0, "Count"));
+    healthSummary = ` ${health?.summary ?? "mm_health=failed"}`;
+  }
+
   const summary =
     `block=${block} head=${head} behind=${behind} age=${age}s debt=${vault.insuranceDebt} gap_raw=${gapRaw} ` +
-    `halted=${vault.halted} backstop_equity=${equity} ${book?.summary ?? "mm=failed"}`;
+    `halted=${vault.halted} backstop_equity=${equity} ${book?.summary ?? "mm=failed"}${healthSummary}`;
   return { points, summary };
 }
 
@@ -206,6 +234,7 @@ function marketMakerMetrics(
   let minSide = Number.POSITIVE_INFINITY;
   let futuresMaxNotional = 0;
   let perpsNotional = 0;
+  let maxDrift: number | null = null;
 
   for (const book of maker.markets) {
     const market = dim("Market", book.market);
@@ -223,8 +252,14 @@ function marketMakerMetrics(
     const [bid, ask] = [book.bids[0], book.asks[0]];
     if (bid !== undefined && ask !== undefined) {
       const mid = Number(bid + ask) / 2;
+      // Quotes left resting while the market maker is not requoting keep the
+      // book two-sided but walk away from the mark as the oracle moves.
+      const mark = Number(book.markPrice);
+      const drift = (Math.abs(mid - mark) / mark) * 10_000;
+      maxDrift = Math.max(maxDrift ?? 0, drift);
       points.push(
         metric("BookSpreadBps", (Number(ask - bid) / mid) * 10_000, "None", market),
+        metric("BookMidDriftBps", drift, "None", market),
       );
     }
   }
@@ -239,7 +274,50 @@ function marketMakerMetrics(
     metric("MmUtilizationPct", utilization),
     metric("MmEthBalance", toUnits(maker.ethBalance, 18)),
   );
+  if (maxDrift !== null) points.push(metric("BookMaxMidDriftBps", maxDrift));
 
   const summary = `book_min_side=${minSide} mm_util=${utilization.toFixed(1)}% mm_eth=${toUnits(maker.ethBalance, 18)}`;
+  return { points, summary };
+}
+
+/**
+ * The market maker's self-reported state. A market can sit quarantined behind
+ * its circuit breaker, or the whole process can be gas-throttled or paused on
+ * stale inputs, while its old orders keep the book looking healthy.
+ */
+function healthMetrics(
+  health: MarketMakerHealth,
+  now = Date.now(),
+): { points: MetricDatum[]; summary: string } {
+  const tickAge = health.lastTickAt
+    ? Math.max(0, Math.floor((now - health.lastTickAt) / 1000))
+    : health.uptimeSeconds;
+  const quarantined = health.markets.filter(
+    (market) => market.breaker === "quarantined",
+  ).length;
+  const minOwnOrders = Math.min(
+    ...health.markets.map((market) => market.ownOrders),
+    // No markets at all quotes nothing.
+    ...(health.markets.length ? [] : [0]),
+  );
+
+  const points: MetricDatum[] = [
+    metric("MmRunning", health.status === "running" ? 1 : 0, "Count"),
+    metric("MmTickAgeSeconds", tickAge, "Seconds"),
+    metric("MmThrottled", health.throttled ? 1 : 0, "Count"),
+    metric("MmQuarantinedMarkets", quarantined, "Count"),
+    metric("MmMarketCount", health.markets.length, "Count"),
+    metric("MmMinOwnOrders", minOwnOrders, "Count"),
+  ];
+  if (health.pauseNew !== undefined) {
+    points.push(metric("MmPausedNew", health.pauseNew ? 1 : 0, "Count"));
+  }
+  for (const market of health.markets) {
+    points.push(
+      metric("MmOwnOrders", market.ownOrders, "Count", dim("Market", market.market)),
+    );
+  }
+
+  const summary = `mm_status=${health.status} quarantined=${quarantined} min_own_orders=${minOwnOrders} throttled=${health.throttled}`;
   return { points, summary };
 }

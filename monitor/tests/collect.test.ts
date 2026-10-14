@@ -24,6 +24,7 @@ process.env.FUTURES_ADDRESS = "0x0000000000000000000000000000000000000002";
 process.env.PERPS_ADDRESS = "0x0000000000000000000000000000000000000003";
 process.env.MM_ADDRESS = "0x0000000000000000000000000000000000000004";
 process.env.MM_FUTURES_MARKETS = "3";
+process.env.MM_HEALTH_URL = "https://mm.test/health/raw";
 
 const venueAbi = parseAbi([
   "struct RiskView { int256 netPositionDelta; int256 unrealizedPnl; int256 pendingFunding; uint256 buyOrderDelta; uint256 sellOrderDelta; uint256 buyOrderFillLoss; uint256 sellOrderFillLoss; }",
@@ -44,6 +45,20 @@ const mmAbi = parseAbi([
 ]);
 const MARGIN_ENGINE = "0x0000000000000000000000000000000000000009";
 let failMarketMaker = false;
+let failHealth = false;
+
+const healthResponse = () => ({
+  status: "running",
+  uptimeSeconds: 3_600,
+  risk: { throttled: false, pauseNew: true },
+  markets: [
+    { id: "perps", breaker: "active", ownOrders: 20 },
+    { id: "futures:100", breaker: "quarantined", ownOrders: 0 },
+    { id: "futures:200", breaker: "degraded", ownOrders: 7 },
+    { id: "futures:300", breaker: "active", ownOrders: 12 },
+  ],
+  stats: { lastTickAt: Date.now() - 30_000 },
+});
 
 const getEthBalanceSelector = toFunctionSelector(
   "function getEthBalance(address addr)",
@@ -268,6 +283,10 @@ globalThis.fetch = (async (
   init?: RequestInit,
 ) => {
   const url = String(input);
+  if (url.startsWith("https://mm.test"))
+    return failHealth
+      ? new Response("busy", { status: 503 })
+      : Response.json(healthResponse());
   userAgents.add(new Headers(init?.headers).get("user-agent") ?? "");
   const body = JSON.parse(String(init?.body));
   const payload = url.startsWith("https://rpc.test")
@@ -371,6 +390,36 @@ describe("collect", () => {
     assert.ok(Math.abs(spread - 2.53) < 0.01, `spread ${spread}`);
   });
 
+  it("measures how far each book's mid sits from the mark", () => {
+    // mid 39.505 against a $40 mark
+    const drift = value("BookMidDriftBps", "perps") ?? 0;
+    assert.ok(Math.abs(drift - 123.75) < 0.01, `drift ${drift}`);
+    assert.ok(Math.abs((value("BookMaxMidDriftBps") ?? 0) - 123.75) < 0.01);
+    // a one-sided book has no mid
+    assert.ok(
+      !points.some(
+        (p) =>
+          p.MetricName === "BookMidDriftBps" &&
+          p.Dimensions?.[0]?.Value === "futures-200",
+      ),
+    );
+  });
+
+  it("reports the market maker's own state from /health", () => {
+    assert.equal(value("MmHealthCheckSuccess"), 1);
+    assert.equal(value("MmRunning"), 1);
+    const tickAge = value("MmTickAgeSeconds") ?? 0;
+    assert.ok(tickAge >= 30 && tickAge < 40, `tick age ${tickAge}`);
+    assert.equal(value("MmThrottled"), 0);
+    assert.equal(value("MmPausedNew"), 1);
+    assert.equal(value("MmQuarantinedMarkets"), 1);
+    assert.equal(value("MmMarketCount"), 4);
+    assert.equal(value("MmMinOwnOrders"), 0);
+    assert.equal(value("MmOwnOrders", "perps"), 20);
+    assert.equal(value("MmOwnOrders", "futures-100"), 0);
+    assert.match(summary, /mm_status=running quarantined=1 min_own_orders=0/);
+  });
+
   it("reports market-maker position notional in USDC", () => {
     assert.equal(value("MmPositionNotional", "perps"), 2_240); // 56 × $40
     assert.equal(value("MmPositionNotional", "futures-100"), 360); // 9 × $40
@@ -401,6 +450,25 @@ describe("collect", () => {
       assert.match(result.summary, /mm=failed/);
     } finally {
       failMarketMaker = false;
+    }
+  });
+
+  it("keeps the other checks alive when /health is unreachable", async () => {
+    failHealth = true;
+    try {
+      const { collect } = await import("../src/index.ts");
+      const result = await collect();
+      const names = result.points.map((p) => p.MetricName);
+      assert.ok(names.includes("InsuranceDebt"));
+      assert.ok(names.includes("BookMinSideLevels"));
+      assert.ok(!names.includes("MmRunning"));
+      const check = result.points.find(
+        (p) => p.MetricName === "MmHealthCheckSuccess",
+      );
+      assert.equal(check?.Value, 0);
+      assert.match(result.summary, /mm_health=failed/);
+    } finally {
+      failHealth = false;
     }
   });
 });

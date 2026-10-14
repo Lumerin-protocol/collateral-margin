@@ -358,6 +358,53 @@ export async function readMarketMaker(
   return { ethBalance, vaultBalance, portfolioIM, markets };
 }
 
+/**
+ * The market maker's own view from /health/raw: what it is doing, which no
+ * chain read shows (quarantined markets, gas throttle, paused placements).
+ */
+export interface MarketMakerHealth {
+  status: string;
+  uptimeSeconds: number;
+  /** Epoch ms; 0 until the first tick completes. */
+  lastTickAt: number;
+  throttled: boolean;
+  /** Absent on images older than the field. */
+  pauseNew: boolean | undefined;
+  markets: { market: string; breaker: string; ownOrders: number }[];
+}
+
+/** /health can stall behind a tick on 0.25 vCPU; the ALB check allows 10s too. */
+const HEALTH_TIMEOUT_MS = 10_000;
+
+export async function readMarketMakerHealth(
+  url: string,
+): Promise<MarketMakerHealth> {
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`${url} answered ${response.status}`);
+  const body = (await response.json()) as {
+    status: string;
+    uptimeSeconds: number;
+    risk: { throttled: boolean; pauseNew?: boolean };
+    markets: { id: string; breaker: string; ownOrders: number }[];
+    stats: { lastTickAt: number };
+  };
+  return {
+    status: body.status,
+    uptimeSeconds: body.uptimeSeconds,
+    lastTickAt: body.stats.lastTickAt,
+    throttled: body.risk.throttled,
+    pauseNew: body.risk.pauseNew,
+    markets: body.markets.map((market) => ({
+      // Same ids as the book metrics: "futures:<exp>" becomes "futures-<exp>".
+      market: market.id.replace(":", "-"),
+      breaker: market.breaker,
+      ownOrders: market.ownOrders,
+    })),
+  };
+}
+
 /** Block timestamp at a pinned height, for when the subgraph omits its own. */
 export async function readBlockTimestamp(at: { blockNumber: bigint }) {
   const block = await chain.getBlock(at);

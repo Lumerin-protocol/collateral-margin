@@ -204,6 +204,9 @@ variable "vault_monitoring" {
     mm_util_warn_pct             = number
     mm_perps_position_warn_usd   = number
     mm_futures_position_warn_usd = number
+    # Book mid vs mark. Normal is a few bps; the perps quoter can skew up to
+    # about 50 bps, so past that the quotes are stale rather than skewed.
+    book_drift_warn_bps = number
   })
   default = {
     create                       = false
@@ -220,6 +223,7 @@ variable "vault_monitoring" {
     mm_util_warn_pct             = 70
     mm_perps_position_warn_usd   = 1000
     mm_futures_position_warn_usd = 1000
+    book_drift_warn_bps          = 100
   }
 }
 
