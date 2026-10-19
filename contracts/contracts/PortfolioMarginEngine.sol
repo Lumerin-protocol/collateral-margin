@@ -7,6 +7,7 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {AggregatorV3Interface} from "./interfaces/AggregatorV3Interface.sol";
 import {ICollateralVault} from "./interfaces/ICollateralVault.sol";
 import {ILinearMarket} from "./interfaces/ILinearMarket.sol";
@@ -68,7 +69,7 @@ contract PortfolioMarginEngine is
     using EnumerableSet for EnumerableSet.AddressSet;
 
     uint256 private constant MAX_ORACLE_STALENESS = 1 hours;
-    string public constant VERSION = "2.2.0";
+    string public constant VERSION = "2.3.0";
 
     /// @notice The collateral vault this engine aggregates balances from.
     /// @dev Fixed per implementation, like the products' own vault pins: every registered
@@ -447,10 +448,10 @@ contract PortfolioMarginEngine is
         // 2. Stress both fill legs (WAD-scaled) and keep the worse. Gamma and vega ride
         //    along unchanged in both — only delta moves with the orders.
         uint256 worstLoss = _worstStressLoss(
-            inputs.netDelta + int256(agg.buyOrderDelta), inputs.netGamma, inputs.netVega, isIM, spotPrice
+            inputs.netDelta + SafeCast.toInt256(agg.buyOrderDelta), inputs.netGamma, inputs.netVega, isIM, spotPrice
         );
         uint256 sellLoss = _worstStressLoss(
-            inputs.netDelta - int256(agg.sellOrderDelta), inputs.netGamma, inputs.netVega, isIM, spotPrice
+            inputs.netDelta - SafeCast.toInt256(agg.sellOrderDelta), inputs.netGamma, inputs.netVega, isIM, spotPrice
         );
         if (sellLoss > worstLoss) worstLoss = sellLoss;
 
