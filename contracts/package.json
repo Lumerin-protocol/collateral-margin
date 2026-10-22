@@ -9,6 +9,7 @@
   "scripts": {
     "compile": "hardhat compile",
     "test": "hardhat test",
+    "test:gas": "hardhat test --network hardhat tests/gas/collateral-margin-gas.test.ts",
     "typecheck": "tsgo --noEmit",
     "lint": "biome lint .",
     "clean": "rm -rf abi artifacts cache",
@@ -17,6 +18,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.10",
+    "@lsheva/evm-gas-benchmark": "github:lsheva/evm-gas-benchmark#v1.0.2&path:packages/evm-gas-benchmark",
     "@nomicfoundation/hardhat-toolbox-viem": "^5.0.7",
     "@nomicfoundation/hardhat-verify": "^3.0.17",
     "@nomicfoundation/hardhat-viem": "3.0.9",
