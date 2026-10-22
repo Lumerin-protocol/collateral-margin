@@ -1,0 +1,1034 @@
+{
+  "measurements": [
+    {
+      "function": "balanceOf(address)",
+      "gas": "29110",
+      "id": "1 per order and fill · CollateralVault.balanceOf(address)::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "halted()",
+      "gas": "28321",
+      "id": "1 per order and fill · CollateralVault.halted()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "internalTransfer(address,address,uint256)",
+      "gas": "42168",
+      "id": "1 per order and fill · CollateralVault.internalTransfer(address,address,uint256)::trader to trader",
+      "kind": "transaction",
+      "scenario": "trader to trader"
+    },
+    {
+      "function": "internalTransferWithMarginCheck(address,address,uint256)",
+      "gas": "147484",
+      "id": "1 per order and fill · CollateralVault.internalTransferWithMarginCheck(address,address,uint256)::portfolio margin checked",
+      "kind": "transaction",
+      "scenario": "portfolio margin checked"
+    },
+    {
+      "function": "settleTransfer(address,address,uint256)",
+      "gas": "96475",
+      "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::fund shortfall borrows insurance debt",
+      "kind": "transaction",
+      "scenario": "fund shortfall borrows insurance debt"
+    },
+    {
+      "function": "settleTransfer(address,address,uint256)",
+      "gas": "42622",
+      "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::insurance fund pays a winner",
+      "kind": "transaction",
+      "scenario": "insurance fund pays a winner"
+    },
+    {
+      "function": "settleTransfer(address,address,uint256)",
+      "gas": "40247",
+      "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::loser short, bad debt",
+      "kind": "transaction",
+      "scenario": "loser short, bad debt"
+    },
+    {
+      "function": "settleTransfer(address,address,uint256)",
+      "gas": "42664",
+      "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::trader to trader",
+      "kind": "transaction",
+      "scenario": "trader to trader"
+    },
+    {
+      "function": "mint(address,uint256)",
+      "gas": "55705",
+      "id": "1 per order and fill · Points.mint(address,uint256)::existing holder",
+      "kind": "transaction",
+      "scenario": "existing holder"
+    },
+    {
+      "function": "onFill(address,address,uint256,int256,uint256,uint256,uint256)",
+      "gas": "84174",
+      "id": "1 per order and fill · PointsHook.onFill(address,address,uint256,int256,uint256,uint256,uint256)::first fill for both sides",
+      "kind": "transaction",
+      "scenario": "first fill for both sides"
+    },
+    {
+      "function": "onFill(address,address,uint256,int256,uint256,uint256,uint256)",
+      "gas": "49974",
+      "id": "1 per order and fill · PointsHook.onFill(address,address,uint256,int256,uint256,uint256,uint256)::repeat fill",
+      "kind": "transaction",
+      "scenario": "repeat fill"
+    },
+    {
+      "function": "canPlaceOrder(address,uint256)",
+      "gas": "133905",
+      "id": "1 per order and fill · PortfolioMarginEngine.canPlaceOrder(address,uint256)::flat account",
+      "kind": "view",
+      "scenario": "flat account"
+    },
+    {
+      "function": "canPlaceOrder(address,uint256)",
+      "gas": "134203",
+      "id": "1 per order and fill · PortfolioMarginEngine.canPlaceOrder(address,uint256)::perps, futures and options exposure",
+      "kind": "view",
+      "scenario": "perps, futures and options exposure"
+    },
+    {
+      "function": "meetsTradeMargin(address,uint256,uint256)",
+      "gas": "134253",
+      "id": "1 per order and fill · PortfolioMarginEngine.meetsTradeMargin(address,uint256,uint256)::flat account",
+      "kind": "view",
+      "scenario": "flat account"
+    },
+    {
+      "function": "meetsTradeMargin(address,uint256,uint256)",
+      "gas": "134600",
+      "id": "1 per order and fill · PortfolioMarginEngine.meetsTradeMargin(address,uint256,uint256)::perps, futures and options exposure",
+      "kind": "view",
+      "scenario": "perps, futures and options exposure"
+    },
+    {
+      "function": "reduceLimits(address)",
+      "gas": "134021",
+      "id": "1 per order and fill · PortfolioMarginEngine.reduceLimits(address)::flat account",
+      "kind": "view",
+      "scenario": "flat account"
+    },
+    {
+      "function": "reduceLimits(address)",
+      "gas": "134320",
+      "id": "1 per order and fill · PortfolioMarginEngine.reduceLimits(address)::perps, futures and options exposure",
+      "kind": "view",
+      "scenario": "perps, futures and options exposure"
+    },
+    {
+      "function": "deposit(uint256)",
+      "gas": "78359",
+      "id": "2 user · CollateralVault.deposit(uint256)::first deposit",
+      "kind": "transaction",
+      "scenario": "first deposit"
+    },
+    {
+      "function": "deposit(uint256)",
+      "gas": "61259",
+      "id": "2 user · CollateralVault.deposit(uint256)::top-up",
+      "kind": "transaction",
+      "scenario": "top-up"
+    },
+    {
+      "function": "depositFor(address,uint256)",
+      "gas": "61750",
+      "id": "2 user · CollateralVault.depositFor(address,uint256)::for another account",
+      "kind": "transaction",
+      "scenario": "for another account"
+    },
+    {
+      "function": "depositForPermit(address,uint256,uint256,uint8,bytes32,bytes32)",
+      "gas": "109005",
+      "id": "2 user · CollateralVault.depositForPermit(address,uint256,uint256,uint8,bytes32,bytes32)::permit then deposit",
+      "kind": "transaction",
+      "scenario": "permit then deposit"
+    },
+    {
+      "function": "withdraw(uint256)",
+      "gas": "166293",
+      "id": "2 user · CollateralVault.withdraw(uint256)::partial, margin checked",
+      "kind": "transaction",
+      "scenario": "partial, margin checked"
+    },
+    {
+      "function": "burn(address,uint256)",
+      "gas": "29174",
+      "id": "2 user · Points.burn(address,uint256)::redeemer burns a balance",
+      "kind": "transaction",
+      "scenario": "redeemer burns a balance"
+    },
+    {
+      "function": "previewSwap(address)",
+      "gas": "33773",
+      "id": "2 user · PointsRedeemer.previewSwap(address)::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "swap()",
+      "gas": "154389",
+      "id": "2 user · PointsRedeemer.swap()::full balance, half liquid half escrowed",
+      "kind": "transaction",
+      "scenario": "full balance, half liquid half escrowed"
+    },
+    {
+      "function": "onLiquidation(address,uint256)",
+      "gas": "63473",
+      "id": "3 risk and liquidation · PointsHook.onLiquidation(address,uint256)::keeper points",
+      "kind": "transaction",
+      "scenario": "keeper points"
+    },
+    {
+      "function": "computePortfolioIM(address)",
+      "gas": "123071",
+      "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioIM(address)::flat account",
+      "kind": "view",
+      "scenario": "flat account"
+    },
+    {
+      "function": "computePortfolioIM(address)",
+      "gas": "123370",
+      "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioIM(address)::perps, futures and options exposure",
+      "kind": "view",
+      "scenario": "perps, futures and options exposure"
+    },
+    {
+      "function": "computePortfolioMM(address)",
+      "gas": "123119",
+      "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioMM(address)::flat account",
+      "kind": "view",
+      "scenario": "flat account"
+    },
+    {
+      "function": "computePortfolioMM(address)",
+      "gas": "123497",
+      "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioMM(address)::perps, futures and options exposure",
+      "kind": "view",
+      "scenario": "perps, futures and options exposure"
+    },
+    {
+      "function": "computePortfolioMargins(address)",
+      "gas": "135821",
+      "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioMargins(address)::flat account",
+      "kind": "view",
+      "scenario": "flat account"
+    },
+    {
+      "function": "computePortfolioMargins(address)",
+      "gas": "136200",
+      "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioMargins(address)::perps, futures and options exposure",
+      "kind": "view",
+      "scenario": "perps, futures and options exposure"
+    },
+    {
+      "function": "hasRestingOrderDelta(address)",
+      "gas": "49701",
+      "id": "3 risk and liquidation · PortfolioMarginEngine.hasRestingOrderDelta(address)::flat account",
+      "kind": "view",
+      "scenario": "flat account"
+    },
+    {
+      "function": "hasRestingOrderDelta(address)",
+      "gas": "37198",
+      "id": "3 risk and liquidation · PortfolioMarginEngine.hasRestingOrderDelta(address)::perps, futures and options exposure",
+      "kind": "view",
+      "scenario": "perps, futures and options exposure"
+    },
+    {
+      "function": "isHealthy(address)",
+      "gas": "133735",
+      "id": "3 risk and liquidation · PortfolioMarginEngine.isHealthy(address)::flat account",
+      "kind": "view",
+      "scenario": "flat account"
+    },
+    {
+      "function": "isHealthy(address)",
+      "gas": "134114",
+      "id": "3 risk and liquidation · PortfolioMarginEngine.isHealthy(address)::perps, futures and options exposure",
+      "kind": "view",
+      "scenario": "perps, futures and options exposure"
+    },
+    {
+      "function": "isLiquidatable(address)",
+      "gas": "133667",
+      "id": "3 risk and liquidation · PortfolioMarginEngine.isLiquidatable(address)::flat account",
+      "kind": "view",
+      "scenario": "flat account"
+    },
+    {
+      "function": "isLiquidatable(address)",
+      "gas": "134046",
+      "id": "3 risk and liquidation · PortfolioMarginEngine.isLiquidatable(address)::perps, futures and options exposure",
+      "kind": "view",
+      "scenario": "perps, futures and options exposure"
+    },
+    {
+      "function": "orderMarginOf(address)",
+      "gas": "82078",
+      "id": "3 risk and liquidation · PortfolioMarginEngine.orderMarginOf(address)::flat account",
+      "kind": "view",
+      "scenario": "flat account"
+    },
+    {
+      "function": "orderMarginOf(address)",
+      "gas": "132205",
+      "id": "3 risk and liquidation · PortfolioMarginEngine.orderMarginOf(address)::perps, futures and options exposure",
+      "kind": "view",
+      "scenario": "perps, futures and options exposure"
+    },
+    {
+      "function": "BACKSTOP_ADDR()",
+      "gas": "26240",
+      "id": "4 views · CollateralVault.BACKSTOP_ADDR()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "INSURANCE_FUND_ADDR()",
+      "gas": "26216",
+      "id": "4 views · CollateralVault.INSURANCE_FUND_ADDR()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "MAX_BACKSTOP_PARAM_BPS()",
+      "gas": "26216",
+      "id": "4 views · CollateralVault.MAX_BACKSTOP_PARAM_BPS()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "UPGRADE_INTERFACE_VERSION()",
+      "gas": "26453",
+      "id": "4 views · CollateralVault.UPGRADE_INTERFACE_VERSION()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "VERSION()",
+      "gas": "26474",
+      "id": "4 views · CollateralVault.VERSION()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "authorizedCallers(address)",
+      "gas": "29017",
+      "id": "4 views · CollateralVault.authorizedCallers(address)::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "backstopParams()",
+      "gas": "28392",
+      "id": "4 views · CollateralVault.backstopParams()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "backstopUnwindBandBps()",
+      "gas": "28358",
+      "id": "4 views · CollateralVault.backstopUnwindBandBps()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "backstopUnwindFeeBps()",
+      "gas": "28401",
+      "id": "4 views · CollateralVault.backstopUnwindFeeBps()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "collateralToken()",
+      "gas": "28402",
+      "id": "4 views · CollateralVault.collateralToken()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "decimals()",
+      "gas": "28302",
+      "id": "4 views · CollateralVault.decimals()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "effectiveInsuranceDebtCap()",
+      "gas": "30687",
+      "id": "4 views · CollateralVault.effectiveInsuranceDebtCap()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "insuranceCapital()",
+      "gas": "28329",
+      "id": "4 views · CollateralVault.insuranceCapital()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "insuranceDebt()",
+      "gas": "28329",
+      "id": "4 views · CollateralVault.insuranceDebt()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "insuranceDebtCap()",
+      "gas": "28328",
+      "id": "4 views · CollateralVault.insuranceDebtCap()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "insuranceFundBalance()",
+      "gas": "28623",
+      "id": "4 views · CollateralVault.insuranceFundBalance()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "marginEngine()",
+      "gas": "28305",
+      "id": "4 views · CollateralVault.marginEngine()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "name()",
+      "gas": "29347",
+      "id": "4 views · CollateralVault.name()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "owner()",
+      "gas": "28531",
+      "id": "4 views · CollateralVault.owner()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "symbol()",
+      "gas": "29257",
+      "id": "4 views · CollateralVault.symbol()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "timingDebt()",
+      "gas": "33063",
+      "id": "4 views · CollateralVault.timingDebt()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "totalSupply()",
+      "gas": "28327",
+      "id": "4 views · CollateralVault.totalSupply()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "traderBadDebtTotal()",
+      "gas": "28350",
+      "id": "4 views · CollateralVault.traderBadDebtTotal()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "uncoveredLoss()",
+      "gas": "30833",
+      "id": "4 views · CollateralVault.uncoveredLoss()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "BURNER_ROLE()",
+      "gas": "21303",
+      "id": "4 views · Points.BURNER_ROLE()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "DEFAULT_ADMIN_ROLE()",
+      "gas": "21279",
+      "id": "4 views · Points.DEFAULT_ADMIN_ROLE()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "MINTER_ROLE()",
+      "gas": "21346",
+      "id": "4 views · Points.MINTER_ROLE()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "allowance(address,address)",
+      "gas": "22970",
+      "id": "4 views · Points.allowance(address,address)::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "balanceOf(address)",
+      "gas": "24011",
+      "id": "4 views · Points.balanceOf(address)::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "decimals()",
+      "gas": "21329",
+      "id": "4 views · Points.decimals()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "finalized()",
+      "gas": "23428",
+      "id": "4 views · Points.finalized()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "getRoleAdmin(bytes32)",
+      "gas": "24043",
+      "id": "4 views · Points.getRoleAdmin(bytes32)::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "hasRole(bytes32,address)",
+      "gas": "24658",
+      "id": "4 views · Points.hasRole(bytes32,address)::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "name()",
+      "gas": "21488",
+      "id": "4 views · Points.name()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "supportsInterface(bytes4)",
+      "gas": "21649",
+      "id": "4 views · Points.supportsInterface(bytes4)::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "symbol()",
+      "gas": "21542",
+      "id": "4 views · Points.symbol()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "totalSupply()",
+      "gas": "23434",
+      "id": "4 views · Points.totalSupply()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "DEFAULT_ADMIN_ROLE()",
+      "gas": "21301",
+      "id": "4 views · PointsHook.DEFAULT_ADMIN_ROLE()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "HOOK_CALLER_ROLE()",
+      "gas": "21303",
+      "id": "4 views · PointsHook.HOOK_CALLER_ROLE()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "WEIGHT_SCALE()",
+      "gas": "21369",
+      "id": "4 views · PointsHook.WEIGHT_SCALE()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "getRoleAdmin(bytes32)",
+      "gas": "24132",
+      "id": "4 views · PointsHook.getRoleAdmin(bytes32)::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "hasRole(bytes32,address)",
+      "gas": "24613",
+      "id": "4 views · PointsHook.hasRole(bytes32,address)::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "keeperPoints()",
+      "gas": "23404",
+      "id": "4 views · PointsHook.keeperPoints()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "maxMakerMult()",
+      "gas": "23447",
+      "id": "4 views · PointsHook.maxMakerMult()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "maxSpread()",
+      "gas": "23469",
+      "id": "4 views · PointsHook.maxSpread()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "minFee()",
+      "gas": "23381",
+      "id": "4 views · PointsHook.minFee()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "points()",
+      "gas": "21347",
+      "id": "4 views · PointsHook.points()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "supportsInterface(bytes4)",
+      "gas": "21649",
+      "id": "4 views · PointsHook.supportsInterface(bytes4)::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "wMaker()",
+      "gas": "23424",
+      "id": "4 views · PointsHook.wMaker()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "wTaker()",
+      "gas": "23446",
+      "id": "4 views · PointsHook.wTaker()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "enabled()",
+      "gas": "23440",
+      "id": "4 views · PointsRedeemer.enabled()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "escrow()",
+      "gas": "21334",
+      "id": "4 views · PointsRedeemer.escrow()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "gov()",
+      "gas": "21269",
+      "id": "4 views · PointsRedeemer.gov()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "govPool()",
+      "gas": "23447",
+      "id": "4 views · PointsRedeemer.govPool()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "owner()",
+      "gas": "23449",
+      "id": "4 views · PointsRedeemer.owner()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "points()",
+      "gas": "21313",
+      "id": "4 views · PointsRedeemer.points()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "totalPointsSnapshot()",
+      "gas": "23402",
+      "id": "4 views · PointsRedeemer.totalPointsSnapshot()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "UPGRADE_INTERFACE_VERSION()",
+      "gas": "26453",
+      "id": "4 views · PortfolioMarginEngine.UPGRADE_INTERFACE_VERSION()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "VERSION()",
+      "gas": "26474",
+      "id": "4 views · PortfolioMarginEngine.VERSION()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "getLinearMarkets()",
+      "gas": "33599",
+      "id": "4 views · PortfolioMarginEngine.getLinearMarkets()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "imSpotShock()",
+      "gas": "28285",
+      "id": "4 views · PortfolioMarginEngine.imSpotShock()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "imVolShock()",
+      "gas": "28329",
+      "id": "4 views · PortfolioMarginEngine.imVolShock()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "linearOrderMargin(uint256)",
+      "gas": "29218",
+      "id": "4 views · PortfolioMarginEngine.linearOrderMargin(uint256)::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "mmSpotShock()",
+      "gas": "28328",
+      "id": "4 views · PortfolioMarginEngine.mmSpotShock()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "mmVolShock()",
+      "gas": "28284",
+      "id": "4 views · PortfolioMarginEngine.mmVolShock()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "optionsEngine()",
+      "gas": "28393",
+      "id": "4 views · PortfolioMarginEngine.optionsEngine()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "owner()",
+      "gas": "28342",
+      "id": "4 views · PortfolioMarginEngine.owner()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "priceOracle()",
+      "gas": "28327",
+      "id": "4 views · PortfolioMarginEngine.priceOracle()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "vault()",
+      "gas": "26270",
+      "id": "4 views · PortfolioMarginEngine.vault()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
+      "function": "depositInsuranceFund(uint256)",
+      "gas": "69941",
+      "id": "5 admin and lifecycle · CollateralVault.depositInsuranceFund(uint256)::top-up",
+      "kind": "transaction",
+      "scenario": "top-up"
+    },
+    {
+      "function": "halt()",
+      "gas": "58686",
+      "id": "5 admin and lifecycle · CollateralVault.halt()::live vault",
+      "kind": "transaction",
+      "scenario": "live vault"
+    },
+    {
+      "function": "initializeV2()",
+      "gas": "39405",
+      "id": "5 admin and lifecycle · CollateralVault.initializeV2()::fresh proxy",
+      "kind": "transaction",
+      "scenario": "fresh proxy"
+    },
+    {
+      "function": "renounceOwnership()",
+      "gas": "28246",
+      "id": "5 admin and lifecycle · CollateralVault.renounceOwnership()::current owner",
+      "kind": "transaction",
+      "scenario": "current owner"
+    },
+    {
+      "function": "resume()",
+      "gas": "36581",
+      "id": "5 admin and lifecycle · CollateralVault.resume()::after a manual halt",
+      "kind": "transaction",
+      "scenario": "after a manual halt"
+    },
+    {
+      "function": "setAuthorizedCaller(address,bool)",
+      "gas": "52857",
+      "id": "5 admin and lifecycle · CollateralVault.setAuthorizedCaller(address,bool)::authorize a venue",
+      "kind": "transaction",
+      "scenario": "authorize a venue"
+    },
+    {
+      "function": "setBackstopParams(uint16,uint16)",
+      "gas": "52503",
+      "id": "5 admin and lifecycle · CollateralVault.setBackstopParams(uint16,uint16)::band and fee",
+      "kind": "transaction",
+      "scenario": "band and fee"
+    },
+    {
+      "function": "setInsuranceDebtCap(uint256)",
+      "gas": "52114",
+      "id": "5 admin and lifecycle · CollateralVault.setInsuranceDebtCap(uint256)::raise",
+      "kind": "transaction",
+      "scenario": "raise"
+    },
+    {
+      "function": "setMarginEngine(address)",
+      "gas": "43850",
+      "id": "5 admin and lifecycle · CollateralVault.setMarginEngine(address)::revalidate current engine",
+      "kind": "transaction",
+      "scenario": "revalidate current engine"
+    },
+    {
+      "function": "transferOwnership(address)",
+      "gas": "33583",
+      "id": "5 admin and lifecycle · CollateralVault.transferOwnership(address)::to another account",
+      "kind": "transaction",
+      "scenario": "to another account"
+    },
+    {
+      "function": "upgradeToAndCall(address,bytes)",
+      "gas": "37665",
+      "id": "5 admin and lifecycle · CollateralVault.upgradeToAndCall(address,bytes)::new compatible implementation",
+      "kind": "transaction",
+      "scenario": "new compatible implementation"
+    },
+    {
+      "function": "withdrawBackstop(address,uint256)",
+      "gas": "165306",
+      "id": "5 admin and lifecycle · CollateralVault.withdrawBackstop(address,uint256)::sweep gains",
+      "kind": "transaction",
+      "scenario": "sweep gains"
+    },
+    {
+      "function": "withdrawInsuranceFund(address,uint256)",
+      "gas": "175223",
+      "id": "5 admin and lifecycle · CollateralVault.withdrawInsuranceFund(address,uint256)::partial",
+      "kind": "transaction",
+      "scenario": "partial"
+    },
+    {
+      "function": "withdrawTo(address,uint256)",
+      "gas": "163814",
+      "id": "5 admin and lifecycle · CollateralVault.withdrawTo(address,uint256)::venue sweeps its balance",
+      "kind": "transaction",
+      "scenario": "venue sweeps its balance"
+    },
+    {
+      "function": "finalize()",
+      "gas": "46627",
+      "id": "5 admin and lifecycle · Points.finalize()::close minting",
+      "kind": "transaction",
+      "scenario": "close minting"
+    },
+    {
+      "function": "grantRole(bytes32,address)",
+      "gas": "51506",
+      "id": "5 admin and lifecycle · Points.grantRole(bytes32,address)::new member",
+      "kind": "transaction",
+      "scenario": "new member"
+    },
+    {
+      "function": "renounceRole(bytes32,address)",
+      "gas": "25072",
+      "id": "5 admin and lifecycle · Points.renounceRole(bytes32,address)::member leaves",
+      "kind": "transaction",
+      "scenario": "member leaves"
+    },
+    {
+      "function": "revokeRole(bytes32,address)",
+      "gas": "29586",
+      "id": "5 admin and lifecycle · Points.revokeRole(bytes32,address)::existing member",
+      "kind": "transaction",
+      "scenario": "existing member"
+    },
+    {
+      "function": "grantRole(bytes32,address)",
+      "gas": "51506",
+      "id": "5 admin and lifecycle · PointsHook.grantRole(bytes32,address)::new member",
+      "kind": "transaction",
+      "scenario": "new member"
+    },
+    {
+      "function": "renounceRole(bytes32,address)",
+      "gas": "25094",
+      "id": "5 admin and lifecycle · PointsHook.renounceRole(bytes32,address)::member leaves",
+      "kind": "transaction",
+      "scenario": "member leaves"
+    },
+    {
+      "function": "revokeRole(bytes32,address)",
+      "gas": "29586",
+      "id": "5 admin and lifecycle · PointsHook.revokeRole(bytes32,address)::existing member",
+      "kind": "transaction",
+      "scenario": "existing member"
+    },
+    {
+      "function": "setKeeperPoints(uint256)",
+      "gas": "29974",
+      "id": "5 admin and lifecycle · PointsHook.setKeeperPoints(uint256)::change",
+      "kind": "transaction",
+      "scenario": "change"
+    },
+    {
+      "function": "setMinFee(uint256)",
+      "gas": "47073",
+      "id": "5 admin and lifecycle · PointsHook.setMinFee(uint256)::change",
+      "kind": "transaction",
+      "scenario": "change"
+    },
+    {
+      "function": "setPriceImprovement(uint256,uint256)",
+      "gas": "69653",
+      "id": "5 admin and lifecycle · PointsHook.setPriceImprovement(uint256,uint256)::change",
+      "kind": "transaction",
+      "scenario": "change"
+    },
+    {
+      "function": "setWeights(uint256,uint256)",
+      "gas": "32785",
+      "id": "5 admin and lifecycle · PointsHook.setWeights(uint256,uint256)::change",
+      "kind": "transaction",
+      "scenario": "change"
+    },
+    {
+      "function": "enableRedemption(uint256)",
+      "gas": "104931",
+      "id": "5 admin and lifecycle · PointsRedeemer.enableRedemption(uint256)::funded pool",
+      "kind": "transaction",
+      "scenario": "funded pool"
+    },
+    {
+      "function": "recoverGov(address,uint256)",
+      "gas": "40023",
+      "id": "5 admin and lifecycle · PointsRedeemer.recoverGov(address,uint256)::leftover pool",
+      "kind": "transaction",
+      "scenario": "leftover pool"
+    },
+    {
+      "function": "renounceOwnership()",
+      "gas": "23309",
+      "id": "5 admin and lifecycle · PointsRedeemer.renounceOwnership()::current owner",
+      "kind": "transaction",
+      "scenario": "current owner"
+    },
+    {
+      "function": "transferOwnership(address)",
+      "gas": "28649",
+      "id": "5 admin and lifecycle · PointsRedeemer.transferOwnership(address)::to another account",
+      "kind": "transaction",
+      "scenario": "to another account"
+    },
+    {
+      "function": "addLinearMarket(address)",
+      "gas": "85503",
+      "id": "5 admin and lifecycle · PortfolioMarginEngine.addLinearMarket(address)::third venue",
+      "kind": "transaction",
+      "scenario": "third venue"
+    },
+    {
+      "function": "initializeV2()",
+      "gas": "37034",
+      "id": "5 admin and lifecycle · PortfolioMarginEngine.initializeV2()::fresh proxy",
+      "kind": "transaction",
+      "scenario": "fresh proxy"
+    },
+    {
+      "function": "removeLinearMarket(address)",
+      "gas": "36629",
+      "id": "5 admin and lifecycle · PortfolioMarginEngine.removeLinearMarket(address)::registered venue",
+      "kind": "transaction",
+      "scenario": "registered venue"
+    },
+    {
+      "function": "renounceOwnership()",
+      "gas": "28179",
+      "id": "5 admin and lifecycle · PortfolioMarginEngine.renounceOwnership()::current owner",
+      "kind": "transaction",
+      "scenario": "current owner"
+    },
+    {
+      "function": "setOptions(address)",
+      "gas": "48273",
+      "id": "5 admin and lifecycle · PortfolioMarginEngine.setOptions(address)::revalidate current engine",
+      "kind": "transaction",
+      "scenario": "revalidate current engine"
+    },
+    {
+      "function": "setOracle(address)",
+      "gas": "46136",
+      "id": "5 admin and lifecycle · PortfolioMarginEngine.setOracle(address)::replace live feed",
+      "kind": "transaction",
+      "scenario": "replace live feed"
+    },
+    {
+      "function": "setShocks(uint256,uint256,uint256,uint256)",
+      "gas": "51236",
+      "id": "5 admin and lifecycle · PortfolioMarginEngine.setShocks(uint256,uint256,uint256,uint256)::all four",
+      "kind": "transaction",
+      "scenario": "all four"
+    },
+    {
+      "function": "transferOwnership(address)",
+      "gas": "33538",
+      "id": "5 admin and lifecycle · PortfolioMarginEngine.transferOwnership(address)::to another account",
+      "kind": "transaction",
+      "scenario": "to another account"
+    },
+    {
+      "function": "upgradeToAndCall(address,bytes)",
+      "gas": "37684",
+      "id": "5 admin and lifecycle · PortfolioMarginEngine.upgradeToAndCall(address,bytes)::new compatible implementation",
+      "kind": "transaction",
+      "scenario": "new compatible implementation"
+    }
+  ],
+  "version": 1
+}

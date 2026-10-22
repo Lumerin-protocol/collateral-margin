@@ -1,0 +1,43 @@
+name: Gas Benchmark
+
+on:
+  pull_request:
+    paths:
+      - "contracts/**"
+      - ".github/workflows/gas-benchmark.yml"
+  push:
+    branches:
+      - dev
+      - stg
+      - main
+    paths:
+      - "contracts/**"
+      - ".github/workflows/gas-benchmark.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: gas-benchmark-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  benchmark:
+    name: Collateral margin gas snapshot
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code and baseline history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Benchmark and report gas deltas
+        uses: lsheva/evm-gas-benchmark@v1.0.2
+        with:
+          benchmark-command: cd contracts && pnpm install --frozen-lockfile && pnpm test:gas
+          baseline-path: contracts/benchmarks/collateral-margin-gas.json
+          current-path: contracts/benchmarks/collateral-margin-gas.json
+          report-path: contracts/benchmarks/collateral-margin-gas-report.md
+          artifact-name: collateral-margin-gas-benchmark

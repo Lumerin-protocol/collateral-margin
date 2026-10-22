@@ -30,7 +30,31 @@ export default defineConfig({
     tests: "tests",
   },
   solidity: {
-    version: "0.8.28",
+    compilers: [
+      {
+        version: "0.8.28",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200,
+          },
+        },
+      },
+    ],
+    // Vault and margin-engine proxies are already deployed. This file stays
+    // pinned when the implementation compiler moves.
+    overrides: {
+      "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol": {
+        version: "0.8.28",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200,
+          },
+          evmVersion: "cancun",
+        },
+      },
+    },
     npmFilesToBuild: [
       "@openzeppelin/contracts/token/ERC20/IERC20.sol",
       "@openzeppelin/contracts/token/ERC20/ERC20.sol",
@@ -42,12 +66,6 @@ export default defineConfig({
       "@openzeppelin/contracts/utils/Nonces.sol",
       "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol",
     ],
-    settings: {
-      optimizer: {
-        enabled: true,
-        runs: 200,
-      },
-    },
   },
   verify: {
     etherscan: {
