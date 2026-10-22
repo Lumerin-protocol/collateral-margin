@@ -69,7 +69,11 @@ contract PortfolioMarginEngine is
     using EnumerableSet for EnumerableSet.AddressSet;
 
     uint256 private constant MAX_ORACLE_STALENESS = 1 hours;
-    string public constant VERSION = "2.3.0";
+    /// @notice Largest spot price the engine accepts, in WAD: $10,000 per contract, the venues'
+    ///         `MAX_PRICE`. A feed above it reverts like a stale one, so the shocked spot and
+    ///         every stress term stay far inside int256.
+    uint256 public constant MAX_SPOT_PRICE = 10_000 * WAD;
+    string public constant VERSION = "2.4.0";
 
     /// @notice The collateral vault this engine aggregates balances from.
     /// @dev Fixed per implementation, like the products' own vault pins: every registered
@@ -237,10 +241,11 @@ contract PortfolioMarginEngine is
     function setOracle(AggregatorV3Interface _oracle) external onlyOwner {
       _validateNotZeroAddress(address(_oracle));
       _requireContract(address(_oracle));
-      _validateOracleContract(_oracle);
+      uint8 dec = _readDecimals(address(_oracle));
+      _validateOracleContract(_oracle, dec);
 
       priceOracle = _oracle;
-      oracleDecimals = _readDecimals(address(_oracle));
+      oracleDecimals = dec;
       emit OracleUpdated(address(_oracle));
     }
 
@@ -562,7 +567,9 @@ contract PortfolioMarginEngine is
         (, int256 answer,, uint256 updatedAt,) = priceOracle.latestRoundData();
         if (answer <= 0 || updatedAt == 0 || updatedAt > block.timestamp) revert InvalidOracle();
         if (block.timestamp - updatedAt > MAX_ORACLE_STALENESS) revert OracleStale();
-        return M.toWad(uint256(answer), oracleDecimals);
+        uint256 spot = M.toWad(uint256(answer), oracleDecimals);
+        if (spot > MAX_SPOT_PRICE) revert InvalidOracle();
+        return spot;
     }
 
     function _validateNotZeroAddress(address addr) private view {
@@ -605,7 +612,7 @@ contract PortfolioMarginEngine is
       }
     }
 
-    function _validateOracleContract(AggregatorV3Interface _oracle) private view{
+    function _validateOracleContract(AggregatorV3Interface _oracle, uint8 _decimals) private view{
       int256 answer;
       uint256 updatedAt;
       try _oracle.latestRoundData() returns (uint80, int256 _answer, uint256, uint256 _updatedAt, uint80) {
@@ -615,6 +622,7 @@ contract PortfolioMarginEngine is
           revert InvalidDependency();
       }
       if (answer <= 0 || updatedAt == 0) revert InvalidOracle();
+      if (M.toWad(uint256(answer), _decimals) > MAX_SPOT_PRICE) revert InvalidOracle();
     }
 
 }
