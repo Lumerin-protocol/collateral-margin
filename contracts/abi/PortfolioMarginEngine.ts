@@ -271,6 +271,19 @@ export const PortfolioMarginEngineAbi = [
   },
   {
     "inputs": [],
+    "name": "MAX_SPOT_PRICE",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "UPGRADE_INTERFACE_VERSION",
     "outputs": [
       {
