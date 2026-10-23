@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   fillLoss,
+  fillLossBound,
   futuresUnrealizedPnl,
   imRequired,
   imSurplus,
@@ -20,6 +21,7 @@ import type {
   MMParams,
   RestingOrders,
 } from "../src/types.ts";
+import { book, futuresBook, type Level } from "./books.ts";
 
 const USER = "0x1111111111111111111111111111111111111111" as Address;
 
@@ -35,13 +37,8 @@ const QTY_SCALE = 10n ** 6n;
 const EXPIRY_A = 1_756_416_000n;
 const EXPIRY_B = 1_759_008_000n;
 
-/** An empty book on one venue. */
-const NO_ORDERS: RestingOrders = {
-  buyDelta: 0n,
-  sellDelta: 0n,
-  buyValue: 0n,
-  sellValue: 0n,
-};
+/** An empty perps book. */
+const NO_ORDERS: RestingOrders = book();
 
 /**
  * Skeleton with everything zeroed — tests override the bits they care about
@@ -54,7 +51,7 @@ function emptySnapshot(
     user: USER,
     balance: 0n,
     perp: { netQty: 0n, entryPrice: 0n, orders: NO_ORDERS, fundingOwed: 0n },
-    futures: { positions: [], orders: NO_ORDERS },
+    futures: { positions: [], orders: [] },
     ...overrides,
   };
 }
@@ -101,7 +98,7 @@ describe("predict/mm: netDeltaWad", () => {
             settlementPrice: 0n,
           },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     assert.equal(netDeltaWad(snap, PARAMS), 1n * 10n ** 18n);
@@ -118,7 +115,7 @@ describe("predict/mm: netDeltaWad", () => {
             settlementPrice: 0n,
           },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     assert.equal(netDeltaWad(snap, PARAMS), -1n * 10n ** 18n);
@@ -147,7 +144,7 @@ describe("predict/mm: netDeltaWad", () => {
             settlementPrice: 0n,
           },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     // Perp +1e18; futures +1e18 - 1e18 = 0 → net = +1e18.
@@ -260,7 +257,7 @@ describe("predict/mm: settled-but-unswept expiries", () => {
           { expirationAt: EXPIRY_A, netQuantity: 1n, netEntryValue: 50n, settlementPrice: 0n },
           { expirationAt: EXPIRY_B, netQuantity: 5n, netEntryValue: 250n, settlementPrice: 60n },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
   }
@@ -286,7 +283,7 @@ describe("predict/mm: settled-but-unswept expiries", () => {
         positions: [
           { expirationAt: EXPIRY_A, netQuantity: 2n, netEntryValue: 200n, settlementPrice: 60n },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
 
@@ -319,7 +316,7 @@ describe("predict/mm: futuresUnrealizedPnl", () => {
             settlementPrice: 0n,
           },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     // pnl = P * qty - entryValue = 40 - 50 = -10.
@@ -337,7 +334,7 @@ describe("predict/mm: futuresUnrealizedPnl", () => {
             settlementPrice: 0n,
           },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     assert.equal(futuresUnrealizedPnl(snap, 60n), -10n);
@@ -363,7 +360,7 @@ describe("predict/mm: futuresUnrealizedPnl", () => {
             settlementPrice: 0n,
           }, // P=60 → -30
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     assert.equal(futuresUnrealizedPnl(snap, 60n), -20n);
@@ -388,7 +385,7 @@ describe("predict/mm: unrealizedLoss", () => {
             settlementPrice: 0n,
           }, // P=40 → -10
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     // Both legs lose, so netting has nothing to cancel and the netted sum (-20)
@@ -421,7 +418,7 @@ describe("predict/mm: unrealizedLoss", () => {
             settlementPrice: 0n,
           },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     assert.equal(futuresUnrealizedPnl(snap, 60_000_000n), -20_000_000n);
@@ -449,7 +446,7 @@ describe("predict/mm: unrealizedLoss", () => {
             settlementPrice: 0n,
           },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     const P = 90_000_000n;
@@ -485,7 +482,7 @@ describe("predict/mm: unrealizedLoss", () => {
             settlementPrice: 0n,
           },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     const P = 110_000_000n;
@@ -515,12 +512,7 @@ describe("predict/mm: mmRequired / mmSurplus / imRequired / imSurplus", () => {
       perp: {
         netQty: 0n,
         entryPrice: 0n,
-        orders: {
-          buyDelta: 1_000_000n,
-          sellDelta: 0n,
-          buyValue: 101_000_000n,
-          sellValue: 0n,
-        },
+        orders: book([[101_000_000n, 1_000_000n]]),
         fundingOwed: 50n,
       },
     });
@@ -559,12 +551,7 @@ describe("predict/mm: mmRequired / mmSurplus / imRequired / imSurplus", () => {
       perp: {
         netQty: 0n,
         entryPrice: 0n,
-        orders: {
-          buyDelta: 1_000_000n,
-          sellDelta: 0n,
-          buyValue: 101_000_000n,
-          sellValue: 0n,
-        },
+        orders: book([[101_000_000n, 1_000_000n]]),
         fundingOwed: 0n,
       },
     });
@@ -594,12 +581,7 @@ describe("predict/mm: mmRequired / mmSurplus / imRequired / imSurplus", () => {
       perp: {
         netQty: 1n * QTY_SCALE,
         entryPrice: 100_000_000n,
-        orders: {
-          buyDelta: 0n,
-          sellDelta: 1_000_000n,
-          buyValue: 0n,
-          sellValue: 100_000_000n,
-        },
+        orders: book([], [[100_000_000n, 1_000_000n]]),
         fundingOwed: 0n,
       },
     });
@@ -616,12 +598,7 @@ describe("predict/mm: mmRequired / mmSurplus / imRequired / imSurplus", () => {
       perp: {
         netQty: 1n * QTY_SCALE,
         entryPrice: 100_000_000n,
-        orders: {
-          buyDelta: 0n,
-          sellDelta: 3_000_000n,
-          buyValue: 0n,
-          sellValue: 300_000_000n,
-        },
+        orders: book([], [[100_000_000n, 3_000_000n]]),
         fundingOwed: 0n,
       },
     });
@@ -635,17 +612,12 @@ describe("predict/mm: mmRequired / mmSurplus / imRequired / imSurplus", () => {
   it("clamps fill loss per side rather than letting the sides offset", () => {
     // Bid at $101 and ask at $99, both one contract, mark $100. Each side is out of
     // the money by $1 and both are charged; a net-across-sides figure would be zero.
-    const orders = {
-      buyDelta: 1_000_000n,
-      sellDelta: 1_000_000n,
-      buyValue: 101_000_000n,
-      sellValue: 99_000_000n,
-    };
-    assert.equal(venueFillLoss(orders, 100_000_000n, 6), 2_000_000n);
+    const orders = book([[101_000_000n, 1_000_000n]], [[99_000_000n, 1_000_000n]]);
+    assert.equal(venueFillLoss(orders, 100_000_000n, QTY_SCALE), 2_000_000n);
     // Move the mark above both limits: the bid is now a gain (clamped to 0) and the
     // ask's loss grows to $2.
-    assert.equal(venueFillLoss(orders, 101_000_000n, 6), 2_000_000n);
-    assert.equal(venueFillLoss(orders, 102_000_000n, 6), 3_000_000n);
+    assert.equal(venueFillLoss(orders, 101_000_000n, QTY_SCALE), 2_000_000n);
+    assert.equal(venueFillLoss(orders, 102_000_000n, QTY_SCALE), 3_000_000n);
   });
 
   it("sums fill loss across both venues", () => {
@@ -653,26 +625,47 @@ describe("predict/mm: mmRequired / mmSurplus / imRequired / imSurplus", () => {
       perp: {
         netQty: 0n,
         entryPrice: 0n,
-        orders: {
-          buyDelta: 1_000_000n,
-          sellDelta: 0n,
-          buyValue: 101_000_000n,
-          sellValue: 0n,
-        },
+        orders: book([[101_000_000n, 1_000_000n]]),
         fundingOwed: 0n,
       },
       futures: {
         positions: [],
-        orders: {
-          buyDelta: 0n,
-          sellDelta: 1_000_000n,
-          buyValue: 0n,
-          sellValue: 97_000_000n,
-        },
+        orders: [futuresBook(EXPIRY_A, [], [[97_000_000n, 1n]])],
       },
     });
     // Perps bid $1 out of the money, futures ask $3 out of the money.
     assert.equal(fillLoss(snap, PARAMS, 100_000_000n), 4_000_000n);
+  });
+
+  it("bounds futures fill loss per expiry, never pooled across expiries", () => {
+    // Expiry A hides a $60 bid behind a $40 one; expiry B rests one bid at the mark.
+    // Per expiry the bounds are $100 and $0. Pooled, B's bid would sit inside A's
+    // spread and the bound of the pooled moments would exceed $100.
+    const decoy: Level[] = [
+      [60_000_000n, 10n],
+      [40_000_000n, 10n],
+    ];
+    const atMark: Level[] = [[50_000_000n, 10n]];
+    const snap = emptySnapshot({
+      futures: {
+        positions: [],
+        orders: [futuresBook(EXPIRY_A, decoy), futuresBook(EXPIRY_B, atMark)],
+      },
+    });
+    assert.equal(fillLoss(snap, PARAMS, 50_000_000n), 100_000_000n);
+    const pooled = book([...decoy, ...atMark]);
+    assert.ok(venueFillLoss(pooled, 50_000_000n, 1n) > 100_000_000n);
+  });
+
+  it("prices a settled expiry's book at its settlement price, not the live mark", () => {
+    const snap = emptySnapshot({
+      futures: {
+        positions: [],
+        orders: [futuresBook(EXPIRY_A, [[60_000_000n, 1n]], [], 55_000_000n)],
+      },
+    });
+    assert.equal(fillLoss(snap, PARAMS, 50_000_000n), 5_000_000n);
+    assert.equal(fillLoss(snap, PARAMS, 70_000_000n), 5_000_000n);
   });
 
   it("mmSurplus drops as price moves below a long's entry (PnL kicks in)", () => {
@@ -692,5 +685,64 @@ describe("predict/mm: mmRequired / mmSurplus / imRequired / imSurplus", () => {
       below < atEntry,
       `expected surplus(80) < surplus(100), got ${below} vs ${atEntry}`,
     );
+  });
+});
+
+describe("predict/mm: fillLossBound", () => {
+  /** The true instant loss if every order on a side filled at `mark`. */
+  const trueLoss = (levels: readonly Level[], mark: bigint, isBuy: boolean): bigint =>
+    levels.reduce((loss, [price, qty]) => {
+      const adverse = isBuy ? price - mark : mark - price;
+      return adverse > 0n ? loss + adverse * qty : loss;
+    }, 0n);
+
+  const boundOf = (levels: readonly Level[], mark: bigint, isBuy: boolean): bigint => {
+    const side = book(levels);
+    return fillLossBound(side.buyQty, side.buyPQ, side.buyP2Q, mark, isBuy);
+  };
+
+  it("is exact for a single price level on either side", () => {
+    const level: Level[] = [[60_000_000n, 10n]];
+    for (const mark of [40_000_000n, 50_000_000n, 60_000_000n, 70_000_000n]) {
+      assert.equal(boundOf(level, mark, true), trueLoss(level, mark, true), `bid at ${mark}`);
+      assert.equal(boundOf(level, mark, false), trueLoss(level, mark, false), `ask at ${mark}`);
+    }
+  });
+
+  it("charges a marketable bid hidden behind a deep one", () => {
+    // $60 and $40 bids around a $50 mark: limit value equals mark value, so a netted
+    // figure reads zero, while filling the $60 bid alone loses $100.
+    const decoy: Level[] = [
+      [60_000_000n, 10n],
+      [40_000_000n, 10n],
+    ];
+    assert.equal(boundOf(decoy, 50_000_000n, true), 100_000_000n);
+  });
+
+  it("never falls below the true loss of the book", () => {
+    const levels: Level[] = [
+      [12_340_000n, 3n],
+      [47_000_000n, 11n],
+      [50_010_000n, 1n],
+      [88_000_000n, 7n],
+    ];
+    for (let mark = 1_000_000n; mark <= 100_000_000n; mark += 1_370_000n) {
+      for (const isBuy of [true, false]) {
+        const bound = boundOf(levels, mark, isBuy);
+        assert.ok(bound >= trueLoss(levels, mark, isBuy), `${isBuy ? "bid" : "ask"} at ${mark}`);
+      }
+    }
+  });
+
+  it("is zero for an empty side", () => {
+    assert.equal(fillLossBound(0n, 0n, 0n, 50_000_000n, true), 0n);
+    assert.equal(fillLossBound(0n, 0n, 0n, 50_000_000n, false), 0n);
+  });
+
+  it("rounds a perps bound up to the next token unit, as the venue does", () => {
+    // 1 raw quantity unit (1e-6 contract) bid one token unit above the mark: the raw
+    // bound is 1, which the venue's `ceilDiv` by 10^6 reports as 1, not 0.
+    const orders = book([[50_000_001n, 1n]]);
+    assert.equal(venueFillLoss(orders, 50_000_000n, QTY_SCALE), 1n);
   });
 });
