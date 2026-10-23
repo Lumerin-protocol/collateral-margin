@@ -20,6 +20,7 @@ export type {
   Address,
   AlertThresholds,
   FuturesCloseLeg,
+  FuturesRestingOrders,
   MarginRequirement,
   MMParams,
   PriceThresholds,
@@ -28,6 +29,7 @@ export type {
 
 export {
   fillLoss,
+  fillLossBound,
   futuresUnrealizedPnl,
   imRequired,
   imSurplus,

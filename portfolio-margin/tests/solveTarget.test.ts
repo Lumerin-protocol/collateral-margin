@@ -20,16 +20,12 @@ import type {
   MMParams,
   RestingOrders,
 } from "../src/types.ts";
+import { book, futuresBook } from "./books.ts";
 
 const USER = "0x1111111111111111111111111111111111111111" as Address;
 
-/** An empty book on one venue. */
-const NO_ORDERS: RestingOrders = {
-  buyDelta: 0n,
-  sellDelta: 0n,
-  buyValue: 0n,
-  sellValue: 0n,
-};
+/** An empty perps book. */
+const NO_ORDERS: RestingOrders = book();
 
 const PARAMS: MMParams = {
   imSpotShock: 10n ** 17n,
@@ -68,7 +64,7 @@ function futuresSnapshot(
     user: USER,
     balance: 0n,
     perp: { netQty: 0n, entryPrice: 0n, orders: NO_ORDERS, fundingOwed: 0n },
-    futures: { positions: [], orders: NO_ORDERS },
+    futures: { positions: [], orders: [] },
     ...overrides,
   };
 }
@@ -77,7 +73,7 @@ function futuresSnapshot(
 function twelveLong(): AccountSnapshot {
   return futuresSnapshot({
     balance: BALANCE,
-    futures: { positions: [futuresAgg(12n, ENTRY)], orders: NO_ORDERS },
+    futures: { positions: [futuresAgg(12n, ENTRY)], orders: [] },
   });
 }
 
@@ -89,7 +85,7 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
   it("returns an empty set when the account is already healthy", () => {
     const snap = futuresSnapshot({
       balance: 1_000_000_000n,
-      futures: { positions: [futuresAgg(1n, ENTRY)], orders: NO_ORDERS },
+      futures: { positions: [futuresAgg(1n, ENTRY)], orders: [] },
     });
     const closes = solveFuturesClosesToTarget(snap, PARAMS, P_MODERATE, FEE);
     assert.equal(closes.length, 0);
@@ -153,7 +149,7 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
           futuresAgg(6n, ENTRY, EXPIRY_A),
           futuresAgg(6n, ENTRY, EXPIRY_B),
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     const P = P_MODERATE;
@@ -206,7 +202,7 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
             settlementPrice: 0n,
           },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     const P = P_MODERATE;
@@ -234,7 +230,7 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
           futuresAgg(8n, ENTRY, EXPIRY_A),
           futuresAgg(4n, ENTRY, EXPIRY_B),
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     const P = P_MODERATE;
@@ -308,12 +304,7 @@ describe("predict/solve: solvePerpCloseToTarget (smoke)", () => {
       },
       futures: {
         positions: [],
-        orders: {
-          buyDelta: 0n,
-          sellDelta: 6_000_000n,
-          buyValue: 0n,
-          sellValue: 180_000_000n,
-        },
+        orders: [futuresBook(EXPIRY_A, [], [[P_MODERATE, 6n]])],
       },
     };
     assert.ok(
@@ -384,7 +375,7 @@ describe("predict/solve: solvePerpCloseToTarget (smoke)", () => {
             settlementPrice: 0n,
           },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     };
     const P = P_MODERATE;

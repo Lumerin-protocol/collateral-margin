@@ -21,8 +21,8 @@ import type { AccountSnapshot, MarginRequirement, MMParams, RestingOrders } from
  * here is `max(|netDelta + buyDelta|, |netDelta − sellDelta|) × shock × P`, and the
  * add-ons are:
  *
- *   - fillLoss(P) = max(0, buyValue − buyMark(P)) + max(0, sellMark(P) − sellValue),
- *     charged in both legs
+ *   - fillLoss(P): each side's Scarf bound from its quantity and price moments
+ *     (`fillLossBound`), perps once and futures per expiry, charged in both legs
  *   - the unrealized-PnL term, the one place the two requirements differ in
  *     *shape* rather than just in shock:
  *
@@ -35,17 +35,14 @@ import type { AccountSnapshot, MarginRequirement, MMParams, RestingOrders } from
  *     MM clamps their sum once, so a gain at one venue offsets a loss at the other.
  *   - perp.fundingOwed (constant — short-term, refreshed on snapshot)
  *
- * Every term is piecewise-linear in P. The unrealized-PnL kinks differ per
- * requirement: on the IM path, one venue-aggregate breakeven each (the perp's
- * entry price, and the futures venue's netted breakeven across all expiries); on
- * the MM path a single portfolio-wide breakeven, which is generally not any leg's
- * entry price. Two further families come from the order terms: each side's
- * aggregate fill-loss breakeven (`value / delta`, one per side per venue) and each
- * stress leg's own delta zero, where `|netDelta ± orderDelta|` turns around.
- * `solve.ts` enumerates all of them. We deliberately keep the math straight (no
- * over-engineered piecewise representation) — `mmRequired` is cheap, the solver
- * bisects within a kink interval, and the closed-form solver invokes this to
- * verify its candidate roots.
+ * Every term is convex in P. Stress is linear, the unrealized-PnL clamps are
+ * piecewise-linear, and the fill-loss bound is a smooth hyperbola in the mark. The
+ * unrealized-PnL kinks differ per requirement: on the IM path, one venue-aggregate
+ * breakeven each (the perp's entry price, and the futures venue's netted breakeven
+ * across all expiries); on the MM path a single portfolio-wide breakeven, which is
+ * generally not any leg's entry price. `solve.ts` enumerates them. We deliberately
+ * keep the math straight (no over-engineered piecewise representation) —
+ * `mmRequired` is cheap and the solver bisects within each interval.
  *
  * All bigint arithmetic. Token-decimal rounding matches PME's integer division.
  */
@@ -84,18 +81,24 @@ export function netDeltaWad(snap: AccountSnapshot, params: MMParams): bigint {
 }
 
 /**
- * Order delta per side summed across venues, lifted to WAD. Venues report these
- * scaled by `10^tokenDecimals`, the same convention as `netPositionDelta`.
+ * Order delta per side summed across venues, lifted to WAD. Venues report it
+ * scaled by `10^tokenDecimals`, the same convention as `netPositionDelta`: perps
+ * quantity de-scaled from its own decimals, futures whole contracts.
  */
 export function orderDeltaWad(snap: AccountSnapshot, params: MMParams): {
   buy: bigint;
   sell: bigint;
 } {
+  const tokenScale = 10n ** BigInt(params.tokenDecimals);
+  const perpQtyScale = 10n ** BigInt(params.perpQuantityDecimals);
+  let buy = (snap.perp.orders.buyQty * tokenScale) / perpQtyScale;
+  let sell = (snap.perp.orders.sellQty * tokenScale) / perpQtyScale;
+  for (const book of snap.futures.orders) {
+    buy += book.buyQty * tokenScale;
+    sell += book.sellQty * tokenScale;
+  }
   const lift = 10n ** BigInt(18 - params.tokenDecimals);
-  return {
-    buy: (snap.perp.orders.buyDelta + snap.futures.orders.buyDelta) * lift,
-    sell: (snap.perp.orders.sellDelta + snap.futures.orders.sellDelta) * lift,
-  };
+  return { buy: buy * lift, sell: sell * lift };
 }
 
 /**
@@ -143,29 +146,73 @@ export function worstLegStressLoss(
   return buyLeg > sellLeg ? buyLeg : sellLeg;
 }
 
-/**
- * Instant mark-to-market loss if a whole side of a venue's book filled at price P.
- * Clamped per side across the venue's book, matching both venues' `getRiskView`.
- *
- *   buy:  max(0, buyValue  − P × buyDelta  / 10^tokenDecimals)
- *   sell: max(0, P × sellDelta / 10^tokenDecimals − sellValue)
- */
-export function venueFillLoss(orders: RestingOrders, P: bigint, tokenDecimals: number): bigint {
-  const scale = 10n ** BigInt(tokenDecimals);
-  let loss = 0n;
-  const buyMark = (P * orders.buyDelta) / scale;
-  if (orders.buyValue > buyMark) loss += orders.buyValue - buyMark;
-  const sellMark = (P * orders.sellDelta) / scale;
-  if (sellMark > orders.sellValue) loss += sellMark - orders.sellValue;
-  return loss;
+/** `⌈√x⌉`, matching OpenZeppelin's `Math.sqrt(x, Rounding.Ceil)`. */
+function sqrtCeil(x: bigint): bigint {
+  if (x < 2n) return x;
+  let r = 1n << BigInt(Math.ceil(x.toString(2).length / 2));
+  for (;;) {
+    const next = (r + x / r) >> 1n;
+    if (next >= r) break;
+    r = next;
+  }
+  return r * r < x ? r + 1n : r;
 }
 
-/** Both venues' fill loss at P. The engine charges this in both stress legs. */
+/** `⌈a / b⌉` for `a ≥ 0`, matching OpenZeppelin's `Math.ceilDiv`. */
+function ceilDiv(a: bigint, b: bigint): bigint {
+  return a === 0n ? 0n : (a - 1n) / b + 1n;
+}
+
+/**
+ * Port of the venues' `MathLib.fillLossBound`: an upper bound on one side's instant
+ * fill loss, `Σ q·max(0, p − m)` for bids or `Σ q·max(0, m − p)` for asks, from that
+ * side's `Σq`, `Σp·q` and `Σp²·q` at mark `m`. Scarf's bound: the worst case over
+ * every book with the same three sums, exact for a single price level, rounded up
+ * like the contract. Units are unscaled `price · qty`.
+ *
+ *   bound = ½ (√(Σq · Σq(p − m)²) ± (Σp·q − m·Σq))     (+ for bids, − for asks)
+ */
+export function fillLossBound(
+  qty: bigint,
+  pq: bigint,
+  p2q: bigint,
+  mark: bigint,
+  isBuy: boolean,
+): bigint {
+  const mq = mark * qty;
+  const pos = p2q + mark * mq;
+  const neg = 2n * mark * pq;
+  const spread = pos > neg ? pos - neg : 0n;
+  const root = sqrtCeil(qty * spread);
+  const [up, down] = isBuy ? [pq, mq] : [mq, pq];
+  if (up >= down) return (root + (up - down) + 1n) / 2n;
+  const gap = down - up;
+  return root > gap ? (root - gap + 1n) / 2n : 0n;
+}
+
+/**
+ * One book's fill loss at `mark`, both sides, in token decimals: each side's bound
+ * divided by the venue's quantity scale and rounded up, as both venues'
+ * `getRiskView` report it (futures quantities are whole contracts, scale 1).
+ */
+export function venueFillLoss(orders: RestingOrders, mark: bigint, quantityScale: bigint): bigint {
+  const buy = fillLossBound(orders.buyQty, orders.buyPQ, orders.buyP2Q, mark, true);
+  const sell = fillLossBound(orders.sellQty, orders.sellPQ, orders.sellP2Q, mark, false);
+  return ceilDiv(buy, quantityScale) + ceilDiv(sell, quantityScale);
+}
+
+/**
+ * Both venues' fill loss at P. The engine charges this in both stress legs. Futures
+ * books are bounded per expiry, at the expiry's settlement price once it has one and
+ * at P until then, and summed — the venue never pools expiries.
+ */
 export function fillLoss(snap: AccountSnapshot, params: MMParams, P: bigint): bigint {
-  return (
-    venueFillLoss(snap.perp.orders, P, params.tokenDecimals) +
-    venueFillLoss(snap.futures.orders, P, params.tokenDecimals)
-  );
+  let loss = venueFillLoss(snap.perp.orders, P, 10n ** BigInt(params.perpQuantityDecimals));
+  for (const book of snap.futures.orders) {
+    const mark = book.settlementPrice !== 0n ? book.settlementPrice : P;
+    loss += venueFillLoss(book, mark, 1n);
+  }
+  return loss;
 }
 
 /**

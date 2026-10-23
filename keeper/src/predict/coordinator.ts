@@ -213,7 +213,10 @@ export class PredictiveCoordinator {
       return;
     }
     try {
-      const snap = await readAccountSnapshot(this.chain, this.config, user);
+      const snap = await readAccountSnapshot(this.chain, this.config, user, {
+        params: this.params,
+        logger: this.logger,
+      });
       const liq = solveLiquidationThresholds(snap, this.params, current);
       const liqTracked = this.liqIndex.upsert(liq);
 

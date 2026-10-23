@@ -127,10 +127,9 @@ export class FuturesVenue implements Venue {
     });
 
     const out: VenuePosition[] = [];
-    for (let i = 0; i < expirationAts.length; i++) {
-      const expirationAt = expirationAts[i]!;
-      const pos = positions[i]!;
-      if (pos.netQuantity === 0n) continue;
+    for (const [i, expirationAt] of expirationAts.entries()) {
+      const pos = positions[i];
+      if (pos === undefined || pos.netQuantity === 0n) continue;
 
       const absQty = pos.netQuantity < 0n ? -pos.netQuantity : pos.netQuantity;
       const pnl = marketPrice * pos.netQuantity - pos.netEntryValue;
@@ -178,9 +177,9 @@ export class FuturesVenue implements Venue {
   }
 
   async reduceToTarget(user: Address): Promise<ReduceToTargetOutcome> {
-    const [snapshot, params, marketPrice] = await Promise.all([
-      readAccountSnapshot(this.chain, this.config, user),
-      this.getMMParams(),
+    const params = await this.getMMParams();
+    const [snapshot, marketPrice] = await Promise.all([
+      readAccountSnapshot(this.chain, this.config, user, { params, logger: this.logger }),
       this.chain.publicClient.readContract({
         address: this.config.futures.address,
         abi: HashPowerFuturesAbi,

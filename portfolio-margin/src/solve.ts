@@ -5,7 +5,6 @@ import type {
   MarginRequirement,
   MMParams,
   PriceThresholds,
-  RestingOrders,
 } from "./types.ts";
 import {
   futuresUnrealizedPnl,
@@ -43,21 +42,6 @@ function avgEntry(pos: AccountSnapshot["futures"]["positions"][number]): bigint 
   const absNet = abs(pos.netQuantity);
   if (absNet === 0n) return 0n;
   return abs(pos.netEntryValue) / absNet;
-}
-
-/**
- * The two prices at which a venue's per-side fill loss reaches zero: the aggregate
- * breakeven `value / delta`, one per side. Below its breakeven a bid side carries a
- * loss, above it none; the ask side is the mirror. There is exactly one kink per
- * side per venue no matter how many orders rest, because both venues clamp the loss
- * per side across the whole book rather than per order.
- */
-function fillLossBreakevens(orders: RestingOrders, tokenDecimals: number): bigint[] {
-  const scale = 10n ** BigInt(tokenDecimals);
-  const kinks: bigint[] = [];
-  if (orders.buyDelta > 0n) kinks.push((orders.buyValue * scale) / orders.buyDelta);
-  if (orders.sellDelta > 0n) kinks.push((orders.sellValue * scale) / orders.sellDelta);
-  return kinks;
 }
 
 /**
@@ -135,33 +119,37 @@ function unrealizedPnlBreakevens(
 /**
  * Find the price thresholds where `mmSurplus(P)` crosses zero.
  *
- * `mmRequired(P)` is piecewise-linear in P with kinks at the portfolio-wide
- * unrealized-PnL break-even (one, because MM clamps the venues' signed sum once)
- * and at each venue's per-side fill-loss breakeven. Stress is
+ * `mmRequired(P)` is convex in P. Stress is
  * `max(|netDelta + buyDelta|, |netDelta − sellDelta|) × shock × P / WAD` after
- * rescaling — strictly non-decreasing in P, and with no kink of its own, because
- * net delta and order delta are both independent of price: the two legs are lines
- * through the origin, so whichever has the larger coefficient wins at every price.
+ * rescaling — linear in P, because net delta and order delta are both independent
+ * of price: the two legs are lines through the origin, so whichever has the larger
+ * coefficient wins at every price. The MM clamp on the portfolio-wide unrealized
+ * PnL is piecewise-linear with one kink, at its break-even. Each side's fill-loss
+ * bound is a smooth convex curve in the mark, with no kink at all.
  *
- * For a typical net-long portfolio, `mmSurplus(P)` is therefore a tent shape:
+ * So `mmSurplus(P)` is concave, and for a typical net-long portfolio a hump:
  *   - Climbs as P rises (PnL recovers faster than stress grows) until the
  *     portfolio's aggregate PnL breaks even.
- *   - Above that price, only stress contributes — `mmSurplus(P)` declines
- *     linearly to negative infinity as P → ∞.
- * Net-short portfolios mirror this around an inverted apex.
+ *   - Above that price, only stress and fill loss contribute — `mmSurplus(P)`
+ *     declines to negative infinity as P → ∞.
+ * Net-short portfolios mirror this.
  *
- * We don't try to derive a single closed form for the general piecewise
- * landscape — between leg counts, sign mixes, and stress magnitude vs.
- * leverage, the case analysis is fragile. Instead we:
+ * We don't try to derive a closed form — between leg counts, sign mixes, and
+ * stress magnitude vs. leverage, the case analysis is fragile. Instead we:
  *
- *   1. Enumerate the kink prices (the MM aggregate PnL breakeven, both venues'
- *      per-side fill-loss breakevens).
+ *   1. Enumerate the kink prices (the MM aggregate PnL breakeven).
  *   2. Bisect on each side of the current price (down and up) on intervals
- *      bounded by adjacent kinks. `mmSurplus(P)` is monotone within each
- *      interval, so a standard bisection converges in O(log) per interval.
+ *      bounded by adjacent kinks. Concavity leaves at most one crossing per
+ *      interval with a sign change, and none in an interval without one (the
+ *      healthy set is a single interval containing `currentPrice`, which is
+ *      itself a boundary), so a standard bisection converges in O(log) each.
  *   3. Return the closest crossings on either side of `currentPrice`.
  *
- * O(K · log(2^60)) per user where K is the number of kinks (≤ 7 — the PnL
+ * Integer rounding (`fromWad`, the bound's rounded-up square root) makes the
+ * function concave only to within a few token units, which is the same slop the
+ * requirement already carries; it cannot hide a crossing of any size.
+ *
+ * O(K · log(2^60)) per user where K is the number of kinks (≤ 4 — the PnL
  * breakeven no longer scales with the number of futures expiries, since the venue
  * nets them into one). At keeper scale this is a handful of µs of pure CPU work —
  * negligible vs the RPC the snapshot read already cost.
@@ -242,9 +230,10 @@ export function solveAlertThresholds(
 
 /**
  * Generic: find the closest prices on either side of `currentPrice` where
- * the supplied `f` function crosses zero. Uses the same kink-driven
- * piecewise-monotone bisection as `solveLiquidationThresholds`, parameterised
- * so multiple solvers (liq, im-warn, im-crit) can share the engine.
+ * the supplied `f` function crosses zero. Uses the same kink-bounded
+ * bisection as `solveLiquidationThresholds`, parameterised so multiple solvers
+ * (liq, im-warn, im-crit) can share the engine. `f` must be concave or convex
+ * between kinks, as every requirement-based function here is.
  *
  * Sign-convention agnostic: detects crossings regardless of which sign
  * means "safe". Callers are responsible for short-circuiting when
@@ -252,8 +241,8 @@ export function solveAlertThresholds(
  *
  * `requirement` must name the requirement `f` is built on. It is not cosmetic:
  * IM and MM clamp unrealized PnL at different places, so they kink at different
- * prices, and an interval boundary set for the wrong one leaves a non-monotone
- * interval that bisection can walk straight past.
+ * prices, and an interval boundary set for the wrong one leaves an interval
+ * with two crossings that bisection can walk straight past.
  */
 function findClosestCrossings(
   snap: AccountSnapshot,
@@ -264,8 +253,6 @@ function findClosestCrossings(
 ): { down: bigint | undefined; up: bigint | undefined } {
   const kinks: bigint[] = [];
   kinks.push(...unrealizedPnlBreakevens(snap, params, requirement));
-  kinks.push(...fillLossBreakevens(snap.perp.orders, params.tokenDecimals));
-  kinks.push(...fillLossBreakevens(snap.futures.orders, params.tokenDecimals));
   kinks.push(currentPrice);
   kinks.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   const dedup: bigint[] = [];
@@ -705,11 +692,11 @@ function rankUnitClosesBalancedAcrossExpirations(
   let progress = true;
   while (progress) {
     progress = false;
-    for (let i = 0; i < ordered.length; i++) {
+    for (const [i, pos] of ordered.entries()) {
       const left = remaining[i] ?? 0n;
       if (left <= 0n) continue;
       remaining[i] = left - 1n;
-      result.push(ordered[i]!.expirationAt);
+      result.push(pos.expirationAt);
       progress = true;
     }
   }
@@ -718,8 +705,7 @@ function rankUnitClosesBalancedAcrossExpirations(
 
 function coalesceUnitPrefix(unitSequence: readonly bigint[], prefixLen: number): FuturesCloseLeg[] {
   const counts = new Map<bigint, bigint>();
-  for (let i = 0; i < prefixLen && i < unitSequence.length; i++) {
-    const d = unitSequence[i]!;
+  for (const d of unitSequence.slice(0, prefixLen)) {
     counts.set(d, (counts.get(d) ?? 0n) + 1n);
   }
   return [...counts.entries()]

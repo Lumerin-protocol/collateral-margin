@@ -4,6 +4,8 @@ import { network } from "hardhat";
 import { getAddress, zeroAddress } from "viem";
 import {
   DEFAULT_MARKET_PRICE,
+  LOT_NOTIONAL,
+  LOT_QTY,
   deployCollateralVaultProxy,
   deployPortfolioMarginEngineFixture,
 } from "./fixtures.js";
@@ -11,8 +13,8 @@ import {
 const conn = await network.connect();
 const { viem, networkHelpers } = conn;
 
-/** Perps mock: 1-lot quantity (1e6 units). Used wherever tests open a one-lot position. */
-const ONE_LOT_QTY = 1_000_000n;
+/** Perps mock: 1-lot quantity ($50k of notional). Used wherever tests open a one-lot position. */
+const ONE_LOT_QTY = LOT_QTY;
 
 const WAD = 10n ** 18n;
 
@@ -42,7 +44,7 @@ describe("PortfolioMarginEngine", () => {
 
       assert.deepEqual(await perpsMock.read.getUserPosition([user]), {
         netQuantity: -ONE_LOT_QTY,
-        netEntryValue: -DEFAULT_MARKET_PRICE,
+        netEntryValue: -LOT_NOTIONAL,
       });
     });
 
@@ -187,8 +189,8 @@ describe("PortfolioMarginEngine", () => {
         deployPortfolioMarginEngineFixture,
       );
       // 0.4 lots of resting bids on a flat account: the buy leg stresses at
-      // 4e5 delta × 10% × $50k = $2,000.
-      const buyDelta = 400_000n;
+      // 0.4 × 10% × $50k = $2,000.
+      const buyDelta = (4n * ONE_LOT_QTY) / 10n;
 
       await perpsMock.write.setOrderDeltas([user, buyDelta, 0n]);
       const im = await pme.read.computePortfolioIM([user]);
@@ -201,10 +203,10 @@ describe("PortfolioMarginEngine", () => {
         deployPortfolioMarginEngineFixture,
       );
       // Flat account, asks twice the size of the bids: the sell leg is worse.
-      await perpsMock.write.setOrderDeltas([user, 400_000n, 800_000n]);
+      await perpsMock.write.setOrderDeltas([user, (4n * ONE_LOT_QTY) / 10n, (8n * ONE_LOT_QTY) / 10n]);
       const im = await pme.read.computePortfolioIM([user]);
 
-      assert.equal(im, 4_000_000_000n, "|-8e5| stress dominates |+4e5|");
+      assert.equal(im, 4_000_000_000n, "the 0.8-lot sell leg dominates the 0.4-lot buy leg");
     });
 
     it("nets a resting ask against a long position instead of crediting it", async () => {
@@ -233,7 +235,7 @@ describe("PortfolioMarginEngine", () => {
       const buyLoss = 700_000_000n;
       const sellLoss = 300_000_000n;
 
-      await perpsMock.write.setOrderDeltas([user, 400_000n, 0n]);
+      await perpsMock.write.setOrderDeltas([user, (4n * ONE_LOT_QTY) / 10n, 0n]);
       await perpsMock.write.setOrderFillLosses([user, buyLoss, sellLoss]);
 
       const im = await pme.read.computePortfolioIM([user]);
@@ -394,7 +396,8 @@ describe("PortfolioMarginEngine", () => {
       await perpsMock.write.setUserPosition([user, ONE_LOT_QTY, DEFAULT_MARKET_PRICE]);
       const imPerpsOnly = await pme.read.computePortfolioIM([user]);
 
-      await optionsMock.write.setNetGreeks([user, -WAD, 0n, 0n]);
+      // The lot's delta in WAD: the mocks' 6-decimal quantity lifted by 1e12.
+      await optionsMock.write.setNetGreeks([user, -(ONE_LOT_QTY * 10n ** 12n), 0n, 0n]);
       const imHedged = await pme.read.computePortfolioIM([user]);
 
       assert.ok(imHedged < imPerpsOnly, "hedged portfolio needs less margin");
