@@ -973,6 +973,61 @@ export function crossVenueFuturesDominantFixtureBuilder(rpcUrl: string) {
   };
 }
 
+/** Alice rests decoy order books on both venues and holds no position. */
+export interface DecoyBooksFixture extends BaseFixture {
+  aliceDeposit: bigint;
+  /** Per-contract mark the books are placed around. */
+  mark: bigint;
+}
+
+/**
+ * CF-007: every book hides a marketable order behind a deep one, so netting a
+ * side's limit value against its mark value reads it as loss-free. The venues
+ * bound each side's fill loss from its price spread instead, per expiry on
+ * futures, and the keeper's replica has to agree with the engine at any mark.
+ *
+ * At a $50 mark, 10 contracts per order:
+ *   - perps: bids at $60 and $40
+ *   - futures, first expiry: bids at $60 and $40
+ *   - futures, second expiry: one bid at $50 (no loss on its own, but pooled
+ *     with the first expiry it would widen that spread)
+ *   - futures, third expiry: asks at $40 and $60
+ * True fill loss at $50 is $100 per decoy pair. Deposit $2,000 covers the IM.
+ */
+export function decoyBooksFixtureBuilder(rpcUrl: string) {
+  return async (): Promise<DecoyBooksFixture> => {
+    const base = await baseFixture(rpcUrl);
+    const usd = (value: string) => parseUnits(value, base.config.tokenDecimals);
+    const mark = usd("50");
+    await base.setMark(mark);
+
+    const alice = base.accounts.alice;
+    const aliceDeposit = usd("2000");
+    await base.deposit(alice.account.address, aliceDeposit);
+
+    const perpsQty = parseUnits("10", base.config.quantityDecimals);
+    await placePerpsOrder(base, alice, usd("60"), perpsQty);
+    await placePerpsOrder(base, alice, usd("40"), perpsQty);
+
+    const expirationAts = (await base.publicClient.readContract({
+      address: base.addresses.futures,
+      abi: base.abis.futures,
+      functionName: "getExpirationDates",
+    })) as readonly bigint[];
+    const [first, second, third] = expirationAts;
+    if (first === undefined || second === undefined || third === undefined) {
+      throw new Error("decoy books need three listed expiries");
+    }
+    await placeFuturesOrder(base, alice, usd("60"), first, 10);
+    await placeFuturesOrder(base, alice, usd("40"), first, 10);
+    await placeFuturesOrder(base, alice, usd("50"), second, 10);
+    await placeFuturesOrder(base, alice, usd("40"), third, -10);
+    await placeFuturesOrder(base, alice, usd("60"), third, -10);
+
+    return { ...base, aliceDeposit, mark };
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Internal placement / writing helpers
 // ─────────────────────────────────────────────────────────────────────────

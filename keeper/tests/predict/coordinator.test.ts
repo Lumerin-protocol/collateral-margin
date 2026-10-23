@@ -85,6 +85,7 @@ function buildHarness({
 
   const chain = {
     publicClient: {
+      getBlockNumber: async () => 1n,
       readContract: async ({ functionName }: { functionName: string }) => {
         if (functionName === "collateralToken") {
           return "0x000000000000000000000000000000000000aa05";
@@ -133,9 +134,9 @@ function buildHarness({
                 sellOrderFillLoss: 0n,
               };
             case "getOrderAggregate":
-              return { buyQty: 0n, sellQty: 0n, buyValue: 0n, sellValue: 0n };
+              return { buyQty: 0n, sellQty: 0n, buyPQ: 0n, buyP2Q: 0n, sellPQ: 0n, sellP2Q: 0n };
             case "getOrderAggregateAtExpiration":
-              return { buyQty: 0n, sellQty: 0n, buyValue: 0n, sellValue: 0n };
+              return { buyQty: 0n, sellQty: 0n, buyPQ: 0n, buyP2Q: 0n, sellPQ: 0n, sellP2Q: 0n };
             case "getActiveExpirationDates":
               return [];
             case "getExpirationDates":

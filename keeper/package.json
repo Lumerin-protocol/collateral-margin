@@ -22,10 +22,10 @@
     "lint:fix": "biome check --write ."
   },
   "dependencies": {
-    "@hashpower/portfolio-margin": "github:Lumerin-protocol/collateral-margin#c34b4a360d6616d017b157a4a9e27e1a8e60079c&path:/portfolio-margin",
+    "@hashpower/portfolio-margin": "github:Lumerin-protocol/collateral-margin#ca775850c10a7f1496df327daaa0e6a47f595009&path:/portfolio-margin",
     "amaro": "^1.1.9",
-    "collateral-margin-abi": "github:Lumerin-protocol/collateral-margin#c34b4a360d6616d017b157a4a9e27e1a8e60079c&path:/contracts/abi",
-    "derivatives-marketplace-abi": "github:Lumerin-protocol/derivatives-marketplace#8b7ed0f3572d0ea8039a11757b7c1b963be75535&path:/contracts/abi",
+    "collateral-margin-abi": "github:Lumerin-protocol/collateral-margin#ca775850c10a7f1496df327daaa0e6a47f595009&path:/contracts/abi",
+    "derivatives-marketplace-abi": "github:Lumerin-protocol/derivatives-marketplace#207a1f0724fcc4b6c1d9b9d38b8771b4a815886f&path:/contracts/abi",
     "pino": "^10.3.1",
     "viem": "^2.48.8"
   },

@@ -32,6 +32,16 @@ const EMPTY_RISK_VIEW = {
   sellOrderFillLoss: 0n,
 } as const;
 
+/** A venue's `RestingOrderAggregate` with no resting orders. */
+const EMPTY_AGGREGATE = {
+  buyQty: 0n,
+  sellQty: 0n,
+  buyPQ: 0n,
+  buyP2Q: 0n,
+  sellPQ: 0n,
+  sellP2Q: 0n,
+} as const;
+
 /**
  * The bulk read `readAccountSnapshot` issues, in order: balance, perp position,
  * perps risk/aggregate, futures risk, active position expiries, tradable window.
@@ -42,7 +52,7 @@ function snapshotMulticall(balance: bigint, expiries: readonly bigint[]) {
     balance,
     { netQuantity: 0n, netEntryValue: 0n },
     EMPTY_RISK_VIEW,
-    [0n, 0n],
+    EMPTY_AGGREGATE,
     EMPTY_RISK_VIEW,
     expiries,
     expiries,
@@ -80,6 +90,7 @@ function makeChainStub(opts: {
   return {
     account: { address: "0x0000000000000000000000000000000000009999" as Address },
     publicClient: {
+      getBlockNumber: async () => 1n,
       readContract: async (call: ReadCall) => {
         if (call.functionName === "getMarketPrice") return opts.marketPrice;
         if (call.functionName === "collateralToken") return USDC;
@@ -96,7 +107,7 @@ function makeChainStub(opts: {
           return contracts.map((c) => {
             if (c.functionName === "settlementPrice") return 0n;
             if (c.functionName === "getOrderAggregateAtExpiration") {
-              return { buyQty: 0n, sellQty: 0n, buyValue: 0n, sellValue: 0n };
+              return EMPTY_AGGREGATE;
             }
             return { netQuantity: opts.netQuantity, netEntryValue: opts.netEntryValue };
           });
@@ -147,6 +158,7 @@ describe("futures venue: reduceToTarget", () => {
     const chain = {
       account: { address: "0x0000000000000000000000000000000000009999" as Address },
       publicClient: {
+        getBlockNumber: async () => 1n,
         readContract: async (call: ReadCall) => {
           if (call.functionName === "getMarketPrice") return 100_000n;
           if (call.functionName === "collateralToken") return USDC;
@@ -162,7 +174,7 @@ describe("futures venue: reduceToTarget", () => {
             return contracts.map((c) => {
               if (c.functionName === "settlementPrice") return 0n;
               if (c.functionName === "getOrderAggregateAtExpiration") {
-                return { buyQty: 0n, sellQty: 0n, buyValue: 0n, sellValue: 0n };
+                return EMPTY_AGGREGATE;
               }
               const expirationAt = c.args?.[1] as bigint;
               return {
@@ -194,6 +206,7 @@ describe("futures venue: reduceToTarget", () => {
     const chain = {
       account: { address: "0x0000000000000000000000000000000000009999" as Address },
       publicClient: {
+        getBlockNumber: async () => 1n,
         readContract: async (call: ReadCall) => {
           if (call.functionName === "getMarketPrice") return 100_000n;
           if (call.functionName === "collateralToken") return USDC;
@@ -209,7 +222,7 @@ describe("futures venue: reduceToTarget", () => {
             return contracts.map((c) => {
               if (c.functionName === "settlementPrice") return 0n;
               if (c.functionName === "getOrderAggregateAtExpiration") {
-                return { buyQty: 0n, sellQty: 0n, buyValue: 0n, sellValue: 0n };
+                return EMPTY_AGGREGATE;
               }
               return { netQuantity: 4n, netEntryValue: 4n * 40_000_000n };
             });
