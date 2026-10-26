@@ -93,6 +93,8 @@ function buildHarness({ balance, perpEntry }: { balance: bigint; perpEntry: bigi
               return Number(PERP_QTY_DECIMALS);
             case "balanceOf":
               return balance;
+            case "accountDebt":
+              return 0n;
             case "getUserPosition":
               return { netQuantity: 1_000_000n, netEntryValue: perpEntry };
             case "getRiskView":

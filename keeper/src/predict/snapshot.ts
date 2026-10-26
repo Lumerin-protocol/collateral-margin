@@ -90,8 +90,8 @@ type RiskView = {
  * function of price. Both multicalls are pinned to one block, so positions,
  * orders and (when checked) the venues' reported fill loss describe one state:
  *
- *   1. Bulk multicall: balance, perps risk/aggregate/position, futures risk,
- *      futures active position expiries, and the tradable delivery window.
+ *   1. Bulk multicall: balance, account debt, perps risk/aggregate/position,
+ *      futures risk, futures active position expiries, and the tradable delivery window.
  *   2. Per-expiry multicall: hydrate each futures position via `getUserPosition`
  *      + `settlementPrice`, and, when the futures risk view shows resting order
  *      delta, each window expiry's `getOrderAggregateAtExpiration` +
@@ -118,6 +118,7 @@ export async function readAccountSnapshot(
   const blockNumber = await chain.publicClient.getBlockNumber({ cacheTime: 0 });
   const [
     balance,
+    accountDebt,
     perpPosition,
     perpRisk,
     perpOrderAggregate,
@@ -130,6 +131,12 @@ export async function readAccountSnapshot(
         address: config.vault.address,
         abi: CollateralVaultAbi,
         functionName: "balanceOf" as const,
+        args: [user] as const,
+      },
+      {
+        address: config.vault.address,
+        abi: CollateralVaultAbi,
+        functionName: "accountDebt" as const,
         args: [user] as const,
       },
       {
@@ -274,6 +281,7 @@ export async function readAccountSnapshot(
   const snapshot: AccountSnapshot = {
     user,
     balance: balance as bigint,
+    accountDebt: accountDebt as bigint,
     perp: {
       netQty: perpPosition.netQuantity,
       entryPrice:

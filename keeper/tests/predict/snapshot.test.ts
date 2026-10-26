@@ -82,6 +82,7 @@ interface Scripted {
   perpsMark?: bigint;
   futuresMark?: bigint;
   balance?: bigint;
+  accountDebt?: bigint;
 }
 
 interface Recorded {
@@ -115,6 +116,8 @@ function makeChain(scripted: Scripted, recorded?: Recorded): Chain {
           switch (c.functionName) {
             case "balanceOf":
               return scripted.balance ?? 0n;
+            case "accountDebt":
+              return scripted.accountDebt ?? 0n;
             case "getUserPosition": {
               // Perps: getUserPosition(user). Futures: getUserPosition(user, expirationAt).
               if ((c.args?.length ?? 0) >= 2) {
@@ -205,6 +208,7 @@ describe("predict/snapshot: readAccountSnapshot", () => {
     const snap = await readAccountSnapshot(chain, makeConfig(), USER);
     assert.equal(snap.user, USER);
     assert.equal(snap.balance, 0n);
+    assert.equal(snap.accountDebt, 0n);
     assert.equal(snap.perp.netQty, 0n);
     assert.equal(snap.perp.entryPrice, 0n);
     assert.equal(snap.perp.fundingOwed, 0n);

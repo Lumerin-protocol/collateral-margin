@@ -118,6 +118,8 @@ function buildHarness({
               return 6;
             case "balanceOf":
               return balance;
+            case "accountDebt":
+              return 0n;
             case "getUserPosition":
               return {
                 netQuantity: perpNetQty,

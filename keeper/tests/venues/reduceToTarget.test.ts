@@ -43,13 +43,15 @@ const EMPTY_AGGREGATE = {
 } as const;
 
 /**
- * The bulk read `readAccountSnapshot` issues, in order: balance, perp position,
- * perps risk/aggregate, futures risk, active position expiries, tradable window.
+ * The bulk read `readAccountSnapshot` issues, in order: balance, account debt,
+ * perp position, perps risk/aggregate, futures risk, active position expiries,
+ * tradable window.
  * Only the expiry lists vary between these cases.
  */
 function snapshotMulticall(balance: bigint, expiries: readonly bigint[]) {
   return [
     balance,
+    0n,
     { netQuantity: 0n, netEntryValue: 0n },
     EMPTY_RISK_VIEW,
     EMPTY_AGGREGATE,
