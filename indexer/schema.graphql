@@ -33,9 +33,14 @@ type Vault @entity(immutable: false) {
   insuranceDebtCap: BigInt!
   insuranceDebtBorrowedTotal: BigInt!
   insuranceDebtRepaidTotal: BigInt!
+  "Shortfalls owed to the insurance fund, less account debt later cancelled by fund payouts (mirrors the vault)."
   traderBadDebtTotal: BigInt!
   "Share of traderBadDebtTotal whose payer was the protocol backstop (it is left unfunded, so its losses land here)."
   backstopBadDebtTotal: BigInt!
+  "Sum of open account debt (vault 1.4.0+). Part of traderBadDebtTotal."
+  accountDebtTotal: BigInt!
+  "Cumulative account debt cancelled by insurance-fund payouts."
+  accountDebtRecoveredTotal: BigInt!
   "Backstop unwind band (bps around the mark) shared by every venue."
   backstopUnwindBandBps: Int!
   "Backstop unwind caller fee (bps of filled notional) shared by every venue."
@@ -83,6 +88,11 @@ type VaultUser @entity(immutable: false) {
   "Signed net of internal transfers routed via any other caller (received - sent)."
   netFromOther: BigInt!
 
+  "Loss owed to the insurance fund that the account could not pay (mirrors `vault.accountDebt`). Fund payouts to the account cancel it first."
+  accountDebt: BigInt!
+  "Cumulative debt cancelled by insurance-fund payouts to this account."
+  accountDebtRecoveredTotal: BigInt!
+
   # Counters
   depositCount: Int!
   withdrawalCount: Int!
@@ -93,6 +103,7 @@ type VaultUser @entity(immutable: false) {
   internalTransfersIn: [VaultInternalTransfer!]! @derivedFrom(field: "to")
   internalTransfersOut: [VaultInternalTransfer!]! @derivedFrom(field: "from")
   badDebts: [BadDebtEvent!]! @derivedFrom(field: "payer")
+  accountDebtChanges: [AccountDebtEvent!]! @derivedFrom(field: "user")
 
   # Timestamps
   createdAt: BigInt!
@@ -164,6 +175,11 @@ enum BadDebtKind {
   FEE
 }
 
+enum AccountDebtKind {
+  ACCRUED
+  RECOVERED
+}
+
 enum InsuranceDebtKind {
   BORROW
   REPAY
@@ -184,13 +200,26 @@ enum VaultHaltKind {
 type VaultVenue @entity(immutable: false) {
   id: Bytes!
   address: Bytes!
-  "Shortfalls owed to the insurance fund. These increase uncovered loss."
+  "Shortfalls owed to the insurance fund, as written off at this venue. Gross: account debt cancelled later is netted only on `Vault`."
   traderBadDebtTotal: BigInt!
   "Share of traderBadDebtTotal paid by the protocol backstop ledger."
   backstopBadDebtTotal: BigInt!
   "Fee shortfalls. Lost revenue; they do not increase uncovered loss."
   feeBadDebtTotal: BigInt!
   badDebts: [BadDebtEvent!]! @derivedFrom(field: "venue")
+}
+
+# `AccountDebtAccrued` / `AccountDebtRecovered` (vault 1.4.0+). Older history has none.
+type AccountDebtEvent @entity(immutable: true) {
+  id: Bytes! # tx hash + log index
+  user: VaultUser!
+  kind: AccountDebtKind!
+  amount: BigInt!
+  "The account's debt after this change."
+  debtAfter: BigInt!
+  timestamp: BigInt!
+  blockNumber: BigInt!
+  transactionHash: Bytes!
 }
 
 type BadDebtEvent @entity(immutable: true) {

@@ -213,6 +213,20 @@ async function benchmarkVault() {
       "fund shortfall borrows insurance debt",
       fx.vault.write.settleTransfer([insurance, alice, 20_000_000_000n], venue),
     );
+    await tx(
+      pc,
+      hot,
+      "settleTransfer(address,address,uint256)",
+      "loser short to the fund, books account debt",
+      fx.vault.write.settleTransfer([bob, insurance, 20_000_000_000n], venue),
+    );
+    await tx(
+      pc,
+      hot,
+      "settleTransfer(address,address,uint256)",
+      "fund payout cancels account debt",
+      fx.vault.write.settleTransfer([insurance, bob, 20_000_000_000n], venue),
+    );
     await view(pc, hot, "halted()");
   }
   {
@@ -341,6 +355,7 @@ async function benchmarkVault() {
       ["MAX_BACKSTOP_PARAM_BPS()", []],
       ["UPGRADE_INTERFACE_VERSION()", []],
       ["VERSION()", []],
+      ["accountDebt(address)", [user]],
       ["authorizedCallers(address)", [fx.venue.account.address]],
       ["backstopParams()", []],
       ["backstopUnwindBandBps()", []],

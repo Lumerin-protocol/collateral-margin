@@ -1,16 +1,16 @@
 # Insurance fund debt
 
-Trading works with an empty insurance fund. When a winner closes before the matching loser, the vault borrows the winner's profit from the shared pool. That borrow is timing debt. It is repaid when the loser closes, is liquidated, or settles. The exchange is only out of pocket when a loser cannot cover. That remainder is trader bad debt, and it is never repaid.
+Trading works with an empty insurance fund. When a winner closes before the matching loser, the vault borrows the winner's profit from the shared pool. That borrow is timing debt. It is repaid when the loser closes, is liquidated, or settles. The exchange is only out of pocket when a loser cannot cover. That remainder is trader bad debt. It is recovered only from that account's later insurance-fund payouts.
 
-Winners are paid in full. The debt cap is a circuit breaker, not a haircut.
+Winners are paid in full, less any account debt they owe. The debt cap is a circuit breaker, not a haircut.
 
 ## How a shortfall is settled
 
 Venues call `settleTransfer(from, to, amount)` on the vault.
 
-- Trader payer (a loss, funding owed, or a fee): the vault moves `min(balance, amount)` and emits `BadDebt` for the rest. `traderBadDebtTotal` increases only when the receiver is the insurance fund. A fee shortfall is lost revenue, not a reserve loss.
-- Backstop payer (`BACKSTOP_ADDR`, the ledger that inherits liquidated positions): same path as a trader. The ledger is unfunded, so a loss it realizes is almost always `BadDebt` in full. It counts in `traderBadDebtTotal` and is split out as `backstopBadDebtTotal` on the dashboard. See [protocol-liquidation-exposure.md](./protocol-liquidation-exposure.md).
-- Insurance-fund payer (a winner's profit, or funding the fund owes): the vault pays the fund balance first, mints the rest to the winner, and adds it to `insuranceDebt`. There is no borrow limit, so the winner is always paid.
+- Trader payer (a loss, funding owed, or a fee): the vault moves `min(balance, amount)` and emits `BadDebt` for the rest. `traderBadDebtTotal` increases only when the receiver is the insurance fund; the same amount is added to the payer's `accountDebt` and `AccountDebtAccrued` is emitted. A fee shortfall is lost revenue, not a reserve loss, and books no account debt.
+- Backstop payer (`BACKSTOP_ADDR`, the ledger that inherits liquidated positions): same path as a trader. The ledger is unfunded, so a loss it realizes is almost always `BadDebt` in full. It counts in `traderBadDebtTotal` and is split out as `backstopBadDebtTotal` on the dashboard. It also books account debt, which the backstop's later gains cancel. See [protocol-liquidation-exposure.md](./protocol-liquidation-exposure.md).
+- Insurance-fund payer (a winner's profit, or funding the fund owes): the vault first cancels `min(amount, accountDebt[winner])` on the ledger, lowers `traderBadDebtTotal` by the same amount, and emits `AccountDebtRecovered`. No tokens move for that part. For the rest it pays the fund balance first, mints the remainder to the winner, and adds it to `insuranceDebt`. There is no borrow limit, so the winner is always paid. This stops a hedged account from writing off a losing leg and then collecting the offsetting gain in full (CF-665).
 
 Any inflow to the insurance fund repays debt first. The repaid amount is burned. While `insuranceDebt > 0`, the fund balance is 0, so `withdrawInsuranceFund` cannot move money.
 

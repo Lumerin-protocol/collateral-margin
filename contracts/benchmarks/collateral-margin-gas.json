@@ -30,17 +30,31 @@
     },
     {
       "function": "settleTransfer(address,address,uint256)",
-      "gas": "96475",
+      "gas": "35240",
+      "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::fund payout cancels account debt",
+      "kind": "transaction",
+      "scenario": "fund payout cancels account debt"
+    },
+    {
+      "function": "settleTransfer(address,address,uint256)",
+      "gas": "98807",
       "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::fund shortfall borrows insurance debt",
       "kind": "transaction",
       "scenario": "fund shortfall borrows insurance debt"
     },
     {
       "function": "settleTransfer(address,address,uint256)",
-      "gas": "42622",
+      "gas": "44973",
       "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::insurance fund pays a winner",
       "kind": "transaction",
       "scenario": "insurance fund pays a winner"
+    },
+    {
+      "function": "settleTransfer(address,address,uint256)",
+      "gas": "80426",
+      "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::loser short to the fund, books account debt",
+      "kind": "transaction",
+      "scenario": "loser short to the fund, books account debt"
     },
     {
       "function": "settleTransfer(address,address,uint256)",
@@ -142,7 +156,7 @@
     },
     {
       "function": "depositForPermit(address,uint256,uint256,uint8,bytes32,bytes32)",
-      "gas": "109005",
+      "gas": "108961",
       "id": "2 user · CollateralVault.depositForPermit(address,uint256,uint256,uint8,bytes32,bytes32)::permit then deposit",
       "kind": "transaction",
       "scenario": "permit then deposit"
@@ -316,8 +330,15 @@
       "scenario": "representative"
     },
     {
+      "function": "accountDebt(address)",
+      "gas": "29005",
+      "id": "4 views · CollateralVault.accountDebt(address)::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
       "function": "authorizedCallers(address)",
-      "gas": "29017",
+      "gas": "29063",
       "id": "4 views · CollateralVault.authorizedCallers(address)::representative",
       "kind": "view",
       "scenario": "representative"
@@ -331,7 +352,7 @@
     },
     {
       "function": "backstopUnwindBandBps()",
-      "gas": "28358",
+      "gas": "28336",
       "id": "4 views · CollateralVault.backstopUnwindBandBps()::representative",
       "kind": "view",
       "scenario": "representative"
@@ -352,7 +373,7 @@
     },
     {
       "function": "decimals()",
-      "gas": "28302",
+      "gas": "28325",
       "id": "4 views · CollateralVault.decimals()::representative",
       "kind": "view",
       "scenario": "representative"
@@ -366,7 +387,7 @@
     },
     {
       "function": "insuranceCapital()",
-      "gas": "28329",
+      "gas": "28352",
       "id": "4 views · CollateralVault.insuranceCapital()::representative",
       "kind": "view",
       "scenario": "representative"
@@ -387,7 +408,7 @@
     },
     {
       "function": "insuranceFundBalance()",
-      "gas": "28623",
+      "gas": "28579",
       "id": "4 views · CollateralVault.insuranceFundBalance()::representative",
       "kind": "view",
       "scenario": "representative"
@@ -807,7 +828,7 @@
     },
     {
       "function": "setAuthorizedCaller(address,bool)",
-      "gas": "52857",
+      "gas": "52813",
       "id": "5 admin and lifecycle · CollateralVault.setAuthorizedCaller(address,bool)::authorize a venue",
       "kind": "transaction",
       "scenario": "authorize a venue"
@@ -842,7 +863,7 @@
     },
     {
       "function": "upgradeToAndCall(address,bytes)",
-      "gas": "37665",
+      "gas": "37709",
       "id": "5 admin and lifecycle · CollateralVault.upgradeToAndCall(address,bytes)::new compatible implementation",
       "kind": "transaction",
       "scenario": "new compatible implementation"
@@ -856,7 +877,7 @@
     },
     {
       "function": "withdrawInsuranceFund(address,uint256)",
-      "gas": "175866",
+      "gas": "175889",
       "id": "5 admin and lifecycle · CollateralVault.withdrawInsuranceFund(address,uint256)::partial",
       "kind": "transaction",
       "scenario": "partial"
