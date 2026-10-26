@@ -24,21 +24,21 @@ locals {
 }
 
 ################################################################################
-# SNS TOPIC
-#
-# Dedicated topic for perps market maker alerts. Subscribe the devops-alerts
-# Lambda (titanio-{env}-dev-alerts -> Slack) externally to route into Slack.
+# SNS — look up foundation-core HPDX topics (do not create orphan topics)
 ################################################################################
 
-resource "aws_sns_topic" "perps_mm_alerts" {
+locals {
+  perps_mm_alerts_topic_name = var.account_lifecycle == "prd" ? (
+    var.vault_monitoring.devops_alerts_topic_name != "" ? var.vault_monitoring.devops_alerts_topic_name : "titanio-${local.perps_mm_env_suffix}-hpdx-page"
+  ) : (
+    var.vault_monitoring.dev_alerts_topic_name != "" ? var.vault_monitoring.dev_alerts_topic_name : "titanio-${local.perps_mm_env_suffix}-hpdx-alerts"
+  )
+}
+
+data "aws_sns_topic" "perps_mm_alerts" {
   count    = var.perps_mm_service.create ? 1 : 0
   provider = aws.use1
-  name     = "${local.shortname}-perps-mm-alerts-${local.perps_mm_env_suffix}"
-
-  tags = merge(var.default_tags, var.foundation_tags, {
-    Name       = "Col-Mar Perps MM Alerts"
-    Capability = "Monitoring"
-  })
+  name     = local.perps_mm_alerts_topic_name
 }
 
 ################################################################################
@@ -322,8 +322,8 @@ resource "aws_cloudwatch_metric_alarm" "perps_mm_halt" {
   statistic           = "Sum"
   threshold           = 1
   treat_missing_data  = "notBreaching"
-  alarm_actions       = [aws_sns_topic.perps_mm_alerts[0].arn]
-  ok_actions          = [aws_sns_topic.perps_mm_alerts[0].arn]
+  alarm_actions       = []
+  ok_actions          = []
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Perps MM HALT Alarm"
@@ -345,8 +345,8 @@ resource "aws_cloudwatch_metric_alarm" "perps_mm_no_tick" {
   statistic           = "Sum"
   threshold           = 1
   treat_missing_data  = "breaching"
-  alarm_actions       = [aws_sns_topic.perps_mm_alerts[0].arn]
-  ok_actions          = [aws_sns_topic.perps_mm_alerts[0].arn]
+  alarm_actions       = []
+  ok_actions          = []
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Perps MM No Tick Alarm"
@@ -368,8 +368,8 @@ resource "aws_cloudwatch_metric_alarm" "perps_mm_tick_error" {
   statistic           = "Sum"
   threshold           = 3
   treat_missing_data  = "notBreaching"
-  alarm_actions       = [aws_sns_topic.perps_mm_alerts[0].arn]
-  ok_actions          = [aws_sns_topic.perps_mm_alerts[0].arn]
+  alarm_actions       = []
+  ok_actions          = []
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Perps MM Tick Error Alarm"
@@ -391,8 +391,8 @@ resource "aws_cloudwatch_metric_alarm" "perps_mm_cancel_fail" {
   statistic           = "Sum"
   threshold           = 1
   treat_missing_data  = "notBreaching"
-  alarm_actions       = [aws_sns_topic.perps_mm_alerts[0].arn]
-  ok_actions          = [aws_sns_topic.perps_mm_alerts[0].arn]
+  alarm_actions       = []
+  ok_actions          = []
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Perps MM Cancel Failure Alarm"
@@ -414,8 +414,8 @@ resource "aws_cloudwatch_metric_alarm" "perps_mm_error_rate" {
   statistic           = "Sum"
   threshold           = 5
   treat_missing_data  = "notBreaching"
-  alarm_actions       = [aws_sns_topic.perps_mm_alerts[0].arn]
-  ok_actions          = [aws_sns_topic.perps_mm_alerts[0].arn]
+  alarm_actions       = []
+  ok_actions          = []
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Perps MM Error Rate Alarm"
@@ -437,8 +437,8 @@ resource "aws_cloudwatch_metric_alarm" "perps_mm_multicall_fail" {
   statistic           = "Sum"
   threshold           = 1
   treat_missing_data  = "notBreaching"
-  alarm_actions       = [aws_sns_topic.perps_mm_alerts[0].arn]
-  ok_actions          = [aws_sns_topic.perps_mm_alerts[0].arn]
+  alarm_actions       = []
+  ok_actions          = []
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Perps MM Multicall Failure Alarm"
@@ -755,5 +755,30 @@ resource "aws_cloudwatch_dashboard" "perps_mm" {
         }
       }
     ]
+  })
+}
+
+# The only perps market-maker alarm that notifies. Component alarms stay silent.
+resource "aws_cloudwatch_composite_alarm" "perps_mm_unhealthy" {
+  count             = var.perps_mm_service.create ? 1 : 0
+  provider          = aws.use1
+  alarm_name        = "${local.shortname}-perps-mm-${local.perps_mm_env_suffix}"
+  alarm_description = "Perps market maker is unhealthy"
+
+  alarm_rule = join(" OR ", [
+    "ALARM(${aws_cloudwatch_metric_alarm.perps_mm_halt[0].alarm_name})",
+    "ALARM(${aws_cloudwatch_metric_alarm.perps_mm_no_tick[0].alarm_name})",
+    "ALARM(${aws_cloudwatch_metric_alarm.perps_mm_tick_error[0].alarm_name})",
+    "ALARM(${aws_cloudwatch_metric_alarm.perps_mm_cancel_fail[0].alarm_name})",
+    "ALARM(${aws_cloudwatch_metric_alarm.perps_mm_error_rate[0].alarm_name})",
+    "ALARM(${aws_cloudwatch_metric_alarm.perps_mm_multicall_fail[0].alarm_name})",
+  ])
+
+  alarm_actions = [data.aws_sns_topic.perps_mm_alerts[0].arn]
+  ok_actions    = [data.aws_sns_topic.perps_mm_alerts[0].arn]
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Perps MM Unhealthy"
+    Capability = "Monitoring"
   })
 }
