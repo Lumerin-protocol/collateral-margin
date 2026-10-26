@@ -23,7 +23,7 @@
     },
     {
       "function": "internalTransferWithMarginCheck(address,address,uint256)",
-      "gas": "148127",
+      "gas": "151592",
       "id": "1 per order and fill · CollateralVault.internalTransferWithMarginCheck(address,address,uint256)::portfolio margin checked",
       "kind": "transaction",
       "scenario": "portfolio margin checked"
@@ -93,42 +93,42 @@
     },
     {
       "function": "canPlaceOrder(address,uint256)",
-      "gas": "134558",
+      "gas": "138078",
       "id": "1 per order and fill · PortfolioMarginEngine.canPlaceOrder(address,uint256)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "canPlaceOrder(address,uint256)",
-      "gas": "134856",
+      "gas": "138376",
       "id": "1 per order and fill · PortfolioMarginEngine.canPlaceOrder(address,uint256)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
     },
     {
       "function": "meetsTradeMargin(address,uint256,uint256)",
-      "gas": "134906",
+      "gas": "138431",
       "id": "1 per order and fill · PortfolioMarginEngine.meetsTradeMargin(address,uint256,uint256)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "meetsTradeMargin(address,uint256,uint256)",
-      "gas": "135253",
+      "gas": "138779",
       "id": "1 per order and fill · PortfolioMarginEngine.meetsTradeMargin(address,uint256,uint256)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
     },
     {
       "function": "reduceLimits(address)",
-      "gas": "134674",
+      "gas": "138200",
       "id": "1 per order and fill · PortfolioMarginEngine.reduceLimits(address)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "reduceLimits(address)",
-      "gas": "134973",
+      "gas": "138498",
       "id": "1 per order and fill · PortfolioMarginEngine.reduceLimits(address)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
@@ -163,7 +163,7 @@
     },
     {
       "function": "withdraw(uint256)",
-      "gas": "166936",
+      "gas": "170401",
       "id": "2 user · CollateralVault.withdraw(uint256)::partial, margin checked",
       "kind": "transaction",
       "scenario": "partial, margin checked"
@@ -198,42 +198,42 @@
     },
     {
       "function": "computePortfolioIM(address)",
-      "gas": "123724",
+      "gas": "134352",
       "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioIM(address)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "computePortfolioIM(address)",
-      "gas": "124023",
+      "gas": "134651",
       "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioIM(address)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
     },
     {
       "function": "computePortfolioMM(address)",
-      "gas": "123772",
+      "gas": "134400",
       "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioMM(address)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "computePortfolioMM(address)",
-      "gas": "124206",
+      "gas": "134835",
       "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioMM(address)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
     },
     {
       "function": "computePortfolioMargins(address)",
-      "gas": "136591",
+      "gas": "147297",
       "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioMargins(address)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "computePortfolioMargins(address)",
-      "gas": "137026",
+      "gas": "147731",
       "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioMargins(address)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
@@ -254,28 +254,28 @@
     },
     {
       "function": "isHealthy(address)",
-      "gas": "134388",
+      "gas": "137908",
       "id": "3 risk and liquidation · PortfolioMarginEngine.isHealthy(address)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "isHealthy(address)",
-      "gas": "134823",
+      "gas": "138343",
       "id": "3 risk and liquidation · PortfolioMarginEngine.isHealthy(address)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
     },
     {
       "function": "isLiquidatable(address)",
-      "gas": "134320",
+      "gas": "137840",
       "id": "3 risk and liquidation · PortfolioMarginEngine.isLiquidatable(address)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "isLiquidatable(address)",
-      "gas": "134755",
+      "gas": "138275",
       "id": "3 risk and liquidation · PortfolioMarginEngine.isLiquidatable(address)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
@@ -289,7 +289,7 @@
     },
     {
       "function": "orderMarginOf(address)",
-      "gas": "133066",
+      "gas": "133260",
       "id": "3 risk and liquidation · PortfolioMarginEngine.orderMarginOf(address)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
@@ -870,21 +870,21 @@
     },
     {
       "function": "withdrawBackstop(address,uint256)",
-      "gas": "165949",
+      "gas": "169414",
       "id": "5 admin and lifecycle · CollateralVault.withdrawBackstop(address,uint256)::sweep gains",
       "kind": "transaction",
       "scenario": "sweep gains"
     },
     {
       "function": "withdrawInsuranceFund(address,uint256)",
-      "gas": "175889",
+      "gas": "179354",
       "id": "5 admin and lifecycle · CollateralVault.withdrawInsuranceFund(address,uint256)::partial",
       "kind": "transaction",
       "scenario": "partial"
     },
     {
       "function": "withdrawTo(address,uint256)",
-      "gas": "164457",
+      "gas": "167922",
       "id": "5 admin and lifecycle · CollateralVault.withdrawTo(address,uint256)::venue sweeps its balance",
       "kind": "transaction",
       "scenario": "venue sweeps its balance"

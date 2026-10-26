@@ -27,6 +27,7 @@ import {MathLib as M, WAD} from "./libs/MathLib.sol";
 ///                                 stress(netDelta − Σ sellOrderDelta) )
 ///                            + Σ buyOrderFillLoss + Σ sellOrderFillLoss + optionsReserved
 ///                            + pnlTerm + Σ max(0, pendingFunding)
+///                            + accountDebt
 ///         (sums over all registered linear markets)
 ///
 ///         The two requirements differ only in their spot shock and in `pnlTerm`:
@@ -73,7 +74,7 @@ contract PortfolioMarginEngine is
     ///         `MAX_PRICE`. A feed above it reverts like a stale one, so the shocked spot and
     ///         every stress term stay far inside int256.
     uint256 public constant MAX_SPOT_PRICE = 10_000 * WAD;
-    string public constant VERSION = "2.4.0";
+    string public constant VERSION = "2.5.0";
 
     /// @notice The collateral vault this engine aggregates balances from.
     /// @dev Fixed per implementation, like the products' own vault pins: every registered
@@ -265,6 +266,7 @@ contract PortfolioMarginEngine is
     /// @notice Compute IM and MM from one market/options snapshot and one oracle read.
     function computePortfolioMargins(address user) external view returns (uint256 im, uint256 mm) {
         MarginInputs memory inputs = _marginInputs(user, _linearAggregate(user));
+        inputs.accountDebt = vault.accountDebt(user);
         uint256 spotPrice = _getSpotPriceWad();
         im = _marginFromInputs(inputs, true, spotPrice);
         mm = _marginFromInputs(inputs, false, spotPrice);
@@ -400,6 +402,7 @@ contract PortfolioMarginEngine is
         int256 netGamma;
         int256 netVega;
         uint256 optionsReserved;
+        uint256 accountDebt;
     }
 
     function _computeMargin(address user, bool isIM) private view returns (uint256) {
@@ -414,6 +417,7 @@ contract PortfolioMarginEngine is
         returns (MarginInputs memory inputs, uint256 spotPrice, uint256 balance)
     {
         inputs = _marginInputs(user, _linearAggregate(user));
+        inputs.accountDebt = vault.accountDebt(user);
         spotPrice = _getSpotPriceWad();
         balance = vault.balanceOf(user);
     }
@@ -441,7 +445,9 @@ contract PortfolioMarginEngine is
         view
         returns (uint256)
     {
-        return _marginFromInputs(_marginInputs(user, agg), isIM, _getSpotPriceWad());
+        MarginInputs memory inputs = _marginInputs(user, agg);
+        inputs.accountDebt = vault.accountDebt(user);
+        return _marginFromInputs(inputs, isIM, _getSpotPriceWad());
     }
 
     function _marginFromInputs(MarginInputs memory inputs, bool isIM, uint256 spotPrice)
@@ -470,7 +476,8 @@ contract PortfolioMarginEngine is
             ? agg.unrealizedLossPerMarket
             : (agg.netUnrealizedPnl < 0 ? uint256(-agg.netUnrealizedPnl) : 0);
 
-        return stressTokens + agg.fillLoss + inputs.optionsReserved + pnlTokens + agg.fundingOwed;
+        return stressTokens + agg.fillLoss + inputs.optionsReserved + pnlTokens + agg.fundingOwed
+            + inputs.accountDebt;
     }
 
     /// @dev One batched getRiskView call per registered linear market: sums the WAD-lifted
@@ -581,6 +588,11 @@ contract PortfolioMarginEngine is
       // so a bad vault reports its own problem rather than a mismatch.
       ICollateralVault newVault = ICollateralVault(_vault);
       try newVault.balanceOf(address(this)) returns (uint256) { }
+      catch {
+          revert InvalidDependency();
+      }
+
+      try newVault.accountDebt(address(this)) returns (uint256) { }
       catch {
           revert InvalidDependency();
       }

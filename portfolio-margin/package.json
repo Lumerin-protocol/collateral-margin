@@ -1,6 +1,6 @@
 {
   "name": "@hashpower/portfolio-margin",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Off-chain replica of PortfolioMarginEngine margin math and liquidation-price solvers, shared by the keeper and the trading UI",
   "license": "MIT",
   "type": "module",

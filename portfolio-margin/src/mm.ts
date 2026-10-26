@@ -34,6 +34,7 @@ import type { AccountSnapshot, MarginRequirement, MMParams, RestingOrders } from
  *     engine. IM clamps the two venues separately and so ignores gains entirely;
  *     MM clamps their sum once, so a gain at one venue offsets a loss at the other.
  *   - perp.fundingOwed (constant — short-term, refreshed on snapshot)
+ *   - accountDebt (constant — unpaid loss owed to the insurance fund)
  *
  * Every term is convex in P. Stress is linear, the unrealized-PnL clamps are
  * piecewise-linear, and the fill-loss bound is a smooth hyperbola in the mark. The
@@ -300,7 +301,8 @@ function requiredAt(
     worstLegStressLoss(snap, params, shock, P) +
     fillLoss(snap, params, P) +
     unrealizedLoss(snap, params, P, requirement) +
-    snap.perp.fundingOwed
+    snap.perp.fundingOwed +
+    snap.accountDebt
   );
 }
 

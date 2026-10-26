@@ -63,6 +63,7 @@ function futuresSnapshot(
   return {
     user: USER,
     balance: 0n,
+    accountDebt: 0n,
     perp: { netQty: 0n, entryPrice: 0n, orders: NO_ORDERS, fundingOwed: 0n },
     futures: { positions: [], orders: [] },
     ...overrides,
@@ -296,6 +297,7 @@ describe("predict/solve: solvePerpCloseToTarget (smoke)", () => {
     const snap: AccountSnapshot = {
       user: USER,
       balance: 107_000_000n,
+      accountDebt: 0n,
       perp: {
         netQty: 10_000_000n,
         entryPrice: ENTRY,
@@ -354,6 +356,7 @@ describe("predict/solve: solvePerpCloseToTarget (smoke)", () => {
     const snap: AccountSnapshot = {
       user: USER,
       balance: 63_000_000n,
+      accountDebt: 0n,
       perp: {
         netQty: 10_000_000n,
         entryPrice: 45_000_000n,

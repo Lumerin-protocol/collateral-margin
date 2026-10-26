@@ -40,6 +40,7 @@ function emptySnapshot(
   return {
     user: USER,
     balance: 0n,
+    accountDebt: 0n,
     perp: { netQty: 0n, entryPrice: 0n, orders: NO_ORDERS, fundingOwed: 0n },
     futures: { positions: [], orders: [] },
     ...overrides,

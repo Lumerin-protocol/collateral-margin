@@ -65,6 +65,8 @@ export interface AccountSnapshot {
   user: Address;
   /** Vault balance (token decimals). */
   balance: bigint;
+  /** Unpaid loss owed to the insurance fund (token decimals). */
+  accountDebt: bigint;
 
   /** Perps single netted position (zero-qty if user has no perp exposure). */
   perp: {

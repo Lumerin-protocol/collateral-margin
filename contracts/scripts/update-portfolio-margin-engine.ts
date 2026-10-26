@@ -6,6 +6,8 @@ import { verifyContract } from "../lib/verify.ts";
 import { addrUrl, txUrl } from "../lib/explorer.ts";
 import { logInfo, logPrompt, logStep, logSuccess, logTitle } from "../lib/log.ts";
 
+const EXPECTED_VERSION = "2.5.0";
+
 async function main() {
   logTitle("PortfolioMarginEngine Upgrade");
 
@@ -22,13 +24,17 @@ async function main() {
 
   const pme = await viem.getContractAt("PortfolioMarginEngine", proxyAddress);
   const owner = await pme.read.owner();
+  const version = await pme.read.VERSION();
+  if (version === EXPECTED_VERSION) {
+    throw new Error(`PortfolioMarginEngine is already ${EXPECTED_VERSION}. Aborting.`);
+  }
   const deployerIsOwner = getAddress(owner) === getAddress(deployer.account.address);
   // From 2.2.0 the vault is an immutable of the implementation. Building against anything
   // but the proxy's current vault would point every margin read at another ledger.
   const vaultAddress = getAddress(await pme.read.vault());
   logInfo("proxy", {
     Address: addrUrl(pc, proxyAddress),
-    Version: await pme.read.VERSION(),
+    Version: version,
     Vault: addrUrl(pc, vaultAddress),
     Owner: owner,
     "Deployer can upgrade": deployerIsOwner ? "yes" : "no (run upgrade via current owner)",
@@ -45,6 +51,12 @@ async function main() {
   logStep("Deployed", addrUrl(pc, newImpl.address));
   await verifyContract(newImpl.address, [vaultAddress]);
   logStep("Verified", addrUrl(pc, newImpl.address));
+  const implVersion = await newImpl.read.VERSION();
+  if (implVersion !== EXPECTED_VERSION) {
+    throw new Error(
+      `New implementation VERSION is ${String(implVersion)}, expected ${EXPECTED_VERSION}. The proxy was not upgraded.`,
+    );
+  }
   if (getAddress(await newImpl.read.vault()) !== vaultAddress) {
     throw new Error(`New implementation pins ${await newImpl.read.vault()}, proxy uses ${vaultAddress}`);
   }
@@ -61,7 +73,13 @@ async function main() {
     const receipt = await writeAndWait(deployer, sim);
     logStep("Upgraded", txUrl(pc, receipt.transactionHash));
 
-    logInfo("post-upgrade", { Version: await pme.read.VERSION(), Vault: await pme.read.vault() });
+    const postVersion = await pme.read.VERSION();
+    if (postVersion !== EXPECTED_VERSION) {
+      throw new Error(
+        `Upgrade mined in ${receipt.transactionHash}, but VERSION is ${String(postVersion)}, expected ${EXPECTED_VERSION}.`,
+      );
+    }
+    logInfo("post-upgrade", { Version: postVersion, Vault: await pme.read.vault() });
     if (getAddress(await pme.read.vault()) !== vaultAddress) {
       throw new Error(`Post-upgrade vault ${await pme.read.vault()}, expected ${vaultAddress}`);
     }
