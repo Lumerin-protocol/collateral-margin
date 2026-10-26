@@ -14,17 +14,28 @@
 # from the runtime.
 ################################################################################
 
+# foundation-core: titanio-{env}-hpdx-alerts (Slack) / titanio-{env}-hpdx-page (SMS)
+data "aws_sns_topic" "hpdx_alerts" {
+  count = var.vault_monitoring.create && var.vault_monitoring.dev_alerts_topic_name != "" ? 1 : 0
+  name  = var.vault_monitoring.dev_alerts_topic_name
+}
+
+data "aws_sns_topic" "hpdx_page" {
+  count = var.vault_monitoring.create && var.vault_monitoring.devops_alerts_topic_name != "" ? 1 : 0
+  name  = var.vault_monitoring.devops_alerts_topic_name
+}
+
 locals {
-  vault_mon_env            = substr(var.account_shortname, 8, 3)
-  vault_mon_ns             = "ColMarVault"
-  vault_mon_name           = "${local.shortname}-vault-mon-${local.vault_mon_env}"
-  vault_slack_topic_arn    = "arn:aws:sns:${var.default_region}:${var.account_number}:${var.vault_monitoring.dev_alerts_topic_name}"
-  vault_page_topic_arn     = "arn:aws:sns:${var.default_region}:${var.account_number}:${var.vault_monitoring.devops_alerts_topic_name}"
+  vault_mon_env = substr(var.account_shortname, 8, 3)
+  vault_mon_ns  = "ColMarVault"
+  vault_mon_name = "${local.shortname}-vault-mon-${local.vault_mon_env}"
+  vault_slack_topic_arn = length(data.aws_sns_topic.hpdx_alerts) > 0 ? data.aws_sns_topic.hpdx_alerts[0].arn : ""
+  vault_page_topic_arn  = length(data.aws_sns_topic.hpdx_page) > 0 ? data.aws_sns_topic.hpdx_page[0].arn : ""
   vault_critical_topic_arn = var.account_lifecycle == "prd" ? local.vault_page_topic_arn : local.vault_slack_topic_arn
   # Empty until notifications_enabled. Warning is Slack. Critical is Slack in
   # dev and the phone topic when account_lifecycle is prd.
-  vault_warning_actions  = var.vault_monitoring.notifications_enabled ? [local.vault_slack_topic_arn] : []
-  vault_critical_actions = var.vault_monitoring.notifications_enabled ? [local.vault_critical_topic_arn] : []
+  vault_warning_actions  = var.vault_monitoring.notifications_enabled && local.vault_slack_topic_arn != "" ? [local.vault_slack_topic_arn] : []
+  vault_critical_actions = var.vault_monitoring.notifications_enabled && local.vault_critical_topic_arn != "" ? [local.vault_critical_topic_arn] : []
   vault_rpc_host         = var.account_lifecycle == "prd" ? "https://base-mainnet.g.alchemy.com/v2" : "https://base-sepolia.g.alchemy.com/v2"
   # The portfolio market maker is the futures_mm service.
   vault_mm_health     = var.vault_monitoring.create && var.futures_mm_service.create

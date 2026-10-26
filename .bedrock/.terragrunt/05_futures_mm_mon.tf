@@ -12,18 +12,21 @@ locals {
 }
 
 ################################################################################
-# SNS TOPIC
+# SNS — look up foundation-core HPDX topics (do not create orphan topics)
 ################################################################################
 
-resource "aws_sns_topic" "futures_mm_alerts" {
+locals {
+  futures_mm_alerts_topic_name = var.account_lifecycle == "prd" ? (
+    var.vault_monitoring.devops_alerts_topic_name != "" ? var.vault_monitoring.devops_alerts_topic_name : "titanio-${local.futures_mm_env_suffix}-hpdx-page"
+  ) : (
+    var.vault_monitoring.dev_alerts_topic_name != "" ? var.vault_monitoring.dev_alerts_topic_name : "titanio-${local.futures_mm_env_suffix}-hpdx-alerts"
+  )
+}
+
+data "aws_sns_topic" "futures_mm_alerts" {
   count    = var.futures_mm_service.create ? 1 : 0
   provider = aws.use1
-  name     = "${local.shortname}-futures-mm-alerts-${local.futures_mm_env_suffix}"
-
-  tags = merge(var.default_tags, var.foundation_tags, {
-    Name       = "Col-Mar Futures MM Alerts"
-    Capability = "Monitoring"
-  })
+  name     = local.futures_mm_alerts_topic_name
 }
 
 ################################################################################
@@ -701,8 +704,8 @@ resource "aws_cloudwatch_composite_alarm" "futures_mm_unhealthy" {
     "ALARM(${aws_cloudwatch_metric_alarm.futures_mm_multicall_fail[0].alarm_name})",
   ])
 
-  alarm_actions = [aws_sns_topic.futures_mm_alerts[0].arn]
-  ok_actions    = [aws_sns_topic.futures_mm_alerts[0].arn]
+  alarm_actions = [data.aws_sns_topic.futures_mm_alerts[0].arn]
+  ok_actions    = [data.aws_sns_topic.futures_mm_alerts[0].arn]
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Futures MM Unhealthy"

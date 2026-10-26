@@ -1,0 +1,27 @@
+---
+description: HPDX CloudWatch monitoring and SNS alerting. Use when adding or changing monitors, alarms, dashboards, metric filters, or alert notifications.
+globs: .bedrock/**
+alwaysApply: false
+---
+
+# Monitoring & Alerting
+
+Follow `.bedrock/.terragrunt/MONITORING.md` as the source of truth.
+
+## Hard rules
+
+1. **Do not create SNS topics**. Look up foundation-core topics by name:
+   - Slack: `titanio-{env}-hpdx-alerts`
+   - Page (LMN): `titanio-{env}-hpdx-page`
+   - DEV: both severities use `hpdx-alerts`
+2. **No ARN hardcoding**, no remote state for SNS, no orphan `col-mar-*-alerts-*` topics.
+3. **Market makers**: component alarms silent; one composite notifies.
+4. **Vault**: individual alarms OK with warn → Slack / crit → page (`vault_warning_actions` / `vault_critical_actions`).
+5. Honor `notifications_enabled`. Gate on service `create` flags.
+
+## Where to edit
+
+- Vault: `07_col_mar_vault_mon.tf`
+- Futures MM: `05_futures_mm_mon.tf`
+- Perps MM: `05_perps_mm_mon.tf`
+- Topic names in tfvars: `vault_monitoring.dev_alerts_topic_name` / `devops_alerts_topic_name`
