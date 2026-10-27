@@ -94,7 +94,11 @@ export class Scheduler {
         return;
       }
 
-      const healths = await readAccountHealthBatch(this.chain, this.config, users);
+      const healths = await readAccountHealthBatch(
+        this.chain,
+        this.config,
+        users,
+      );
       let underwater = 0;
       let warned = 0;
       let critical = 0;

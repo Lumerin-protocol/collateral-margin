@@ -52,7 +52,9 @@ export interface StartHardhatNodeOptions {
 export async function startHardhatNode(
   options: StartHardhatNodeOptions = {},
 ): Promise<HardhatNode> {
-  const cwd = options.hardhatProjectDir ?? resolve(import.meta.dirname, "../../../contracts");
+  const cwd =
+    options.hardhatProjectDir ??
+    resolve(import.meta.dirname, "../../../contracts");
   const config = resolve(import.meta.dirname, "hardhat.config.ts");
   const rpcUrl = options.rpcUrl ?? DEFAULT_RPC_URL;
   const readyTimeoutMs = options.readyTimeoutMs ?? READY_TIMEOUT_MS;
@@ -95,7 +97,9 @@ export async function startHardhatNode(
     exitCode = code;
   });
 
-  const pc = createPublicClient({ transport: http(rpcUrl, { timeout: 2_000, retryCount: 0 }) });
+  const pc = createPublicClient({
+    transport: http(rpcUrl, { timeout: 2_000, retryCount: 0 }),
+  });
 
   const deadline = Date.now() + readyTimeoutMs;
   while (Date.now() < deadline) {
@@ -127,14 +131,19 @@ export async function startHardhatNode(
 
 function stopProcess(proc: ChildProcess): Promise<void> {
   return new Promise<void>((resolve) => {
-    if (proc.exitCode !== null || proc.signalCode !== null) {
+    const pid = proc.pid;
+    if (
+      pid === undefined ||
+      proc.exitCode !== null ||
+      proc.signalCode !== null
+    ) {
       resolve();
       return;
     }
     proc.once("close", () => resolve());
     try {
       // Negative PID == process group. `detached: true` made us the leader.
-      process.kill(-proc.pid!, "SIGTERM");
+      process.kill(-pid, "SIGTERM");
     } catch (err) {
       // Already dead, race with `once("close")`.
       if ((err as NodeJS.ErrnoException).code !== "ESRCH") throw err;
@@ -144,7 +153,7 @@ function stopProcess(proc: ChildProcess): Promise<void> {
     setTimeout(() => {
       if (proc.exitCode === null && proc.signalCode === null) {
         try {
-          process.kill(-proc.pid!, "SIGKILL");
+          process.kill(-pid, "SIGKILL");
         } catch {
           /* ignore */
         }

@@ -9,7 +9,10 @@ import type { BackstopUnwinder } from "../backstop/unwinder.ts";
 import type { FuturesExpiryIndex } from "../discovery/futuresExpiryIndex.ts";
 import type { ParticipantSource } from "../discovery/types.ts";
 import type { PriceFeed } from "../oracle/priceFeed.ts";
-import type { PredictedThresholds, PredictiveCoordinator } from "../predict/coordinator.ts";
+import type {
+  PredictedThresholds,
+  PredictiveCoordinator,
+} from "../predict/coordinator.ts";
 
 /**
  * Health and metrics surface for the keeper.
@@ -176,14 +179,14 @@ export class Healthcheck {
         "keeper startup timed out before readiness",
       );
     }, STARTUP_TIMEOUT_MS);
-    if (typeof this.startupTimer.unref === "function") this.startupTimer.unref();
+    if (typeof this.startupTimer.unref === "function")
+      this.startupTimer.unref();
 
     this.server = createServer((req, res) => {
       if (req.url === "/health") {
         const booting = this.lifecycle === "booting";
         const ok =
-          booting ||
-          (this.lifecycle === "ready" && this.executor.isRunning());
+          booting || (this.lifecycle === "ready" && this.executor.isRunning());
         const status = booting ? "booting" : ok ? "ok" : "degraded";
         res.writeHead(ok ? 200 : 503, { "content-type": "application/json" });
         res.end(
@@ -196,8 +199,7 @@ export class Healthcheck {
         return;
       }
       if (req.url === "/ready") {
-        const ready =
-          this.lifecycle === "ready" && this.executor.isRunning();
+        const ready = this.lifecycle === "ready" && this.executor.isRunning();
         res.writeHead(ready ? 200 : 503, {
           "content-type": "application/json",
         });
@@ -213,7 +215,10 @@ export class Healthcheck {
     });
 
     this.server.listen(this.config.runtime.healthPort, () => {
-      this.logger.info({ port: this.config.runtime.healthPort }, "healthcheck listening");
+      this.logger.info(
+        { port: this.config.runtime.healthPort },
+        "healthcheck listening",
+      );
     });
   }
 
@@ -263,7 +268,9 @@ export class Healthcheck {
     for (const [k, v] of Object.entries(snap)) {
       if (k === "currentPrice") {
         if (v === null) continue;
-        lines.push(`# HELP keeper_oracle_price_token Latest oracle price in token decimals.`);
+        lines.push(
+          `# HELP keeper_oracle_price_token Latest oracle price in token decimals.`,
+        );
         lines.push(`# TYPE keeper_oracle_price_token gauge`);
         lines.push(`keeper_oracle_price_token ${v}`);
         continue;
@@ -308,5 +315,8 @@ function snakeCase(camel: string): string {
 
 /** Escape backslashes, double quotes and newlines per the Prometheus text spec. */
 function escapeLabel(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n");
 }

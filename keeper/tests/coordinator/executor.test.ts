@@ -15,7 +15,14 @@ const BACKOFF_MAX_MS = 1_000;
 const RUN_MS = 300;
 
 function health(user: Address, mmSurplus: bigint): AccountHealth {
-  return { user, balance: 1000n, imRequired: 100n, mmRequired: 1000n - mmSurplus, mmSurplus, imUtilization: 2 };
+  return {
+    user,
+    balance: 1000n,
+    imRequired: 100n,
+    mmRequired: 1000n - mmSurplus,
+    mmSurplus,
+    imUtilization: 2,
+  };
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -43,7 +50,13 @@ describe("CF-011 — a permanently failing account cannot starve the executor", 
         attempts.set(user, (attempts.get(user) ?? 0) + 1);
         await sleep(1);
         if (user === ATTACKER) throw new Error("Panic: arithmetic overflow");
-        return { kind: "liquidated", mmSurplus: 0n, feeEarned: 0n, positionsClosed: 1, ordersClosed: 0 };
+        return {
+          kind: "liquidated",
+          mmSurplus: 0n,
+          feeEarned: 0n,
+          positionsClosed: 1,
+          ordersClosed: 0,
+        };
       },
     } as unknown as Planner;
 
@@ -51,16 +64,29 @@ describe("CF-011 — a permanently failing account cannot starve the executor", 
     queue.upsert(health(ATTACKER, -1_000n));
     queue.upsert(health(VICTIM, -10n));
 
-    const executor = new CoordinatorExecutor(config, queue, planner, pino({ level: "silent" }));
+    const executor = new CoordinatorExecutor(
+      config,
+      queue,
+      planner,
+      pino({ level: "silent" }),
+    );
     await executor.start();
     await sleep(RUN_MS);
     await executor.stop();
 
-    assert.equal(attempts.get(VICTIM), 1, "the less-underwater account must be liquidated");
+    assert.equal(
+      attempts.get(VICTIM),
+      1,
+      "the less-underwater account must be liquidated",
+    );
     const attackerAttempts = attempts.get(ATTACKER) ?? 0;
-    assert.ok(attackerAttempts >= 2, "the failing account must be retried after its backoff");
     assert.ok(
-      attackerAttempts <= Math.ceil(Math.log2(RUN_MS / BACKOFF_BASE_MS + 1)) + 1,
+      attackerAttempts >= 2,
+      "the failing account must be retried after its backoff",
+    );
+    assert.ok(
+      attackerAttempts <=
+        Math.ceil(Math.log2(RUN_MS / BACKOFF_BASE_MS + 1)) + 1,
       `the failing account must back off, got ${attackerAttempts} attempts`,
     );
   });

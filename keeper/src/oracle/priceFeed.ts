@@ -161,7 +161,10 @@ export class PriceFeed {
     }
 
     if (answer <= 0n) {
-      this.logger.warn({ answer, source }, "PriceFeed.refresh: non-positive answer, skipping");
+      this.logger.warn(
+        { answer, source },
+        "PriceFeed.refresh: non-positive answer, skipping",
+      );
       return;
     }
 

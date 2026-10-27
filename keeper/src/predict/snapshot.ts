@@ -182,7 +182,9 @@ export async function readAccountSnapshot(
   const expirationAts = activeExpirationAts as readonly bigint[];
   const perpsHasOrders = hasOrderDelta(perpRisk);
   const futuresHasOrders = hasOrderDelta(futuresRisk);
-  const orderExpirationAts = futuresHasOrders ? (tradableExpirationAts as readonly bigint[]) : [];
+  const orderExpirationAts = futuresHasOrders
+    ? (tradableExpirationAts as readonly bigint[])
+    : [];
   // `getRiskView` already read each of these marks at this block for a venue with
   // orders, so the reads cannot revert where the snapshot itself did not.
   const readPerpsMark = check !== undefined && perpsHasOrders;
@@ -193,7 +195,12 @@ export async function readAccountSnapshot(
   let perpsMark: bigint | undefined;
   let futuresMark: bigint | undefined;
 
-  if (expirationAts.length > 0 || orderExpirationAts.length > 0 || readPerpsMark || readFuturesMark) {
+  if (
+    expirationAts.length > 0 ||
+    orderExpirationAts.length > 0 ||
+    readPerpsMark ||
+    readFuturesMark
+  ) {
     const perExpiry = await chain.publicClient.multicall({
       contracts: [
         ...expirationAts.map((expirationAt) => ({
@@ -244,8 +251,12 @@ export async function readAccountSnapshot(
     });
 
     for (let i = 0; i < expirationAts.length; i++) {
-      const pos = perExpiry[i] as { netQuantity: bigint; netEntryValue: bigint } | undefined;
-      const settlementPrice = perExpiry[expirationAts.length + i] as bigint | undefined;
+      const pos = perExpiry[i] as
+        | { netQuantity: bigint; netEntryValue: bigint }
+        | undefined;
+      const settlementPrice = perExpiry[expirationAts.length + i] as
+        | bigint
+        | undefined;
       const expirationAt = expirationAts[i];
       if (pos === undefined || expirationAt === undefined) continue;
       if (pos.netQuantity === 0n) continue;
@@ -261,7 +272,9 @@ export async function readAccountSnapshot(
     const orderCount = orderExpirationAts.length;
     for (let i = 0; i < orderCount; i++) {
       const aggregate = perExpiry[orderOffset + i] as RestingOrders | undefined;
-      const settlementPrice = perExpiry[orderOffset + orderCount + i] as bigint | undefined;
+      const settlementPrice = perExpiry[orderOffset + orderCount + i] as
+        | bigint
+        | undefined;
       const expirationAt = orderExpirationAts[i];
       if (aggregate === undefined || expirationAt === undefined) continue;
       if (aggregate.buyQty === 0n && aggregate.sellQty === 0n) continue;
@@ -287,7 +300,8 @@ export async function readAccountSnapshot(
       entryPrice:
         perpPosition.netQuantity === 0n
           ? 0n
-          : (abs(perpPosition.netEntryValue) * 1_000_000n) / abs(perpPosition.netQuantity),
+          : (abs(perpPosition.netEntryValue) * 1_000_000n) /
+            abs(perpPosition.netQuantity),
       orders: moments(perpOrderAggregate),
       // PME uses `max(0, pendingFunding)` — only what the user owes.
       fundingOwed: funding > 0n ? funding : 0n,
@@ -301,15 +315,33 @@ export async function readAccountSnapshot(
   if (check !== undefined) {
     const perpsScale = 10n ** BigInt(check.params.perpQuantityDecimals);
     if (perpsMark !== undefined) {
-      const replica = venueFillLoss(snapshot.perp.orders, perpsMark, perpsScale);
-      warnOnFillLossDrift(check, { user, blockNumber, venue: "perps", mark: perpsMark }, replica, perpRisk);
+      const replica = venueFillLoss(
+        snapshot.perp.orders,
+        perpsMark,
+        perpsScale,
+      );
+      warnOnFillLossDrift(
+        check,
+        { user, blockNumber, venue: "perps", mark: perpsMark },
+        replica,
+        perpRisk,
+      );
     }
     if (futuresMark !== undefined) {
       let replica = 0n;
       for (const book of snapshot.futures.orders) {
-        replica += venueFillLoss(book, book.settlementPrice !== 0n ? book.settlementPrice : futuresMark, 1n);
+        replica += venueFillLoss(
+          book,
+          book.settlementPrice !== 0n ? book.settlementPrice : futuresMark,
+          1n,
+        );
       }
-      warnOnFillLossDrift(check, { user, blockNumber, venue: "futures", mark: futuresMark }, replica, futuresRisk);
+      warnOnFillLossDrift(
+        check,
+        { user, blockNumber, venue: "futures", mark: futuresMark },
+        replica,
+        futuresRisk,
+      );
     }
   }
 
@@ -334,7 +366,12 @@ function moments(aggregate: RestingOrders): RestingOrders {
 
 function warnOnFillLossDrift(
   check: FillLossCheck,
-  context: { user: Address; blockNumber: bigint; venue: "perps" | "futures"; mark: bigint },
+  context: {
+    user: Address;
+    blockNumber: bigint;
+    venue: "perps" | "futures";
+    mark: bigint;
+  },
   replica: bigint,
   risk: RiskView,
 ): void {

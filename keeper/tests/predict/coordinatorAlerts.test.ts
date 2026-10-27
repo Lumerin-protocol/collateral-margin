@@ -9,7 +9,10 @@ import { Notifier, type WebhookPoster } from "../../src/alert/notifier.ts";
 import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
 import type { CoordinatorExecutor } from "../../src/coordinator/executor.ts";
-import type { ParticipantTracker, TrackerListener } from "../../src/discovery/tracker.ts";
+import type {
+  ParticipantTracker,
+  TrackerListener,
+} from "../../src/discovery/tracker.ts";
 
 const HASHPRICE = "0x000000000000000000000000000000000000aa01" as Address;
 const BTC_FEED = "0x000000000000000000000000000000000000aa02" as Address;
@@ -40,7 +43,13 @@ interface Wired {
  * The harness drives both `imRequired` (alerts) and `mmRequired` (queue)
  * off the same formula so the predictor-→ on-chain handoff is consistent.
  */
-function buildHarness({ balance, perpEntry }: { balance: bigint; perpEntry: bigint }): Wired {
+function buildHarness({
+  balance,
+  perpEntry,
+}: {
+  balance: bigint;
+  perpEntry: bigint;
+}): Wired {
   let oracleAnswer = 10_000_000_000n; // $100 at 8 decimals
   let onLogs: (() => void) | undefined;
   const PERP_QTY_DECIMALS = 6n;
@@ -79,7 +88,11 @@ function buildHarness({ balance, perpEntry }: { balance: bigint; perpEntry: bigi
           onLogs = undefined;
         };
       },
-      multicall: async ({ contracts }: { contracts: readonly { functionName: string }[] }) => {
+      multicall: async ({
+        contracts,
+      }: {
+        contracts: readonly { functionName: string }[];
+      }) => {
         const currentPrice = oracleAnswer / 100n; // 8→6 decimals
         return contracts.map((c) => {
           switch (c.functionName) {
@@ -108,9 +121,23 @@ function buildHarness({ balance, perpEntry }: { balance: bigint; perpEntry: bigi
                 sellOrderFillLoss: 0n,
               };
             case "getOrderAggregate":
-              return { buyQty: 0n, sellQty: 0n, buyPQ: 0n, buyP2Q: 0n, sellPQ: 0n, sellP2Q: 0n };
+              return {
+                buyQty: 0n,
+                sellQty: 0n,
+                buyPQ: 0n,
+                buyP2Q: 0n,
+                sellPQ: 0n,
+                sellP2Q: 0n,
+              };
             case "getOrderAggregateAtExpiration":
-              return { buyQty: 0n, sellQty: 0n, buyPQ: 0n, buyP2Q: 0n, sellPQ: 0n, sellP2Q: 0n };
+              return {
+                buyQty: 0n,
+                sellQty: 0n,
+                buyPQ: 0n,
+                buyP2Q: 0n,
+                sellPQ: 0n,
+                sellP2Q: 0n,
+              };
             case "getActiveExpirationDates":
               return [];
             case "getExpirationDates":
@@ -212,13 +239,20 @@ describe("predict/coordinator: predictive alerts", () => {
     harness.fireAdded(USER);
     await settle();
     await settle();
-    assert.equal(harness.predictor.critSize(), 1, "critIndex should hold the user");
+    assert.equal(
+      harness.predictor.critSize(),
+      1,
+      "critIndex should hold the user",
+    );
 
     // Drop spot to $55 — below crit ($58.3), still above liq.
     harness.setOracleAnswer(5_500_000_000n);
     await harness.fireAnswerUpdated();
 
-    assert.ok(harness.posted.length >= 1, `expected ≥1 alert posted, got ${harness.posted.length}`);
+    assert.ok(
+      harness.posted.length >= 1,
+      `expected ≥1 alert posted, got ${harness.posted.length}`,
+    );
     const payload = harness.posted[0]?.payload as { severity: string };
     assert.equal(payload.severity, "critical");
 
@@ -243,7 +277,10 @@ describe("predict/coordinator: predictive alerts", () => {
     harness.setOracleAnswer(6_200_000_000n);
     await harness.fireAnswerUpdated();
 
-    assert.ok(harness.posted.length >= 1, `expected ≥1 alert, got ${harness.posted.length}`);
+    assert.ok(
+      harness.posted.length >= 1,
+      `expected ≥1 alert, got ${harness.posted.length}`,
+    );
     const payload = harness.posted[0]?.payload as { severity: string };
     assert.equal(payload.severity, "warn");
 
@@ -252,7 +289,10 @@ describe("predict/coordinator: predictive alerts", () => {
   });
 
   it("does not fire alerts before the user is added (index empty)", async () => {
-    const harness = buildHarness({ balance: 50_000_000n, perpEntry: 100_000_000n });
+    const harness = buildHarness({
+      balance: 50_000_000n,
+      perpEntry: 100_000_000n,
+    });
     await harness.priceFeed.start();
     await harness.predictor.start();
     // No fireAdded() — index stays empty.

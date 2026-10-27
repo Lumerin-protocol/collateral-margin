@@ -1,7 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { Address } from "viem";
-import { computeUtilization, readAccountHealthBatch } from "../../src/pme/health.ts";
+import {
+  computeUtilization,
+  readAccountHealthBatch,
+} from "../../src/pme/health.ts";
 import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
 
@@ -17,7 +20,9 @@ function userAt(idx: number): Address {
  * The handler receives the calls in order and returns one result per call —
  * matching viem's contract.
  */
-function makeChainStub(handler: (calls: readonly unknown[]) => readonly unknown[]) {
+function makeChainStub(
+  handler: (calls: readonly unknown[]) => readonly unknown[],
+) {
   let multicallInvocations = 0;
   const stub = {
     publicClient: {
@@ -76,9 +81,21 @@ describe("pme/health: readAccountHealthBatch", () => {
       assert.equal(calls.length, users.length * 3);
       // Per-user triple: balanceOf(vault), computePortfolioIM(pme), computePortfolioMM(pme)
       users.forEach((user, i) => {
-        const a = calls[i * 3] as { address: Address; functionName: string; args: unknown[] };
-        const b = calls[i * 3 + 1] as { address: Address; functionName: string; args: unknown[] };
-        const c = calls[i * 3 + 2] as { address: Address; functionName: string; args: unknown[] };
+        const a = calls[i * 3] as {
+          address: Address;
+          functionName: string;
+          args: unknown[];
+        };
+        const b = calls[i * 3 + 1] as {
+          address: Address;
+          functionName: string;
+          args: unknown[];
+        };
+        const c = calls[i * 3 + 2] as {
+          address: Address;
+          functionName: string;
+          args: unknown[];
+        };
         assert.equal(a.address, VAULT);
         assert.equal(a.functionName, "balanceOf");
         assert.deepEqual(a.args, [user]);
@@ -104,7 +121,8 @@ describe("pme/health: readAccountHealthBatch", () => {
     assert.equal(getInvocations(), 1);
     assert.equal(result.length, 3);
     users.forEach((user, i) => {
-      const h = result[i]!;
+      const h = result[i];
+      assert.ok(h);
       assert.equal(h.user, user);
       assert.equal(h.balance, BigInt(1000 + i));
       assert.equal(h.imRequired, BigInt(400 + i));
@@ -117,7 +135,11 @@ describe("pme/health: readAccountHealthBatch", () => {
   it("flags an underwater account with negative mmSurplus", async () => {
     const users = [userAt(0)];
     const { stub } = makeChainStub(() => [100n, 80n, 150n]);
-    const [health] = await readAccountHealthBatch(stub, makeConfigStub(), users);
+    const [health] = await readAccountHealthBatch(
+      stub,
+      makeConfigStub(),
+      users,
+    );
     assert.ok(health, "result has one element");
     assert.equal(health.mmSurplus, -50n);
     assert.ok(health.mmSurplus < 0n, "mmSurplus<0 means liquidatable");
@@ -136,7 +158,12 @@ describe("pme/health: readAccountHealthBatch", () => {
       }),
     );
 
-    const result = await readAccountHealthBatch(stub, makeConfigStub(), users, 2);
+    const result = await readAccountHealthBatch(
+      stub,
+      makeConfigStub(),
+      users,
+      2,
+    );
 
     // 5 users / chunk 2 = 3 multicalls
     assert.equal(getInvocations(), 3);
@@ -150,7 +177,8 @@ describe("pme/health: readAccountHealthBatch", () => {
     ];
     for (const { offset, len } of chunkLayout) {
       for (let i = 0; i < len; i++) {
-        const r = result[offset + i]!;
+        const r = result[offset + i];
+        assert.ok(r);
         assert.equal(r.user, users[offset + i]);
         assert.equal(r.balance, BigInt(10_000 + i));
         assert.equal(r.imRequired, BigInt(20_000 + i));

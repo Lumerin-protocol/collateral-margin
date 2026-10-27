@@ -1,9 +1,18 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { createTestClient, http, publicActions, walletActions, type TestClient } from "viem";
+import {
+  createTestClient,
+  http,
+  publicActions,
+  walletActions,
+  type TestClient,
+} from "viem";
 import { hardhat } from "viem/chains";
 import { imRequired, mmRequired } from "@hashpower/portfolio-margin";
-import { readAccountSnapshot, readMMParams } from "../../src/predict/snapshot.ts";
+import {
+  readAccountSnapshot,
+  readMMParams,
+} from "../../src/predict/snapshot.ts";
 import { startHardhatNode, type HardhatNode } from "./nodeProcess.ts";
 import { loadFixture } from "./loadFixture.ts";
 import { buildKeeper } from "./buildKeeper.ts";
@@ -24,7 +33,11 @@ let decoyBooksFixture: ReturnType<typeof decoyBooksFixtureBuilder>;
 before(
   async () => {
     node = await startHardhatNode();
-    testClient = createTestClient({ chain: hardhat, mode: "hardhat", transport: http(node.rpcUrl) })
+    testClient = createTestClient({
+      chain: hardhat,
+      mode: "hardhat",
+      transport: http(node.rpcUrl),
+    })
       .extend(publicActions)
       .extend(walletActions);
     decoyBooksFixture = decoyBooksFixtureBuilder(node.rpcUrl);
@@ -37,23 +50,37 @@ after(async () => {
 });
 
 describe("CF-007 fill-loss parity (live RPC)", () => {
-  it(
-    "replicates the engine's IM and MM on decoy books at any mark",
-    { timeout: 60_000 },
-    async () => {
-      const ctx = await loadFixture(decoyBooksFixture, testClient);
-      const keeper = buildKeeper(ctx);
-      const user = ctx.accounts.alice.account.address;
+  it("replicates the engine's IM and MM on decoy books at any mark", {
+    timeout: 60_000,
+  }, async () => {
+    const ctx = await loadFixture(decoyBooksFixture, testClient);
+    const keeper = buildKeeper(ctx);
+    const user = ctx.accounts.alice.account.address;
 
-      const params = await readMMParams(keeper.chain, keeper.config);
-      const snapshot = await readAccountSnapshot(keeper.chain, keeper.config, user);
+    const params = await readMMParams(keeper.chain, keeper.config);
+    const snapshot = await readAccountSnapshot(
+      keeper.chain,
+      keeper.config,
+      user,
+    );
 
-      for (const mark of [ctx.mark, (ctx.mark * 9n) / 10n, (ctx.mark * 11n) / 10n]) {
-        await ctx.setMark(mark);
-        const engine = await readAccountMargins(ctx, user);
-        assert.equal(imRequired(snapshot, params, mark), engine.imRequired, `IM at mark ${mark}`);
-        assert.equal(mmRequired(snapshot, params, mark), engine.mmRequired, `MM at mark ${mark}`);
-      }
-    },
-  );
+    for (const mark of [
+      ctx.mark,
+      (ctx.mark * 9n) / 10n,
+      (ctx.mark * 11n) / 10n,
+    ]) {
+      await ctx.setMark(mark);
+      const engine = await readAccountMargins(ctx, user);
+      assert.equal(
+        imRequired(snapshot, params, mark),
+        engine.imRequired,
+        `IM at mark ${mark}`,
+      );
+      assert.equal(
+        mmRequired(snapshot, params, mark),
+        engine.mmRequired,
+        `MM at mark ${mark}`,
+      );
+    }
+  });
 });

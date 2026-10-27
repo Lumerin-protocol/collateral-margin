@@ -9,7 +9,11 @@ import {
 } from "../../src/predict/snapshot.ts";
 import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
-import { type MMParams, type RestingOrders, venueFillLoss } from "@hashpower/portfolio-margin";
+import {
+  type MMParams,
+  type RestingOrders,
+  venueFillLoss,
+} from "@hashpower/portfolio-margin";
 
 /** An empty book on one venue. */
 const NO_ORDERS: RestingOrders = {
@@ -22,7 +26,10 @@ const NO_ORDERS: RestingOrders = {
 };
 
 /** One `[price, |quantity|]` level per side, reduced to the venue's moments. */
-function book(bid?: readonly [bigint, bigint], ask?: readonly [bigint, bigint]): RestingOrders {
+function book(
+  bid?: readonly [bigint, bigint],
+  ask?: readonly [bigint, bigint],
+): RestingOrders {
   const [bp, bq] = bid ?? [0n, 0n];
   const [ap, aq] = ask ?? [0n, 0n];
   return {
@@ -67,7 +74,10 @@ interface Scripted {
   activeExpirationAts?: readonly bigint[];
   /** Tradable window for futures order aggregates; defaults to activeExpirationAts. */
   tradableExpirationAts?: readonly bigint[];
-  futuresPositions?: Record<string, { netQuantity: bigint; netEntryValue: bigint }>;
+  futuresPositions?: Record<
+    string,
+    { netQuantity: bigint; netEntryValue: bigint }
+  >;
   /** Keyed by expiry; absent means the expiry has not settled. */
   settlementPrices?: Record<string, bigint>;
   perpNetQty?: bigint;
@@ -107,7 +117,11 @@ function makeChain(scripted: Scripted, recorded?: Recorded): Chain {
         contracts,
         blockNumber,
       }: {
-        contracts: readonly { functionName: string; args?: readonly unknown[]; address?: Address }[];
+        contracts: readonly {
+          functionName: string;
+          args?: readonly unknown[];
+          address?: Address;
+        }[];
         blockNumber?: bigint;
       }) => {
         recorded?.multicallBlocks.push(blockNumber);
@@ -122,8 +136,12 @@ function makeChain(scripted: Scripted, recorded?: Recorded): Chain {
               // Perps: getUserPosition(user). Futures: getUserPosition(user, expirationAt).
               if ((c.args?.length ?? 0) >= 2) {
                 const expirationAt = c.args?.[1] as bigint;
-                const pos = scripted.futuresPositions?.[expirationAt.toString()];
-                if (pos === undefined) throw new Error(`unscripted futures position ${expirationAt}`);
+                const pos =
+                  scripted.futuresPositions?.[expirationAt.toString()];
+                if (pos === undefined)
+                  throw new Error(
+                    `unscripted futures position ${expirationAt}`,
+                  );
                 return pos;
               }
               return {
@@ -144,8 +162,12 @@ function makeChain(scripted: Scripted, recorded?: Recorded): Chain {
                 // Only the perps venue accrues funding.
                 pendingFunding: isPerps ? (scripted.perpFunding ?? 0n) : 0n,
                 // Perps quantity decimals equal token decimals; futures are whole contracts.
-                buyOrderDelta: isPerps ? perpOrders.buyQty : futuresBuyQty * TOKEN_SCALE,
-                sellOrderDelta: isPerps ? perpOrders.sellQty : futuresSellQty * TOKEN_SCALE,
+                buyOrderDelta: isPerps
+                  ? perpOrders.buyQty
+                  : futuresBuyQty * TOKEN_SCALE,
+                sellOrderDelta: isPerps
+                  ? perpOrders.sellQty
+                  : futuresSellQty * TOKEN_SCALE,
                 buyOrderFillLoss: isPerps
                   ? (scripted.perpReportedFillLoss ?? 0n)
                   : (scripted.futuresReportedFillLoss ?? 0n),
@@ -156,17 +178,25 @@ function makeChain(scripted: Scripted, recorded?: Recorded): Chain {
               return scripted.perpOrders ?? NO_ORDERS;
             case "getOrderAggregateAtExpiration": {
               const expirationAt = c.args?.[1] as bigint;
-              return scripted.futuresBooks?.[expirationAt.toString()] ?? NO_ORDERS;
+              return (
+                scripted.futuresBooks?.[expirationAt.toString()] ?? NO_ORDERS
+              );
             }
             case "getMarketPrice": {
-              const mark = c.address === PERPS ? scripted.perpsMark : scripted.futuresMark;
-              if (mark === undefined) throw new Error(`unscripted mark for ${c.address}`);
+              const mark =
+                c.address === PERPS ? scripted.perpsMark : scripted.futuresMark;
+              if (mark === undefined)
+                throw new Error(`unscripted mark for ${c.address}`);
               return mark;
             }
             case "getActiveExpirationDates":
               return scripted.activeExpirationAts ?? [];
             case "getExpirationDates":
-              return scripted.tradableExpirationAts ?? scripted.activeExpirationAts ?? [];
+              return (
+                scripted.tradableExpirationAts ??
+                scripted.activeExpirationAts ??
+                []
+              );
             case "imSpotShock":
               return PARAMS.imSpotShock;
             case "mmSpotShock":
@@ -185,7 +215,10 @@ function makeChain(scripted: Scripted, recorded?: Recorded): Chain {
 }
 
 /** A check whose logger records every warning. */
-function recordingCheck(): { check: FillLossCheck; warnings: Record<string, unknown>[] } {
+function recordingCheck(): {
+  check: FillLossCheck;
+  warnings: Record<string, unknown>[];
+} {
   const warnings: Record<string, unknown>[] = [];
   const logger = {
     warn: (fields: Record<string, unknown>) => {
@@ -218,13 +251,19 @@ describe("predict/snapshot: readAccountSnapshot", () => {
   });
 
   it("carries each venue's order moments, futures per expiry", async () => {
-    const perpOrders = book([95_000_000n, 2_000_000n], [110_000_000n, 500_000n]);
+    const perpOrders = book(
+      [95_000_000n, 2_000_000n],
+      [110_000_000n, 500_000n],
+    );
     const bookA = book([42_000_000n, 1n]);
     const bookB = book(undefined, [61_000_000n, 3n]);
     const chain = makeChain({
       tradableExpirationAts: [EXPIRY_A, EXPIRY_B],
       perpOrders,
-      futuresBooks: { [EXPIRY_A.toString()]: bookA, [EXPIRY_B.toString()]: bookB },
+      futuresBooks: {
+        [EXPIRY_A.toString()]: bookA,
+        [EXPIRY_B.toString()]: bookB,
+      },
     });
     const snap = await readAccountSnapshot(chain, makeConfig(), USER);
     assert.deepEqual(snap.perp.orders, perpOrders);
@@ -249,7 +288,10 @@ describe("predict/snapshot: readAccountSnapshot", () => {
 
   it("skips the futures aggregate reads when the venue reports no order delta", async () => {
     const recorded: Recorded = { multicallBlocks: [], calls: [] };
-    const chain = makeChain({ tradableExpirationAts: [EXPIRY_A, EXPIRY_B] }, recorded);
+    const chain = makeChain(
+      { tradableExpirationAts: [EXPIRY_A, EXPIRY_B] },
+      recorded,
+    );
     await readAccountSnapshot(chain, makeConfig(), USER);
     assert.ok(!recorded.calls.includes("getOrderAggregateAtExpiration"));
   });
@@ -259,7 +301,9 @@ describe("predict/snapshot: readAccountSnapshot", () => {
     const chain = makeChain(
       {
         activeExpirationAts: [EXPIRY_A],
-        futuresPositions: { [EXPIRY_A.toString()]: { netQuantity: 1n, netEntryValue: 50n } },
+        futuresPositions: {
+          [EXPIRY_A.toString()]: { netQuantity: 1n, netEntryValue: 50n },
+        },
         futuresBooks: { [EXPIRY_A.toString()]: book([42_000_000n, 1n]) },
       },
       recorded,
@@ -300,8 +344,12 @@ describe("predict/snapshot: readAccountSnapshot", () => {
     });
     const snap = await readAccountSnapshot(chain, makeConfig(), USER);
     assert.equal(snap.futures.positions.length, 2);
-    const long = snap.futures.positions.find((p) => p.expirationAt === EXPIRY_A);
-    const short = snap.futures.positions.find((p) => p.expirationAt === EXPIRY_B);
+    const long = snap.futures.positions.find(
+      (p) => p.expirationAt === EXPIRY_A,
+    );
+    const short = snap.futures.positions.find(
+      (p) => p.expirationAt === EXPIRY_B,
+    );
     assert.equal(long?.netQuantity, 1n);
     assert.equal(long?.netEntryValue, 50n);
     assert.equal(short?.netQuantity, -2n);
@@ -320,12 +368,14 @@ describe("predict/snapshot: readAccountSnapshot", () => {
     const snap = await readAccountSnapshot(chain, makeConfig(), USER);
 
     assert.equal(
-      snap.futures.positions.find((p) => p.expirationAt === EXPIRY_A)?.settlementPrice,
+      snap.futures.positions.find((p) => p.expirationAt === EXPIRY_A)
+        ?.settlementPrice,
       0n,
       "still live",
     );
     assert.equal(
-      snap.futures.positions.find((p) => p.expirationAt === EXPIRY_B)?.settlementPrice,
+      snap.futures.positions.find((p) => p.expirationAt === EXPIRY_B)
+        ?.settlementPrice,
       61n,
       "settled but not yet swept — the margin math must not reprice it",
     );
@@ -349,7 +399,11 @@ describe("predict/snapshot: fill-loss check against getRiskView", () => {
   it("stays silent when the replica matches both venues", async () => {
     const { check, warnings } = recordingCheck();
     await readAccountSnapshot(makeChain(scripted), makeConfig(), USER, check);
-    assert.equal(scripted.perpReportedFillLoss, 100_000_000n, "fixture: perps bid $10 over the mark");
+    assert.equal(
+      scripted.perpReportedFillLoss,
+      100_000_000n,
+      "fixture: perps bid $10 over the mark",
+    );
     assert.deepEqual(warnings, []);
   });
 
@@ -370,7 +424,11 @@ describe("predict/snapshot: fill-loss check against getRiskView", () => {
 
   it("reads no marks without a check", async () => {
     const recorded: Recorded = { multicallBlocks: [], calls: [] };
-    await readAccountSnapshot(makeChain(scripted, recorded), makeConfig(), USER);
+    await readAccountSnapshot(
+      makeChain(scripted, recorded),
+      makeConfig(),
+      USER,
+    );
     assert.ok(!recorded.calls.includes("getMarketPrice"));
   });
 });

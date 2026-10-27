@@ -90,7 +90,9 @@ function makeChainStub(opts: {
 }): Chain {
   const expiry = opts.expiry ?? EXPIRY;
   return {
-    account: { address: "0x0000000000000000000000000000000000009999" as Address },
+    account: {
+      address: "0x0000000000000000000000000000000000009999" as Address,
+    },
     publicClient: {
       getBlockNumber: async () => 1n,
       readContract: async (call: ReadCall) => {
@@ -111,7 +113,10 @@ function makeChainStub(opts: {
             if (c.functionName === "getOrderAggregateAtExpiration") {
               return EMPTY_AGGREGATE;
             }
-            return { netQuantity: opts.netQuantity, netEntryValue: opts.netEntryValue };
+            return {
+              netQuantity: opts.netQuantity,
+              netEntryValue: opts.netEntryValue,
+            };
           });
         }
         throw new Error(`unexpected multicall head: ${fns[0]}`);
@@ -150,15 +155,22 @@ describe("futures venue: reduceToTarget", () => {
     assert.ok(expirationAts.length >= 1);
     assert.ok(expirationAts.every((e) => e === EXPIRY));
     const totalClose = closeQtys.reduce((s, q) => s + q, 0n);
-    assert.ok(totalClose > 0n && totalClose < 12n, "strict subset of contracts");
-    assert.ok("feeEarned" in outcome && outcome.positionsClosed === Number(totalClose));
+    assert.ok(
+      totalClose > 0n && totalClose < 12n,
+      "strict subset of contracts",
+    );
+    assert.ok(
+      "feeEarned" in outcome && outcome.positionsClosed === Number(totalClose),
+    );
   });
 
   it("caps the batch to maxLotsPerLiquidationTx (expiry-leg chunking)", async () => {
     const EXPIRY_B = EXPIRY + 86_400n;
     let simulated: ReadCall | undefined;
     const chain = {
-      account: { address: "0x0000000000000000000000000000000000009999" as Address },
+      account: {
+        address: "0x0000000000000000000000000000000000009999" as Address,
+      },
       publicClient: {
         getBlockNumber: async () => 1n,
         readContract: async (call: ReadCall) => {
@@ -166,11 +178,19 @@ describe("futures venue: reduceToTarget", () => {
           if (call.functionName === "collateralToken") return USDC;
           throw new Error(`unexpected readContract: ${call.functionName}`);
         },
-        multicall: async ({ contracts }: { contracts: readonly ReadCall[] }) => {
+        multicall: async ({
+          contracts,
+        }: {
+          contracts: readonly ReadCall[];
+        }) => {
           const fns = contracts.map((c) => c.functionName);
           if (fns[0] === "imSpotShock") return [IM_SHOCK, MM_SHOCK, 6, 6];
           if (fns[0] === "balanceOf") {
-            return snapshotMulticall(1_000_000n, [EXPIRY, EXPIRY_B, EXPIRY + 172_800n]);
+            return snapshotMulticall(1_000_000n, [
+              EXPIRY,
+              EXPIRY_B,
+              EXPIRY + 172_800n,
+            ]);
           }
           if (fns[0] === "getUserPosition") {
             return contracts.map((c) => {
@@ -195,7 +215,11 @@ describe("futures venue: reduceToTarget", () => {
       },
     } as unknown as Chain;
 
-    const venue = new FuturesVenue(chain, makeConfigStub(true, 2), silentLogger);
+    const venue = new FuturesVenue(
+      chain,
+      makeConfigStub(true, 2),
+      silentLogger,
+    );
     const outcome = await venue.reduceToTarget(USER);
     assert.ok(simulated);
     const [, expirationAts] = simulated?.args as [Address, bigint[], bigint[]];
@@ -206,7 +230,9 @@ describe("futures venue: reduceToTarget", () => {
   it("drops matured legs from the batch and leaves them to settlement", async () => {
     let simulated: ReadCall | undefined;
     const chain = {
-      account: { address: "0x0000000000000000000000000000000000009999" as Address },
+      account: {
+        address: "0x0000000000000000000000000000000000009999" as Address,
+      },
       publicClient: {
         getBlockNumber: async () => 1n,
         readContract: async (call: ReadCall) => {
@@ -214,7 +240,11 @@ describe("futures venue: reduceToTarget", () => {
           if (call.functionName === "collateralToken") return USDC;
           throw new Error(`unexpected readContract: ${call.functionName}`);
         },
-        multicall: async ({ contracts }: { contracts: readonly ReadCall[] }) => {
+        multicall: async ({
+          contracts,
+        }: {
+          contracts: readonly ReadCall[];
+        }) => {
           const fns = contracts.map((c) => c.functionName);
           if (fns[0] === "imSpotShock") return [IM_SHOCK, MM_SHOCK, 6, 6];
           if (fns[0] === "balanceOf") {

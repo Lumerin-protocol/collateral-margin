@@ -190,9 +190,12 @@ export async function baseFixture(rpcUrl: string): Promise<BaseFixture> {
   const stack = await deployStack(rpcUrl);
   return {
     ...stack,
-    bumpHashprice: (price) => writeOracle(stack, stack.addresses.hashpriceOracle, price),
-    bumpBtcUsdc: (price) => writeOracle(stack, stack.addresses.btcUsdcFeed, price),
-    setMark: (marketPrice) => writeOracle(stack, stack.addresses.hashpriceOracle, marketPrice),
+    bumpHashprice: (price) =>
+      writeOracle(stack, stack.addresses.hashpriceOracle, price),
+    bumpBtcUsdc: (price) =>
+      writeOracle(stack, stack.addresses.btcUsdcFeed, price),
+    setMark: (marketPrice) =>
+      writeOracle(stack, stack.addresses.hashpriceOracle, marketPrice),
     deposit: (user, amount) => depositTo(stack, user, amount),
     crashOracles: async (marketPrice) => {
       await writeOracle(stack, stack.addresses.hashpriceOracle, marketPrice);
@@ -328,8 +331,18 @@ export function twoUnderwaterUsersFixtureBuilder(rpcUrl: string) {
       base.config.initialMarketPrice,
       -(aliceQty + daveQty),
     );
-    await placePerpsOrder(base, base.accounts.alice, base.config.initialMarketPrice, aliceQty);
-    await placePerpsOrder(base, base.accounts.dave, base.config.initialMarketPrice, daveQty);
+    await placePerpsOrder(
+      base,
+      base.accounts.alice,
+      base.config.initialMarketPrice,
+      aliceQty,
+    );
+    await placePerpsOrder(
+      base,
+      base.accounts.dave,
+      base.config.initialMarketPrice,
+      daveQty,
+    );
 
     return {
       ...base,
@@ -572,7 +585,8 @@ export function futuresPartialCrashFixtureBuilder(rpcUrl: string) {
       aliceFuturesQty,
       // Moderate crash: $40 → $30 mark. Deep enough to break MM, shallow enough
       // that a subset of lots restores the IM buffer.
-      makeLiquidatable: () => base.crashOracles(parseUnits("30", base.config.tokenDecimals)),
+      makeLiquidatable: () =>
+        base.crashOracles(parseUnits("30", base.config.tokenDecimals)),
     };
   };
 }
@@ -623,7 +637,8 @@ export function futuresMultiExpiryPartialCrashFixtureBuilder(rpcUrl: string) {
       aliceDeposit,
       expirationAts: [firstExpirationAt, secondExpirationAt] as const,
       perExpiryQty,
-      makeLiquidatable: () => base.crashOracles(parseUnits("30", base.config.tokenDecimals)),
+      makeLiquidatable: () =>
+        base.crashOracles(parseUnits("30", base.config.tokenDecimals)),
     };
   };
 }
@@ -808,7 +823,8 @@ export function crossVenueBothLegsCrashFixtureBuilder(rpcUrl: string) {
       aliceDeposit,
       alicePerpsQty,
       aliceFuturesQty,
-      makeLiquidatable: () => base.crashOracles(parseUnits("30", base.config.tokenDecimals)),
+      makeLiquidatable: () =>
+        base.crashOracles(parseUnits("30", base.config.tokenDecimals)),
     };
   };
 }
@@ -830,7 +846,12 @@ export function crossVenueBothLegsCrashFixtureBuilder(rpcUrl: string) {
  */
 function crossVenueFixtureBody(
   base: BaseFixture,
-  sizing: { aliceDeposit: bigint; bobDeposit: bigint; alicePerpsQty: bigint; aliceFuturesQty: number },
+  sizing: {
+    aliceDeposit: bigint;
+    bobDeposit: bigint;
+    alicePerpsQty: bigint;
+    aliceFuturesQty: number;
+  },
 ): Promise<CrossVenueFixture> {
   return (async () => {
     const { aliceDeposit, bobDeposit, alicePerpsQty, aliceFuturesQty } = sizing;
@@ -1045,7 +1066,10 @@ interface PerpsTrade {
  * `seller` (negative qty). Seller's resting short is placed *first* so
  * the taker (`buyer`) matches against it on submission.
  */
-async function matchPerpsTrade(base: BaseFixture, t: PerpsTrade): Promise<void> {
+async function matchPerpsTrade(
+  base: BaseFixture,
+  t: PerpsTrade,
+): Promise<void> {
   await placePerpsOrder(base, t.seller, t.price, -t.quantity);
   await placePerpsOrder(base, t.buyer, t.price, t.quantity);
 }
@@ -1060,7 +1084,10 @@ interface FuturesTrade {
 }
 
 /** Same shape as `matchPerpsTrade`, but for the Futures venue. */
-async function matchFuturesTrade(base: BaseFixture, t: FuturesTrade): Promise<void> {
+async function matchFuturesTrade(
+  base: BaseFixture,
+  t: FuturesTrade,
+): Promise<void> {
   await placeFuturesOrder(base, t.seller, t.price, t.expirationAt, -t.quantity);
   await placeFuturesOrder(base, t.buyer, t.price, t.expirationAt, t.quantity);
 }
@@ -1102,7 +1129,10 @@ async function placeFuturesOrder(
 }
 
 /** Owner-only: set the futures taker fee (bps of notional). */
-async function setFuturesTakerFee(stack: DeployedStack, feeBps: bigint): Promise<void> {
+async function setFuturesTakerFee(
+  stack: DeployedStack,
+  feeBps: bigint,
+): Promise<void> {
   const hash = await stack.accounts.owner.client.writeContract({
     address: stack.addresses.futures,
     abi: stack.abis.futures,
@@ -1114,7 +1144,11 @@ async function setFuturesTakerFee(stack: DeployedStack, feeBps: bigint): Promise
   await stack.publicClient.waitForTransactionReceipt({ hash });
 }
 
-async function writeOracle(stack: DeployedStack, oracle: Address, price: bigint): Promise<void> {
+async function writeOracle(
+  stack: DeployedStack,
+  oracle: Address,
+  price: bigint,
+): Promise<void> {
   const hash = await stack.accounts.owner.client.writeContract({
     address: oracle,
     abi: stack.abis.hashpriceOracle,
@@ -1126,8 +1160,14 @@ async function writeOracle(stack: DeployedStack, oracle: Address, price: bigint)
   await stack.publicClient.waitForTransactionReceipt({ hash });
 }
 
-async function depositTo(stack: DeployedStack, user: Address, amount: bigint): Promise<void> {
-  const wallet = Object.values(stack.accounts).find((w) => w.account.address === user);
+async function depositTo(
+  stack: DeployedStack,
+  user: Address,
+  amount: bigint,
+): Promise<void> {
+  const wallet = Object.values(stack.accounts).find(
+    (w) => w.account.address === user,
+  );
   if (wallet === undefined) throw new Error(`No fixture wallet for ${user}`);
   const hash = await wallet.client.writeContract({
     address: stack.addresses.vault,

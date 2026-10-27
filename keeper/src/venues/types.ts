@@ -82,7 +82,10 @@ export interface Venue {
    * When `ids` is omitted the venue discovers resting ids first (perps:
    * `getUserOrders`; futures: `getExpirationDates` + per-expiry order ids).
    */
-  liquidateOrders(user: Address, ids?: readonly Hex[]): Promise<LiquidateOrdersOutcome>;
+  liquidateOrders(
+    user: Address,
+    ids?: readonly Hex[],
+  ): Promise<LiquidateOrdersOutcome>;
 
   /**
    * Liquidate `user`'s positions at this venue down to the IM buffer in a

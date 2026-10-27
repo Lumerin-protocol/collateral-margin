@@ -8,7 +8,10 @@ import { PriceFeed } from "../../src/oracle/priceFeed.ts";
 import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
 import type { CoordinatorExecutor } from "../../src/coordinator/executor.ts";
-import type { ParticipantTracker, TrackerListener } from "../../src/discovery/tracker.ts";
+import type {
+  ParticipantTracker,
+  TrackerListener,
+} from "../../src/discovery/tracker.ts";
 
 const HASHPRICE = "0x000000000000000000000000000000000000aa01" as Address;
 const BTC_FEED = "0x000000000000000000000000000000000000aa02" as Address;
@@ -102,7 +105,11 @@ function buildHarness({
           onLogs = undefined;
         };
       },
-      multicall: async ({ contracts }: { contracts: readonly { functionName: string }[] }) => {
+      multicall: async ({
+        contracts,
+      }: {
+        contracts: readonly { functionName: string }[];
+      }) => {
         // The harness inspects `functionName` on each contract and assembles
         // a matching response array. Snapshot-read calls and health-read
         // calls share the same multicall path, so one handler covers both.
@@ -136,9 +143,23 @@ function buildHarness({
                 sellOrderFillLoss: 0n,
               };
             case "getOrderAggregate":
-              return { buyQty: 0n, sellQty: 0n, buyPQ: 0n, buyP2Q: 0n, sellPQ: 0n, sellP2Q: 0n };
+              return {
+                buyQty: 0n,
+                sellQty: 0n,
+                buyPQ: 0n,
+                buyP2Q: 0n,
+                sellPQ: 0n,
+                sellP2Q: 0n,
+              };
             case "getOrderAggregateAtExpiration":
-              return { buyQty: 0n, sellQty: 0n, buyPQ: 0n, buyP2Q: 0n, sellPQ: 0n, sellP2Q: 0n };
+              return {
+                buyQty: 0n,
+                sellQty: 0n,
+                buyPQ: 0n,
+                buyP2Q: 0n,
+                sellPQ: 0n,
+                sellP2Q: 0n,
+              };
             case "getActiveExpirationDates":
               return [];
             case "getExpirationDates":
@@ -148,10 +169,14 @@ function buildHarness({
             case "computePortfolioMM": {
               // Token-decimal current price: oracleAnswer / 100 (8 → 6 dec).
               const currentPriceTokens = oracleAnswer / 100n;
-              return currentPriceTokens <= underwaterAtPrice ? balance + 1n : balance - 1n;
+              return currentPriceTokens <= underwaterAtPrice
+                ? balance + 1n
+                : balance - 1n;
             }
             default:
-              throw new Error(`unexpected multicall functionName: ${c.functionName}`);
+              throw new Error(
+                `unexpected multicall functionName: ${c.functionName}`,
+              );
           }
         });
       },
@@ -184,7 +209,8 @@ function buildHarness({
       size: () => 1,
     } as unknown as ParticipantTracker,
     fireAdded: (user: Address) => addedListeners.forEach((l) => void l(user)),
-    fireChanged: (user: Address) => changedListeners.forEach((l) => void l(user)),
+    fireChanged: (user: Address) =>
+      changedListeners.forEach((l) => void l(user)),
   };
 
   const priceFeed = new PriceFeed(chain, config, silentLogger, 6);
@@ -246,7 +272,11 @@ describe("predict/coordinator: end-to-end", () => {
     harness.setOracleAnswer(8_000_000_000n);
     await harness.fireAnswerUpdated();
 
-    assert.equal(harness.queue.size(), 1, "user should land in the coordinator queue");
+    assert.equal(
+      harness.queue.size(),
+      1,
+      "user should land in the coordinator queue",
+    );
     assert.equal(harness.queue.peek()?.user, USER);
     assert.ok(harness.executor.kicks >= 1, "executor should have been kicked");
 

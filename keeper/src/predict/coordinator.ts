@@ -98,9 +98,15 @@ export class PredictiveCoordinator {
 
     // New users → build their first snapshot. Existing users with state
     // changes are also funnelled through here, so we avoid two listeners.
-    this.disposers.push(this.tracker.onAdded((user) => void this.rebuild(user)));
-    this.disposers.push(this.tracker.onChanged((user) => void this.rebuild(user)));
-    this.disposers.push(this.priceFeed.onUpdate((user) => this.handlePriceUpdate(user)));
+    this.disposers.push(
+      this.tracker.onAdded((user) => void this.rebuild(user)),
+    );
+    this.disposers.push(
+      this.tracker.onChanged((user) => void this.rebuild(user)),
+    );
+    this.disposers.push(
+      this.priceFeed.onUpdate((user) => this.handlePriceUpdate(user)),
+    );
   }
 
   stop(): void {
@@ -209,7 +215,10 @@ export class PredictiveCoordinator {
     if (this.params === undefined) return;
     const current = this.priceFeed.current();
     if (current === undefined) {
-      this.logger.debug({ user }, "rebuild deferred — priceFeed has no value yet");
+      this.logger.debug(
+        { user },
+        "rebuild deferred — priceFeed has no value yet",
+      );
       return;
     }
     try {
@@ -226,9 +235,19 @@ export class PredictiveCoordinator {
       let warnTracked = false;
       let critTracked = false;
       if (this.notifier !== undefined && snap.balance > 0n) {
-        const warnPpm = BigInt(Math.round(this.config.alerts.imWarnUtilization * 1_000_000));
-        const critPpm = BigInt(Math.round(this.config.alerts.imCriticalUtilization * 1_000_000));
-        const alerts = solveAlertThresholds(snap, this.params, current, warnPpm, critPpm);
+        const warnPpm = BigInt(
+          Math.round(this.config.alerts.imWarnUtilization * 1_000_000),
+        );
+        const critPpm = BigInt(
+          Math.round(this.config.alerts.imCriticalUtilization * 1_000_000),
+        );
+        const alerts = solveAlertThresholds(
+          snap,
+          this.params,
+          current,
+          warnPpm,
+          critPpm,
+        );
         warnTracked = this.warnIndex.upsert({
           user: alerts.user,
           liqDown: alerts.warnDown,
@@ -258,7 +277,10 @@ export class PredictiveCoordinator {
         "predictive snapshot rebuilt",
       );
     } catch (err) {
-      this.logger.error({ err, user }, "rebuild failed — leaving prior thresholds in place");
+      this.logger.error(
+        { err, user },
+        "rebuild failed — leaving prior thresholds in place",
+      );
     }
   }
 
@@ -269,7 +291,10 @@ export class PredictiveCoordinator {
     if (this.config.oracle.priceMoveTriggerBps > 0) {
       const moveBps = absDelta(prev, next);
       if (moveBps < this.config.oracle.priceMoveTriggerBps) {
-        this.logger.debug({ prev, next, moveBps }, "price move below trigger threshold — skipping");
+        this.logger.debug(
+          { prev, next, moveBps },
+          "price move below trigger threshold — skipping",
+        );
         return;
       }
     }
@@ -278,7 +303,8 @@ export class PredictiveCoordinator {
     const warnCrossings = this.warnIndex.crossings(prev, next);
     const critCrossings = this.critIndex.crossings(prev, next);
 
-    if (liqCrossings.length + warnCrossings.length + critCrossings.length === 0) return;
+    if (liqCrossings.length + warnCrossings.length + critCrossings.length === 0)
+      return;
 
     this.logger.info(
       {
@@ -325,7 +351,11 @@ export class PredictiveCoordinator {
     critUsers: Set<Address>,
   ): Promise<void> {
     try {
-      const healths = await readAccountHealthBatch(this.chain, this.config, allUsers);
+      const healths = await readAccountHealthBatch(
+        this.chain,
+        this.config,
+        allUsers,
+      );
       let enqueued = 0;
       let alertsFired = 0;
       for (const h of healths) {
@@ -361,18 +391,27 @@ export class PredictiveCoordinator {
         }
       }
       if (enqueued > 0) {
-        this.logger.info({ enqueued, evaluated: healths.length }, "predictive enqueue");
+        this.logger.info(
+          { enqueued, evaluated: healths.length },
+          "predictive enqueue",
+        );
         this.executor.kick();
       }
       if (alertsFired > 0) {
-        this.logger.info({ alertsFired, evaluated: healths.length }, "predictive alerts queued");
+        this.logger.info(
+          { alertsFired, evaluated: healths.length },
+          "predictive alerts queued",
+        );
         // Drain immediately — the sweep could be 60s away. Fire-and-forget;
         // any failures re-buffer themselves at the head.
         if (this.notifier !== undefined) void this.notifier.drain();
       }
       for (const user of allUsers) void this.rebuild(user);
     } catch (err) {
-      this.logger.error({ err, users: allUsers.length }, "handleCrossings failed");
+      this.logger.error(
+        { err, users: allUsers.length },
+        "handleCrossings failed",
+      );
     }
   }
 }
@@ -395,7 +434,10 @@ export interface ThresholdSides {
   up: string | null;
 }
 
-function priceSides(down: bigint | undefined, up: bigint | undefined): ThresholdSides {
+function priceSides(
+  down: bigint | undefined,
+  up: bigint | undefined,
+): ThresholdSides {
   return {
     down: down === undefined ? null : down.toString(),
     up: up === undefined ? null : up.toString(),

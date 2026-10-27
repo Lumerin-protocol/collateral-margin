@@ -5,7 +5,10 @@ import type { Config } from "../config.ts";
 import { HashPowerFuturesAbi } from "../abi/HashPowerFutures.ts";
 import { sendLiquidate } from "../tx/liquidate.ts";
 import { readAccountSnapshot, readMMParams } from "../predict/snapshot.ts";
-import { type MMParams, solveFuturesClosesToTarget } from "@hashpower/portfolio-margin";
+import {
+  type MMParams,
+  solveFuturesClosesToTarget,
+} from "@hashpower/portfolio-margin";
 import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
 import type {
   LiquidateOrdersOutcome,
@@ -75,7 +78,9 @@ export class FuturesVenue implements Venue {
 
   marketLabel(marketId: MarketId): string {
     const expirationAt = marketIdToExpirationAt(marketId);
-    const iso = new Date(Number(expirationAt) * 1000).toISOString().slice(0, 10);
+    const iso = new Date(Number(expirationAt) * 1000)
+      .toISOString()
+      .slice(0, 10);
     return `futures ${iso}`;
   }
 
@@ -179,7 +184,10 @@ export class FuturesVenue implements Venue {
   async reduceToTarget(user: Address): Promise<ReduceToTargetOutcome> {
     const params = await this.getMMParams();
     const [snapshot, marketPrice] = await Promise.all([
-      readAccountSnapshot(this.chain, this.config, user, { params, logger: this.logger }),
+      readAccountSnapshot(this.chain, this.config, user, {
+        params,
+        logger: this.logger,
+      }),
       this.chain.publicClient.readContract({
         address: this.config.futures.address,
         abi: HashPowerFuturesAbi,
@@ -188,7 +196,12 @@ export class FuturesVenue implements Venue {
     ]);
 
     // Liquidation-fee payout is disabled on-chain — pass 0 so the projection matches.
-    const allCloses = solveFuturesClosesToTarget(snapshot, params, marketPrice, 0n);
+    const allCloses = solveFuturesClosesToTarget(
+      snapshot,
+      params,
+      marketPrice,
+      0n,
+    );
     // A matured leg is worth its settlement price, not the live mark: the venue
     // refuses to liquidate it (`PositionMatured` / skipped in the batch) and the
     // delivery coordinator settles it instead. Sending it would only waste a slot.
@@ -211,7 +224,8 @@ export class FuturesVenue implements Venue {
 
     // Gas-bounded chunking: send at most `maxLotsPerLiquidationTx` expiry legs.
     const cap = this.config.futures.maxLotsPerLiquidationTx;
-    const chunk = cap > 0 && closes.length > cap ? closes.slice(0, cap) : closes;
+    const chunk =
+      cap > 0 && closes.length > cap ? closes.slice(0, cap) : closes;
     const expirationAts = chunk.map((c) => c.expirationAt);
     const closeQtys = chunk.map((c) => c.closeQty);
     const contractsClosed = closeQtys.reduce((s, q) => s + q, 0n);
@@ -246,7 +260,10 @@ export class FuturesVenue implements Venue {
 
     return "skipped" in result
       ? { skipped: result.skipped }
-      : { feeEarned: result.feeEarned, positionsClosed: Number(contractsClosed) };
+      : {
+          feeEarned: result.feeEarned,
+          positionsClosed: Number(contractsClosed),
+        };
   }
 
   /**

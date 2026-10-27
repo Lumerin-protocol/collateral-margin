@@ -5,7 +5,10 @@ import type { Config } from "../config.ts";
 import { HashPowerPerpsDEXAbi } from "derivatives-marketplace-abi/HashPowerPerpsDEX.ts";
 import { sendLiquidate } from "../tx/liquidate.ts";
 import { readAccountSnapshot, readMMParams } from "../predict/snapshot.ts";
-import { type MMParams, solvePerpCloseToTarget } from "@hashpower/portfolio-margin";
+import {
+  type MMParams,
+  solvePerpCloseToTarget,
+} from "@hashpower/portfolio-margin";
 import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
 import { PerpsPositionAbi } from "./perpsPositionAbi.ts";
 import type {
@@ -106,7 +109,9 @@ export class PerpsVenue implements Venue {
     const absQty = abs(position.netQuantity);
     const isLong = position.netQuantity > 0n;
     // PnL in token decimals: mark value minus the signed entry value.
-    const pnl = (marketPrice * position.netQuantity) / QUANTITY_SCALE - position.netEntryValue;
+    const pnl =
+      (marketPrice * position.netQuantity) / QUANTITY_SCALE -
+      position.netEntryValue;
     const unrealizedLoss = pnl < 0n ? -pnl : 0n;
     const notional = (marketPrice * absQty) / QUANTITY_SCALE;
 
@@ -177,7 +182,10 @@ export class PerpsVenue implements Venue {
     // lands inside the [MM, IM] band (or a full close on a deep crash).
     const params = await this.getMMParams();
     const [snapshot, marketPrice] = await Promise.all([
-      readAccountSnapshot(this.chain, this.config, user, { params, logger: this.logger }),
+      readAccountSnapshot(this.chain, this.config, user, {
+        params,
+        logger: this.logger,
+      }),
       this.chain.publicClient.readContract({
         address: this.config.perps.address,
         abi: HashPowerPerpsDEXAbi,
@@ -192,7 +200,8 @@ export class PerpsVenue implements Venue {
       return { skipped: "nothingToClose" };
     }
 
-    const absNet = snapshot.perp.netQty < 0n ? -snapshot.perp.netQty : snapshot.perp.netQty;
+    const absNet =
+      snapshot.perp.netQty < 0n ? -snapshot.perp.netQty : snapshot.perp.netQty;
     this.logger.info(
       { user, closeQty, absNet, fullClose: closeQty >= absNet },
       "Perps reduceToTarget: partial close down to the IM buffer",

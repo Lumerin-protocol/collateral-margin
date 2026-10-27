@@ -1,6 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { BaseError, ContractFunctionRevertedError, getAddress, type Address } from "viem";
+import {
+  BaseError,
+  ContractFunctionRevertedError,
+  getAddress,
+  type Address,
+} from "viem";
 import type pino from "pino";
 import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
@@ -33,7 +38,13 @@ function makeConfig(over: Partial<Config["backstop"]> = {}): Config {
     perps: { address: PERPS },
     keeper: { dryRun: true },
     coordinator: { confirmationBlocks: 1 },
-    backstop: { enabled: true, intervalMs: 60_000, maxQtyFutures: 0n, maxQtyPerps: 0n, ...over },
+    backstop: {
+      enabled: true,
+      intervalMs: 60_000,
+      maxQtyFutures: 0n,
+      maxQtyPerps: 0n,
+      ...over,
+    },
   } as unknown as Config;
 }
 
@@ -54,7 +65,9 @@ function makeChain(state: {
 }) {
   const simulated: Call[] = [];
   const chain = {
-    account: { address: "0x0000000000000000000000000000000000009999" as Address },
+    account: {
+      address: "0x0000000000000000000000000000000000009999" as Address,
+    },
     publicClient: {
       readContract: async (call: Call) => {
         if (call.functionName === "getActiveExpirationDates") {
@@ -95,8 +108,16 @@ describe("BackstopUnwinder", () => {
     assert.equal(simulated.length, 2);
     const futures = simulated.find((c) => c.address === FUTURES);
     const perps = simulated.find((c) => c.address === PERPS);
-    assert.deepEqual(futures?.args, [LIVE_EXPIRY, 7n], "matured leg left to settlement");
-    assert.deepEqual(perps?.args, [40_000_000n], "absolute size, side chosen on-chain");
+    assert.deepEqual(
+      futures?.args,
+      [LIVE_EXPIRY, 7n],
+      "matured leg left to settlement",
+    );
+    assert.deepEqual(
+      perps?.args,
+      [40_000_000n],
+      "absolute size, side chosen on-chain",
+    );
     assert.ok(simulated.every((c) => c.functionName === "unwindBackstop"));
 
     const stats = unwinder.snapshot();
@@ -116,8 +137,13 @@ describe("BackstopUnwinder", () => {
       silentLogger,
     );
     await unwinder.tick();
-    assert.deepEqual(simulated.find((c) => c.address === FUTURES)?.args, [LIVE_EXPIRY, 3n]);
-    assert.deepEqual(simulated.find((c) => c.address === PERPS)?.args, [1_000_000n]);
+    assert.deepEqual(simulated.find((c) => c.address === FUTURES)?.args, [
+      LIVE_EXPIRY,
+      3n,
+    ]);
+    assert.deepEqual(simulated.find((c) => c.address === PERPS)?.args, [
+      1_000_000n,
+    ]);
   });
 
   it("does nothing when the backstop is flat everywhere", async () => {
@@ -132,7 +158,8 @@ describe("BackstopUnwinder", () => {
     const { chain, simulated } = makeChain({
       futuresLegs: { [String(LIVE_EXPIRY)]: 4n },
       perpsNet: 1n,
-      simulateFails: (call) => (call.address === FUTURES ? "TimeInForceNotFilled" : undefined),
+      simulateFails: (call) =>
+        call.address === FUTURES ? "TimeInForceNotFilled" : undefined,
     });
     const unwinder = new BackstopUnwinder(chain, makeConfig(), silentLogger);
     await unwinder.tick();

@@ -116,7 +116,7 @@ describe("EthUsdFeed", () => {
     const feed = new EthUsdFeed(chain, FEED_ADDR, SILENT, 60_000);
     await feed.refresh();
     chain.publicClient.readContract = async ({ functionName }) => {
-      if (functionName === "decimals") return 8 as any;
+      if (functionName === "decimals") return 8 as never;
       throw new Error("rpc down");
     };
     // Next refresh fails, but `current()` should still report the prior price.

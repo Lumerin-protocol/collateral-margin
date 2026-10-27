@@ -5,7 +5,10 @@ import type pino from "pino";
 import { ParticipantTracker } from "../../src/discovery/tracker.ts";
 import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
-import { BACKSTOP_ADDR, INSURANCE_FUND_ADDR } from "../../src/protocolAccounts.ts";
+import {
+  BACKSTOP_ADDR,
+  INSURANCE_FUND_ADDR,
+} from "../../src/protocolAccounts.ts";
 
 function userAt(idx: number): Address {
   return getAddress(`0x${(idx + 1).toString(16).padStart(40, "0")}` as Address);
@@ -62,7 +65,9 @@ function makeChain(
   } as unknown as Chain;
 }
 
-function makeConfig(opts: { discoveryMode?: Config["chain"]["discoveryMode"] } = {}): Config {
+function makeConfig(
+  opts: { discoveryMode?: Config["chain"]["discoveryMode"] } = {},
+): Config {
   return {
     chain: { discoveryMode: opts.discoveryMode ?? "events" },
     vault: { address: userAt(100) },
@@ -85,7 +90,11 @@ describe("ParticipantTracker: add / remove / list", () => {
     t.onAdded((u) => added.push(u));
     assert.equal(t.add(INSURANCE_FUND_ADDR), false);
     assert.equal(t.add(BACKSTOP_ADDR), false);
-    assert.equal(t.add(BACKSTOP_ADDR.toLowerCase() as Address), false, "case-insensitive");
+    assert.equal(
+      t.add(BACKSTOP_ADDR.toLowerCase() as Address),
+      false,
+      "case-insensitive",
+    );
     assert.equal(t.size(), 0);
     assert.deepEqual(added, []);
     assert.equal(t.has(BACKSTOP_ADDR), false);
@@ -96,7 +105,11 @@ describe("ParticipantTracker: add / remove / list", () => {
     const lower = userAt(0).toLowerCase() as Address;
     const upper = getAddress(userAt(0));
     assert.equal(t.add(lower), true);
-    assert.equal(t.add(upper), false, "same address, different case = same entry");
+    assert.equal(
+      t.add(upper),
+      false,
+      "same address, different case = same entry",
+    );
     assert.equal(t.size(), 1);
     assert.ok(t.has(lower));
     assert.ok(t.has(upper));
@@ -163,7 +176,11 @@ describe("ParticipantTracker: onAdded listeners", () => {
     });
     t.onAdded(() => bCalls++);
     t.add(userAt(0));
-    assert.equal(bCalls, 1, "second listener still fired despite first throwing");
+    assert.equal(
+      bCalls,
+      1,
+      "second listener still fired despite first throwing",
+    );
   });
 });
 
@@ -209,7 +226,11 @@ describe("ParticipantTracker: backfill", () => {
           toBlock: bigint;
           eventName: string;
         }) => {
-          calls.push({ from: params.fromBlock, to: params.toBlock, eventName: params.eventName });
+          calls.push({
+            from: params.fromBlock,
+            to: params.toBlock,
+            eventName: params.eventName,
+          });
           return [];
         },
         watchContractEvent: () => () => undefined,
@@ -240,7 +261,8 @@ describe("ParticipantTracker: backfill", () => {
         getContractEvents: async ({ eventName }: { eventName: string }) => {
           calls++;
           if (eventName === "Deposited") throw new Error("rpc down");
-          if (eventName === "Transfer") return [{ args: { from: userAt(0), to: userAt(1) } }];
+          if (eventName === "Transfer")
+            return [{ args: { from: userAt(0), to: userAt(1) } }];
           return [];
         },
         watchContractEvent: () => () => undefined,
@@ -249,7 +271,10 @@ describe("ParticipantTracker: backfill", () => {
     } as unknown as Chain;
     const t = new ParticipantTracker(chain, makeConfig(), silentLogger);
     await t.backfill(0n, 1000n);
-    assert.ok(calls >= 4, "all four sources attempted despite Deposited failure");
+    assert.ok(
+      calls >= 4,
+      "all four sources attempted despite Deposited failure",
+    );
     // Transfer still ingested.
     assert.equal(t.size(), 2);
   });
@@ -270,7 +295,11 @@ describe("ParticipantTracker: backfill", () => {
         readContract: async () => [],
       },
     } as unknown as Chain;
-    const t = new ParticipantTracker(chain, makeConfig({ discoveryMode: "webhook" }), silentLogger);
+    const t = new ParticipantTracker(
+      chain,
+      makeConfig({ discoveryMode: "webhook" }),
+      silentLogger,
+    );
     await t.backfill(0n, 1000n);
     assert.equal(calls, 0, "no RPC traffic in webhook-only mode");
   });
@@ -295,7 +324,10 @@ describe("ParticipantTracker: backfill", () => {
 
   it("rejects non-positive chunkSize", async () => {
     const t = new ParticipantTracker(makeChain(), makeConfig(), silentLogger);
-    await assert.rejects(() => t.backfill(0n, 0n), /chunkSize must be positive/);
+    await assert.rejects(
+      () => t.backfill(0n, 0n),
+      /chunkSize must be positive/,
+    );
   });
 
   it("reads perps OrderCreated from `participant`, not `user`", async () => {
@@ -335,7 +367,11 @@ describe("ParticipantTracker: discoveryMode gating", () => {
         readContract: async () => [],
       },
     } as unknown as Chain;
-    const t = new ParticipantTracker(chain, makeConfig({ discoveryMode: "webhook" }), silentLogger);
+    const t = new ParticipantTracker(
+      chain,
+      makeConfig({ discoveryMode: "webhook" }),
+      silentLogger,
+    );
     await t.start();
     assert.equal(watchCount, 0, "no subscriptions opened in webhook-only mode");
   });
@@ -351,7 +387,11 @@ describe("ParticipantTracker: discoveryMode gating", () => {
         readContract: async () => [],
       },
     } as unknown as Chain;
-    const t = new ParticipantTracker(chain, makeConfig({ discoveryMode: "events" }), silentLogger);
+    const t = new ParticipantTracker(
+      chain,
+      makeConfig({ discoveryMode: "events" }),
+      silentLogger,
+    );
     await t.start();
     assert.ok(watchCount >= 4, `expected ≥4 subscriptions, got ${watchCount}`);
     t.stop();

@@ -268,7 +268,9 @@ function optionalBigInt(name: string): bigint | undefined {
 function requireAddress(name: string): Address {
   const value = requireEnv(name);
   if (!isAddress(value, { strict: false })) {
-    throw new Error(`Environment variable ${name} must be a valid EVM address, got "${value}"`);
+    throw new Error(
+      `Environment variable ${name} must be a valid EVM address, got "${value}"`,
+    );
   }
   return getAddress(value);
 }
@@ -282,7 +284,9 @@ function optionalAddress(name: string): Address | undefined {
   const raw = process.env[name];
   if (raw === undefined || raw.trim() === "") return undefined;
   if (!isAddress(raw, { strict: false })) {
-    throw new Error(`Environment variable ${name} must be a valid EVM address, got "${raw}"`);
+    throw new Error(
+      `Environment variable ${name} must be a valid EVM address, got "${raw}"`,
+    );
   }
   return getAddress(raw);
 }
@@ -294,7 +298,9 @@ function optionalAddress(name: string): Address | undefined {
 function requireHex(name: string, bytes?: number): Hex {
   const value = requireEnv(name);
   if (!isHex(value)) {
-    throw new Error(`Environment variable ${name} must be a 0x-prefixed hex string`);
+    throw new Error(
+      `Environment variable ${name} must be a 0x-prefixed hex string`,
+    );
   }
   if (bytes !== undefined && value.length !== 2 + bytes * 2) {
     throw new Error(
@@ -319,7 +325,9 @@ function parseAddressList(name: string): readonly Address[] {
     .filter((s) => s.length > 0);
   return parts.map((value) => {
     if (!isAddress(value, { strict: false })) {
-      throw new Error(`Environment variable ${name} contains invalid address "${value}"`);
+      throw new Error(
+        `Environment variable ${name} contains invalid address "${value}"`,
+      );
     }
     return getAddress(value);
   });
@@ -362,7 +370,9 @@ export function loadConfig(): Config {
   const discoveryMode = (process.env.DISCOVERY_MODE ??
     "events") as Config["chain"]["discoveryMode"];
   if (!["events", "webhook", "both"].includes(discoveryMode)) {
-    throw new Error(`DISCOVERY_MODE must be one of events|webhook|both, got "${discoveryMode}"`);
+    throw new Error(
+      `DISCOVERY_MODE must be one of events|webhook|both, got "${discoveryMode}"`,
+    );
   }
 
   const network = requireNetwork();
@@ -404,17 +414,27 @@ export function loadConfig(): Config {
       webhookUrl: process.env.ALERT_WEBHOOK_URL,
       dedupeMs: Number(process.env.ALERT_DEDUPE_MS ?? "300000"),
       imWarnUtilization: Number(process.env.ALERT_IM_WARN_UTIL ?? "0.85"),
-      imCriticalUtilization: Number(process.env.ALERT_IM_CRITICAL_UTIL ?? "0.95"),
+      imCriticalUtilization: Number(
+        process.env.ALERT_IM_CRITICAL_UTIL ?? "0.95",
+      ),
     },
     triggers: {
       webhookPort: Number(process.env.WEBHOOK_PORT ?? "3001"),
       webhookSecret: process.env.WEBHOOK_SECRET,
     },
     coordinator: {
-      maxConcurrentAccounts: Number(process.env.COORDINATOR_MAX_CONCURRENT ?? "1"),
-      confirmationBlocks: Number(process.env.COORDINATOR_CONFIRMATION_BLOCKS ?? "1"),
-      retryBackoffBaseMs: Number(process.env.COORDINATOR_RETRY_BACKOFF_BASE_MS ?? "1000"),
-      retryBackoffMaxMs: Number(process.env.COORDINATOR_RETRY_BACKOFF_MAX_MS ?? "300000"),
+      maxConcurrentAccounts: Number(
+        process.env.COORDINATOR_MAX_CONCURRENT ?? "1",
+      ),
+      confirmationBlocks: Number(
+        process.env.COORDINATOR_CONFIRMATION_BLOCKS ?? "1",
+      ),
+      retryBackoffBaseMs: Number(
+        process.env.COORDINATOR_RETRY_BACKOFF_BASE_MS ?? "1000",
+      ),
+      retryBackoffMaxMs: Number(
+        process.env.COORDINATOR_RETRY_BACKOFF_MAX_MS ?? "300000",
+      ),
     },
     runtime: {
       // Default 60s. The predictive coordinator drives the hot-path
@@ -424,15 +444,21 @@ export function loadConfig(): Config {
       sweepIntervalMs: Number(process.env.SWEEP_INTERVAL_MS ?? "60000"),
       healthPort: Number(process.env.HEALTH_PORT ?? "3000"),
       logLevel: (process.env.LOG_LEVEL as pino.Level) ?? "info",
-      balanceCheckIntervalMs: Number(process.env.BALANCE_CHECK_INTERVAL_MS ?? "300000"),
+      balanceCheckIntervalMs: Number(
+        process.env.BALANCE_CHECK_INTERVAL_MS ?? "300000",
+      ),
       // Defaults: 10 mETH low, 1 mETH critical. Override via env vars
       // when running on a chain with materially different gas prices.
       balanceLowWei: BigInt(process.env.BALANCE_LOW_WEI ?? "10000000000000000"),
-      balanceCriticalWei: BigInt(process.env.BALANCE_CRITICAL_WEI ?? "1000000000000000"),
+      balanceCriticalWei: BigInt(
+        process.env.BALANCE_CRITICAL_WEI ?? "1000000000000000",
+      ),
     },
     delivery: {
       enabled: process.env.DELIVERY_KEEPER_ENABLED === "true",
-      sweepIntervalMs: Number(process.env.DELIVERY_SWEEP_INTERVAL_MS ?? "60000"),
+      sweepIntervalMs: Number(
+        process.env.DELIVERY_SWEEP_INTERVAL_MS ?? "60000",
+      ),
       settleDelayMs: Number(process.env.DELIVERY_SETTLE_DELAY_MS ?? "5000"),
       bootstrapUsers: parseAddressList("DELIVERY_BOOTSTRAP_USERS"),
       maxBatchSize: Number(process.env.DELIVERY_MAX_BATCH_SIZE ?? "50"),

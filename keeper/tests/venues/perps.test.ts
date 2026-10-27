@@ -158,10 +158,7 @@ describe("perps venue: readPositions", () => {
   it("computes PnL directly from net entry value without average-price rounding", async () => {
     const qty = 1_500_000n;
     const chain = makeChainStub({
-      multicall: () => [
-        { netQuantity: qty, netEntryValue: 151n },
-        100n,
-      ],
+      multicall: () => [{ netQuantity: qty, netEntryValue: 151n }, 100n],
     });
     const venue = new PerpsVenue(chain, makeConfigStub(), silentLogger);
     const [pos] = await venue.readPositions(USER);

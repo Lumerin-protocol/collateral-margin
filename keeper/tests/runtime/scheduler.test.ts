@@ -5,7 +5,11 @@ import type pino from "pino";
 import { Scheduler } from "../../src/runtime/scheduler.ts";
 import { CoordinatorQueue } from "../../src/coordinator/queue.ts";
 import { ParticipantTracker } from "../../src/discovery/tracker.ts";
-import { Notifier, type Alert, type WebhookPoster } from "../../src/alert/notifier.ts";
+import {
+  Notifier,
+  type Alert,
+  type WebhookPoster,
+} from "../../src/alert/notifier.ts";
 import type { CoordinatorExecutor } from "../../src/coordinator/executor.ts";
 import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
@@ -44,12 +48,18 @@ function makeConfig(opts: { warn?: number; critical?: number } = {}): Config {
  * `healthScript` returns the per-user (balance, im, mm) triples in the order
  * the multicall is built.
  */
-function makeChain(opts: { healthScript: Array<{ balance: bigint; im: bigint; mm: bigint }> }): Chain {
+function makeChain(opts: {
+  healthScript: Array<{ balance: bigint; im: bigint; mm: bigint }>;
+}): Chain {
   return {
     publicClient: {
       multicall: async ({ contracts }: { contracts: readonly unknown[] }) => {
         const userCount = contracts.length / 3;
-        assert.equal(userCount, opts.healthScript.length, "script length matches user count");
+        assert.equal(
+          userCount,
+          opts.healthScript.length,
+          "script length matches user count",
+        );
         return opts.healthScript.flatMap((h) => [h.balance, h.im, h.mm]);
       },
       readContract: async () => [],
@@ -58,7 +68,10 @@ function makeChain(opts: { healthScript: Array<{ balance: bigint; im: bigint; mm
   } as unknown as Chain;
 }
 
-function makeKickableExecutor(): { executor: CoordinatorExecutor; kicks: number } {
+function makeKickableExecutor(): {
+  executor: CoordinatorExecutor;
+  kicks: number;
+} {
   let kicks = 0;
   const executor = {
     kick: () => {
@@ -75,7 +88,10 @@ function makeKickableExecutor(): { executor: CoordinatorExecutor; kicks: number 
   };
 }
 
-function makeRecordingPoster(): { poster: WebhookPoster; sent: Alert["severity"][] } {
+function makeRecordingPoster(): {
+  poster: WebhookPoster;
+  sent: Alert["severity"][];
+} {
   const sent: Alert["severity"][] = [];
   const poster: WebhookPoster = async (_url, payload) => {
     sent.push((payload as { severity: Alert["severity"] }).severity);
@@ -87,14 +103,24 @@ describe("Scheduler.runSweep: alert ladder", () => {
   it("fires `critical` for IM utilization ≥ critical threshold", async () => {
     // balance=1000, im=950 → util 0.95 (== critical)
     const config = makeConfig({ warn: 0.85, critical: 0.95 });
-    const chain = makeChain({ healthScript: [{ balance: 1000n, im: 950n, mm: 800n }] });
+    const chain = makeChain({
+      healthScript: [{ balance: 1000n, im: 950n, mm: 800n }],
+    });
     const tracker = new ParticipantTracker(chain, config, silentLogger);
     tracker.add(userAt(0));
     const queue = new CoordinatorQueue();
     const { poster, sent } = makeRecordingPoster();
     const notifier = new Notifier(config, silentLogger, { poster });
     const { executor } = makeKickableExecutor();
-    const scheduler = new Scheduler(chain, config, tracker, queue, executor, notifier, silentLogger);
+    const scheduler = new Scheduler(
+      chain,
+      config,
+      tracker,
+      queue,
+      executor,
+      notifier,
+      silentLogger,
+    );
 
     await scheduler.runSweep();
 
@@ -103,7 +129,9 @@ describe("Scheduler.runSweep: alert ladder", () => {
 
   it("fires `warn` for warn ≤ utilization < critical", async () => {
     const config = makeConfig({ warn: 0.85, critical: 0.95 });
-    const chain = makeChain({ healthScript: [{ balance: 1000n, im: 900n, mm: 800n }] }); // util=0.9
+    const chain = makeChain({
+      healthScript: [{ balance: 1000n, im: 900n, mm: 800n }],
+    }); // util=0.9
     const tracker = new ParticipantTracker(chain, config, silentLogger);
     tracker.add(userAt(0));
     const { poster, sent } = makeRecordingPoster();
@@ -125,7 +153,9 @@ describe("Scheduler.runSweep: alert ladder", () => {
 
   it("does not alert when utilization is below the warn threshold", async () => {
     const config = makeConfig({ warn: 0.85, critical: 0.95 });
-    const chain = makeChain({ healthScript: [{ balance: 1000n, im: 800n, mm: 700n }] }); // util=0.8
+    const chain = makeChain({
+      healthScript: [{ balance: 1000n, im: 800n, mm: 700n }],
+    }); // util=0.8
     const tracker = new ParticipantTracker(chain, config, silentLogger);
     tracker.add(userAt(0));
     const { poster, sent } = makeRecordingPoster();
@@ -159,23 +189,43 @@ describe("Scheduler.runSweep: queue + executor wiring", () => {
     const tracker = new ParticipantTracker(chain, config, silentLogger);
     tracker.addBatch([userAt(0), userAt(1), userAt(2)]);
     const queue = new CoordinatorQueue();
-    const notifier = new Notifier(config, silentLogger, { poster: async () => undefined });
+    const notifier = new Notifier(config, silentLogger, {
+      poster: async () => undefined,
+    });
     const { executor } = makeKickableExecutor();
-    const scheduler = new Scheduler(chain, config, tracker, queue, executor, notifier, silentLogger);
+    const scheduler = new Scheduler(
+      chain,
+      config,
+      tracker,
+      queue,
+      executor,
+      notifier,
+      silentLogger,
+    );
 
     await scheduler.runSweep();
 
-    assert.equal(queue.size(), 2, "healthy user dropped, only the two underwater enqueued");
+    assert.equal(
+      queue.size(),
+      2,
+      "healthy user dropped, only the two underwater enqueued",
+    );
     assert.equal(queue.pop()?.user, userAt(2), "most-underwater first");
     assert.equal(queue.pop()?.user, userAt(1));
   });
 
   it("a recovered user is removed from the queue on the next sweep", async () => {
     const config = makeConfig();
-    const tracker = new ParticipantTracker(makeChain({ healthScript: [] }), config, silentLogger);
+    const tracker = new ParticipantTracker(
+      makeChain({ healthScript: [] }),
+      config,
+      silentLogger,
+    );
     tracker.add(userAt(0));
     const queue = new CoordinatorQueue();
-    const notifier = new Notifier(config, silentLogger, { poster: async () => undefined });
+    const notifier = new Notifier(config, silentLogger, {
+      poster: async () => undefined,
+    });
     const { executor } = makeKickableExecutor();
 
     // First sweep — user is underwater.
@@ -202,7 +252,11 @@ describe("Scheduler.runSweep: queue + executor wiring", () => {
       silentLogger,
     );
     await scheduler.runSweep();
-    assert.equal(queue.size(), 0, "healthy upsert removes the user from the queue");
+    assert.equal(
+      queue.size(),
+      0,
+      "healthy upsert removes the user from the queue",
+    );
   });
 
   it("kicks the executor only when at least one underwater user is found", async () => {
@@ -213,7 +267,9 @@ describe("Scheduler.runSweep: queue + executor wiring", () => {
     const tracker = new ParticipantTracker(chain, config, silentLogger);
     tracker.add(userAt(0));
     const tracking = makeKickableExecutor();
-    const notifier = new Notifier(config, silentLogger, { poster: async () => undefined });
+    const notifier = new Notifier(config, silentLogger, {
+      poster: async () => undefined,
+    });
     const scheduler = new Scheduler(
       chain,
       config,
@@ -235,7 +291,9 @@ describe("Scheduler.runSweep: queue + executor wiring", () => {
     const tracker = new ParticipantTracker(chain, config, silentLogger);
     tracker.add(userAt(0));
     const tracking = makeKickableExecutor();
-    const notifier = new Notifier(config, silentLogger, { poster: async () => undefined });
+    const notifier = new Notifier(config, silentLogger, {
+      poster: async () => undefined,
+    });
     const scheduler = new Scheduler(
       chain,
       config,
@@ -264,7 +322,9 @@ describe("Scheduler.runSweep: queue + executor wiring", () => {
     } as unknown as Chain;
     const tracker = new ParticipantTracker(chain, config, silentLogger);
     const tracking = makeKickableExecutor();
-    const notifier = new Notifier(config, silentLogger, { poster: async () => undefined });
+    const notifier = new Notifier(config, silentLogger, {
+      poster: async () => undefined,
+    });
     const scheduler = new Scheduler(
       chain,
       config,

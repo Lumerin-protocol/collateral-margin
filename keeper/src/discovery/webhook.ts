@@ -1,4 +1,9 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import { isAddress, type Address } from "viem";
 import type pino from "pino";
 import type { Config } from "../config.ts";
@@ -30,7 +35,11 @@ export class WebhookIngester {
   private readonly logger: pino.Logger;
   private server: Server | undefined;
 
-  constructor(config: Config, tracker: ParticipantTracker, logger: pino.Logger) {
+  constructor(
+    config: Config,
+    tracker: ParticipantTracker,
+    logger: pino.Logger,
+  ) {
     this.config = config;
     this.tracker = tracker;
     this.logger = logger.child({ component: "webhook" });
@@ -42,7 +51,7 @@ export class WebhookIngester {
       return;
     }
     const port = this.config.triggers.webhookPort;
-    this.server = createServer((req, res) => {
+    const server = createServer((req, res) => {
       this.handleRequest(req, res).catch((err) => {
         this.logger.error({ err }, "request handler threw");
         if (!res.headersSent) {
@@ -51,11 +60,12 @@ export class WebhookIngester {
         }
       });
     });
+    this.server = server;
     await new Promise<void>((resolve, reject) => {
       const onError = (err: Error) => reject(err);
-      this.server!.once("error", onError);
-      this.server!.listen(port, () => {
-        this.server!.off("error", onError);
+      server.once("error", onError);
+      server.listen(port, () => {
+        server.off("error", onError);
         this.logger.info({ port }, "webhook ingester listening");
         resolve();
       });
@@ -83,7 +93,10 @@ export class WebhookIngester {
     return added;
   }
 
-  private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  private async handleRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
     if (req.method !== "POST") {
       res.statusCode = 405;
       res.setHeader("allow", "POST");

@@ -48,7 +48,9 @@ interface ChainStubOptions {
   receipt?: TransactionReceipt;
 }
 
-function makeChain(opts: ChainStubOptions): Chain & { calls: { writeCount: number } } {
+function makeChain(
+  opts: ChainStubOptions,
+): Chain & { calls: { writeCount: number } } {
   const calls = { writeCount: 0 };
   const chain = {
     account: { address: LIQUIDATOR } as { address: Address },
@@ -62,7 +64,8 @@ function makeChain(opts: ChainStubOptions): Chain & { calls: { writeCount: numbe
     walletClient: {
       writeContract: async () => {
         calls.writeCount++;
-        if (opts.writeHash === undefined) throw new Error("test bug: writeHash not provided");
+        if (opts.writeHash === undefined)
+          throw new Error("test bug: writeHash not provided");
         return opts.writeHash;
       },
     },
@@ -97,7 +100,10 @@ function makeRevert(errorName: string): BaseError {
  * `topics` and `data` correctly for `parseEventLogs` to decode them —
  * everything else viem ignores.
  */
-function makeReceiptWithFees(eventName: "Liquidated" | "PositionLiquidated", fees: bigint[]): TransactionReceipt {
+function makeReceiptWithFees(
+  eventName: "Liquidated" | "PositionLiquidated",
+  fees: bigint[],
+): TransactionReceipt {
   const logs = fees.map((fee) => {
     if (eventName === "Liquidated") {
       const topics = encodeEventTopics({
@@ -131,7 +137,9 @@ function makeReceiptWithFees(eventName: "Liquidated" | "PositionLiquidated", fee
 
 describe("tx/liquidate: simulate-only path", () => {
   it("returns { skipped: 'notLiquidatable' } by default when simulate reverts with a recoverable error", async () => {
-    const chain = makeChain({ simulate: { error: makeRevert("NotLiquidatable") } });
+    const chain = makeChain({
+      simulate: { error: makeRevert("NotLiquidatable") },
+    });
     const out = await sendLiquidate({
       chain,
       config: makeConfig(),
@@ -143,11 +151,17 @@ describe("tx/liquidate: simulate-only path", () => {
       feeEventName: "Liquidated",
     });
     assert.deepEqual(out, { skipped: "notLiquidatable" });
-    assert.equal(chain.calls.writeCount, 0, "writeContract must not be called on revert");
+    assert.equal(
+      chain.calls.writeCount,
+      0,
+      "writeContract must not be called on revert",
+    );
   });
 
   it("maps recoverable reverts via mapSkip when supplied", async () => {
-    const chain = makeChain({ simulate: { error: makeRevert("OrdersStillOpen") } });
+    const chain = makeChain({
+      simulate: { error: makeRevert("OrdersStillOpen") },
+    });
     const out = await sendLiquidate({
       chain,
       config: makeConfig(),
@@ -157,13 +171,18 @@ describe("tx/liquidate: simulate-only path", () => {
       functionName: "liquidate",
       args: [TARGET_USER],
       feeEventName: "Liquidated",
-      mapSkip: (e) => (e === "OrdersStillOpen" ? ("ordersStillOpen" as const) : ("notLiquidatable" as const)),
+      mapSkip: (e) =>
+        e === "OrdersStillOpen"
+          ? ("ordersStillOpen" as const)
+          : ("notLiquidatable" as const),
     });
     assert.deepEqual(out, { skipped: "ordersStillOpen" });
   });
 
   it("rethrows unknown reverts (we should not silently swallow them)", async () => {
-    const chain = makeChain({ simulate: { error: makeRevert("UnknownProblem") } });
+    const chain = makeChain({
+      simulate: { error: makeRevert("UnknownProblem") },
+    });
     await assert.rejects(
       sendLiquidate({
         chain,
@@ -271,7 +290,7 @@ describe("tx/liquidate: broadcast + fee aggregation", () => {
       address: VENUE,
       abi: VENUE_ABI,
       functionName: "liquidateOrder",
-      args: [TARGET_USER, "0x" + "00".repeat(32)],
+      args: [TARGET_USER, `0x${"00".repeat(32)}`],
       feeEventName: null,
     });
     assert.ok("feeEarned" in out);
@@ -281,17 +300,35 @@ describe("tx/liquidate: broadcast + fee aggregation", () => {
 
 describe("tx/liquidate: __testing internals", () => {
   it("decodeRecoverableRevert returns the errorName for known reverts", () => {
-    assert.equal(__testing.decodeRecoverableRevert(makeRevert("NotLiquidatable")), "NotLiquidatable");
-    assert.equal(__testing.decodeRecoverableRevert(makeRevert("OrdersStillOpen")), "OrdersStillOpen");
+    assert.equal(
+      __testing.decodeRecoverableRevert(makeRevert("NotLiquidatable")),
+      "NotLiquidatable",
+    );
+    assert.equal(
+      __testing.decodeRecoverableRevert(makeRevert("OrdersStillOpen")),
+      "OrdersStillOpen",
+    );
   });
 
   it("decodeRecoverableRevert returns undefined for unknown reverts", () => {
-    assert.equal(__testing.decodeRecoverableRevert(makeRevert("UnknownProblem")), undefined);
+    assert.equal(
+      __testing.decodeRecoverableRevert(makeRevert("UnknownProblem")),
+      undefined,
+    );
   });
 
   it("decodeRecoverableRevert returns undefined for non-Base errors (RPC failure, etc.)", () => {
-    assert.equal(__testing.decodeRecoverableRevert(new Error("rpc")), undefined);
-    assert.equal(__testing.decodeRecoverableRevert("not even an error"), undefined);
-    assert.equal(__testing.decodeRecoverableRevert(new AbiFunctionNotFoundError("foo")), undefined);
+    assert.equal(
+      __testing.decodeRecoverableRevert(new Error("rpc")),
+      undefined,
+    );
+    assert.equal(
+      __testing.decodeRecoverableRevert("not even an error"),
+      undefined,
+    );
+    assert.equal(
+      __testing.decodeRecoverableRevert(new AbiFunctionNotFoundError("foo")),
+      undefined,
+    );
   });
 });

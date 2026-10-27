@@ -8,7 +8,10 @@ import {
   type TransactionReceipt,
 } from "viem";
 import type pino from "pino";
-import { DeliveryCoordinator, __testing } from "../../src/delivery/coordinator.ts";
+import {
+  DeliveryCoordinator,
+  __testing,
+} from "../../src/delivery/coordinator.ts";
 import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
 import type {
@@ -85,7 +88,9 @@ function settledLog(user: Address, expirationAt: bigint): SettledLog {
 interface ChainStubOptions {
   blockNumber?: bigint;
   blockTimestamp?: bigint;
-  simulate?: (args: readonly unknown[]) => { request: { ok: true } } | { error: unknown };
+  simulate?: (
+    args: readonly unknown[],
+  ) => { request: { ok: true } } | { error: unknown };
   writeHash?: Hex;
   receipt?: TransactionReceipt;
   watchers?: {
@@ -97,7 +102,10 @@ interface ChainStubOptions {
     PositionSettled?: SettledLog[];
   };
   activeDatesByUser?: Record<string, readonly bigint[]>;
-  positionsByUserDate?: Record<string, { netQuantity: bigint; netEntryValue: bigint }>;
+  positionsByUserDate?: Record<
+    string,
+    { netQuantity: bigint; netEntryValue: bigint }
+  >;
   readContractError?: (functionName: string) => Error | undefined;
   writes?: Array<{ functionName: string; args: readonly unknown[] }>;
 }
@@ -107,22 +115,34 @@ function posKey(user: Address, expirationAt: bigint): string {
 }
 
 function makeChain(opts: ChainStubOptions = {}): Chain {
-  const writeHash = opts.writeHash ?? ("0x" + "11".repeat(32) as Hex);
-  const receipt = opts.receipt ?? ({
-    blockNumber: 1n,
-    gasUsed: 100_000n,
-    effectiveGasPrice: 1n,
-    status: "success",
-  } as unknown as TransactionReceipt);
+  const writeHash = opts.writeHash ?? (`0x${"11".repeat(32)}` as Hex);
+  const receipt =
+    opts.receipt ??
+    ({
+      blockNumber: 1n,
+      gasUsed: 100_000n,
+      effectiveGasPrice: 1n,
+      status: "success",
+    } as unknown as TransactionReceipt);
 
   return {
-    account: { address: "0x0000000000000000000000000000000000009999" as Address },
+    account: {
+      address: "0x0000000000000000000000000000000000009999" as Address,
+    },
     publicClient: {
       getBlockNumber: async () => opts.blockNumber ?? 100n,
       getBlock: async () => ({
-        timestamp: opts.blockTimestamp ?? BigInt(Math.floor(Date.now() / 1000) + 10_000_000),
+        timestamp:
+          opts.blockTimestamp ??
+          BigInt(Math.floor(Date.now() / 1000) + 10_000_000),
       }),
-      readContract: async ({ functionName, args }: { functionName: string; args?: readonly unknown[] }) => {
+      readContract: async ({
+        functionName,
+        args,
+      }: {
+        functionName: string;
+        args?: readonly unknown[];
+      }) => {
         const err = opts.readContractError?.(functionName);
         if (err) throw err;
         if (functionName === "getActiveExpirationDates") {
@@ -134,7 +154,10 @@ function makeChain(opts: ChainStubOptions = {}): Chain {
       multicall: async ({
         contracts,
       }: {
-        contracts: readonly { functionName: string; args?: readonly unknown[] }[];
+        contracts: readonly {
+          functionName: string;
+          args?: readonly unknown[];
+        }[];
       }) => {
         return contracts.map((c) => {
           if (c.functionName === "getUserPosition") {
@@ -142,7 +165,10 @@ function makeChain(opts: ChainStubOptions = {}): Chain {
             const expirationAt = c.args?.[1] as bigint;
             const key = `${user}:${expirationAt}`;
             return (
-              opts.positionsByUserDate?.[key] ?? { netQuantity: 0n, netEntryValue: 0n }
+              opts.positionsByUserDate?.[key] ?? {
+                netQuantity: 0n,
+                netEntryValue: 0n,
+              }
             );
           }
           if (c.functionName === "getActiveExpirationDates") {
@@ -153,8 +179,10 @@ function makeChain(opts: ChainStubOptions = {}): Chain {
         });
       },
       getContractEvents: async ({ eventName }: { eventName: string }) => {
-        if (eventName === "OrderMatched") return opts.history?.OrderMatched ?? [];
-        if (eventName === "PositionSettled") return opts.history?.PositionSettled ?? [];
+        if (eventName === "OrderMatched")
+          return opts.history?.OrderMatched ?? [];
+        if (eventName === "PositionSettled")
+          return opts.history?.PositionSettled ?? [];
         return [];
       },
       watchContractEvent: ({
@@ -165,15 +193,21 @@ function makeChain(opts: ChainStubOptions = {}): Chain {
         onLogs: (logs: readonly unknown[]) => void;
       }) => {
         if (eventName === "OrderMatched" && opts.watchers) {
-          opts.watchers.orderMatched = onLogs as (logs: readonly MatchedLog[]) => void;
+          opts.watchers.orderMatched = onLogs as (
+            logs: readonly MatchedLog[],
+          ) => void;
         }
         if (eventName === "PositionSettled" && opts.watchers) {
-          opts.watchers.positionSettled = onLogs as (logs: readonly SettledLog[]) => void;
+          opts.watchers.positionSettled = onLogs as (
+            logs: readonly SettledLog[],
+          ) => void;
         }
         return () => undefined;
       },
       simulateContract: async ({ args }: { args: readonly unknown[] }) => {
-        const result = opts.simulate?.(args) ?? { request: { ok: true as const } };
+        const result = opts.simulate?.(args) ?? {
+          request: { ok: true as const },
+        };
         if ("error" in result) throw result.error;
         return result;
       },
@@ -210,11 +244,16 @@ describe("delivery/coordinator: trackKey helpers", () => {
           abi: [{ type: "error", name: "PositionNotExists", inputs: [] }],
           data: "0x08c379a0",
         } as never);
-        (inner as { data?: { errorName?: string } }).data = { errorName: "PositionNotExists" };
+        (inner as { data?: { errorName?: string } }).data = {
+          errorName: "PositionNotExists",
+        };
         return fn(inner) ? inner : null;
       },
     });
-    assert.equal(__testing.decodeRecoverableRevert(synthetic), "PositionNotExists");
+    assert.equal(
+      __testing.decodeRecoverableRevert(synthetic),
+      "PositionNotExists",
+    );
     void err;
   });
 });
@@ -255,9 +294,7 @@ describe("delivery/coordinator: event indexing", () => {
     const coord = new DeliveryCoordinator(chain, makeConfig(), silentLogger);
     await coord.start();
 
-    watchers.orderMatched?.([
-      matchedLog(USER_A, USER_B, DELIVERY_A, -1n, 1n),
-    ]);
+    watchers.orderMatched?.([matchedLog(USER_A, USER_B, DELIVERY_A, -1n, 1n)]);
     assert.equal(coord.size(), 2);
     assert.equal(coord.has(USER_A, DELIVERY_A), true);
     assert.equal(coord.has(USER_B, DELIVERY_A), true);
@@ -304,7 +341,10 @@ describe("delivery/coordinator: bootstrap + settle", () => {
       },
       positionsByUserDate: {
         [posKey(USER_A, DELIVERY_A)]: { netQuantity: 1n, netEntryValue: 50n },
-        [posKey(USER_A, DELIVERY_B)]: { netQuantity: -2n, netEntryValue: -100n },
+        [posKey(USER_A, DELIVERY_B)]: {
+          netQuantity: -2n,
+          netEntryValue: -100n,
+        },
       },
       // Keep sweep idle — timestamps far in the future.
       blockTimestamp: 1n,
@@ -328,7 +368,8 @@ describe("delivery/coordinator: bootstrap + settle", () => {
 
   it("settleBatch simulates settlePosition(user, expirationAt) and drops on success", async () => {
     const simulated: unknown[][] = [];
-    const writes: Array<{ functionName: string; args: readonly unknown[] }> = [];
+    const writes: Array<{ functionName: string; args: readonly unknown[] }> =
+      [];
     const chain = makeChain({
       // Far-future timestamp so bootstrap's trailing sweep is a no-op.
       blockTimestamp: 1n,
@@ -342,7 +383,11 @@ describe("delivery/coordinator: bootstrap + settle", () => {
       },
       writes,
     });
-    const coord = new DeliveryCoordinator(chain, makeConfig({ settleDelayMs: 0 }), silentLogger);
+    const coord = new DeliveryCoordinator(
+      chain,
+      makeConfig({ settleDelayMs: 0 }),
+      silentLogger,
+    );
     await coord.bootstrapFromUsers([USER_A]);
     assert.equal(coord.has(USER_A, DELIVERY_A), true);
     await coord.settle(USER_A, DELIVERY_A);
@@ -381,10 +426,18 @@ describe("delivery/coordinator: bootstrap + settle", () => {
 describe("delivery/coordinator: isTransientTxError", () => {
   it("matches common mempool / nonce failures", () => {
     assert.equal(
-      __testing.isTransientTxError(new Error("replacement transaction underpriced")),
+      __testing.isTransientTxError(
+        new Error("replacement transaction underpriced"),
+      ),
       true,
     );
-    assert.equal(__testing.isTransientTxError(new Error("nonce too low")), true);
-    assert.equal(__testing.isTransientTxError(new Error("execution reverted")), false);
+    assert.equal(
+      __testing.isTransientTxError(new Error("nonce too low")),
+      true,
+    );
+    assert.equal(
+      __testing.isTransientTxError(new Error("execution reverted")),
+      false,
+    );
   });
 });

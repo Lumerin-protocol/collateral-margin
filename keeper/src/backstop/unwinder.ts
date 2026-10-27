@@ -162,8 +162,7 @@ export class BackstopUnwinder {
     })) as readonly { netQuantity: bigint }[];
 
     const nowSec = BigInt(Math.floor(Date.now() / 1000));
-    for (let i = 0; i < expirationAts.length; i++) {
-      const expirationAt = expirationAts[i]!;
+    for (const [i, expirationAt] of expirationAts.entries()) {
       const net = positions[i]?.netQuantity ?? 0n;
       if (net === 0n) continue;
       legs.push({ venue: "futures", expirationAt, netQuantity: net });
@@ -180,7 +179,11 @@ export class BackstopUnwinder {
         address,
         abi: HashPowerFuturesAbi as Abi,
         args: [expirationAt, qty],
-        label: { expirationAt: expirationAt.toString(), net: net.toString(), qty: qty.toString() },
+        label: {
+          expirationAt: expirationAt.toString(),
+          net: net.toString(),
+          qty: qty.toString(),
+        },
       });
     }
   }
@@ -239,7 +242,10 @@ export class BackstopUnwinder {
     }
     this.stats.unwinds++;
     this.stats.feeEarned += result.feeEarned;
-    logger.info({ feeEarned: result.feeEarned.toString() }, "backstop unwind confirmed");
+    logger.info(
+      { feeEarned: result.feeEarned.toString() },
+      "backstop unwind confirmed",
+    );
   }
 }
 

@@ -107,5 +107,7 @@ for await (const pkgRoot of iterPackageRoots(nodeModules)) {
 }
 
 if (patched > 0) {
-  console.log(`[fix-placeholder-manifests] patched ${patched} placeholder package.json file(s)`);
+  console.log(
+    `[fix-placeholder-manifests] patched ${patched} placeholder package.json file(s)`,
+  );
 }

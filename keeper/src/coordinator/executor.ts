@@ -29,7 +29,10 @@ export class CoordinatorExecutor {
   private running = false;
   private readonly inflight = new Set<string>();
   /** Users whose last `planner.run` threw: consecutive failures and when they may run again. */
-  private readonly backoff = new Map<string, { failures: number; retryAt: number }>();
+  private readonly backoff = new Map<
+    string,
+    { failures: number; retryAt: number }
+  >();
   private readonly retryTimers = new Set<ReturnType<typeof setTimeout>>();
   private wakeUp: (() => void) | undefined;
   private workers: Promise<void>[] = [];
@@ -59,9 +62,17 @@ export class CoordinatorExecutor {
       return;
     }
     this.running = true;
-    const concurrency = Math.max(1, this.config.coordinator.maxConcurrentAccounts);
-    this.logger.info({ maxConcurrent: concurrency }, "CoordinatorExecutor.start");
-    this.workers = Array.from({ length: concurrency }, (_, i) => this.workerLoop(i));
+    const concurrency = Math.max(
+      1,
+      this.config.coordinator.maxConcurrentAccounts,
+    );
+    this.logger.info(
+      { maxConcurrent: concurrency },
+      "CoordinatorExecutor.start",
+    );
+    this.workers = Array.from({ length: concurrency }, (_, i) =>
+      this.workerLoop(i),
+    );
     await Promise.resolve();
   }
 
@@ -115,7 +126,10 @@ export class CoordinatorExecutor {
         // Hard failure (RPC down, unrecoverable revert). Re-queue, but hold the
         // account back for a growing delay so it cannot starve the rest of the queue.
         const retryInMs = this.scheduleRetry(next.user);
-        log.error({ user: next.user, err, retryInMs }, "Planner.run threw — re-queueing with backoff");
+        log.error(
+          { user: next.user, err, retryInMs },
+          "Planner.run threw — re-queueing with backoff",
+        );
         this.queue.upsert(next);
       } finally {
         this.inflight.delete(next.user);
@@ -128,7 +142,10 @@ export class CoordinatorExecutor {
   private scheduleRetry(user: string): number {
     const { retryBackoffBaseMs, retryBackoffMaxMs } = this.config.coordinator;
     const failures = (this.backoff.get(user)?.failures ?? 0) + 1;
-    const delay = Math.min(retryBackoffBaseMs * 2 ** (failures - 1), retryBackoffMaxMs);
+    const delay = Math.min(
+      retryBackoffBaseMs * 2 ** (failures - 1),
+      retryBackoffMaxMs,
+    );
     this.backoff.set(user, { failures, retryAt: Date.now() + delay });
     const timer = setTimeout(() => {
       this.retryTimers.delete(timer);
@@ -154,7 +171,10 @@ export class CoordinatorExecutor {
   private popNonInflight(): ReturnType<CoordinatorQueue["pop"]> {
     const skipped: NonNullable<ReturnType<CoordinatorQueue["pop"]>>[] = [];
     let next: ReturnType<CoordinatorQueue["pop"]> = this.queue.pop();
-    while (next !== undefined && (this.inflight.has(next.user) || this.isBackingOff(next.user))) {
+    while (
+      next !== undefined &&
+      (this.inflight.has(next.user) || this.isBackingOff(next.user))
+    ) {
       skipped.push(next);
       next = this.queue.pop();
     }
@@ -173,7 +193,11 @@ export class CoordinatorExecutor {
     });
   }
 
-  private handleOutcome(user: string, outcome: PlanOutcome, log: pino.Logger): void {
+  private handleOutcome(
+    user: string,
+    outcome: PlanOutcome,
+    log: pino.Logger,
+  ): void {
     switch (outcome.kind) {
       case "healthy":
       case "liquidated":
@@ -190,7 +214,10 @@ export class CoordinatorExecutor {
       case "badDebt":
         // Critical alert path is owned by the notifier — we surface the
         // outcome via logs and let the alert layer subscribe to those.
-        log.error({ user, outcome }, "BadDebt: insurance fund must absorb residual");
+        log.error(
+          { user, outcome },
+          "BadDebt: insurance fund must absorb residual",
+        );
         return;
     }
   }

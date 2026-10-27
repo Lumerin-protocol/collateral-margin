@@ -5,7 +5,7 @@
  * Run:
  *   pnpm node --env-file=../.env --experimental-strip-types scripts/audit-indexer-sync.ts
  */
-import { createPublicClient, http, type Address, type Hex } from "viem";
+import { createPublicClient, http, type Address } from "viem";
 import { baseSepolia } from "viem/chains";
 import { HashPowerFuturesAbi } from "../src/abi/HashPowerFutures.ts";
 
@@ -126,7 +126,7 @@ async function main() {
     let chainLen: number;
     try {
       chainLen = await getChainPositionCount(block);
-    } catch (err) {
+    } catch {
       console.log(
         "%-12s %-10s %-10s %-10s %-10s %s",
         block,
@@ -139,7 +139,6 @@ async function main() {
       continue;
     }
 
-    const match = indexerAbs === chainLen ? "✓" : "✗ MISMATCH";
     const status = indexerAbs === chainLen ? "ok" : "MISMATCH";
 
     console.log(
@@ -148,7 +147,7 @@ async function main() {
       indexerAbs,
       chainLen,
       indexerAbs === chainLen ? "yes" : "NO",
-      t.transactionHash.slice(0, 10) + "...",
+      `${t.transactionHash.slice(0, 10)}...`,
       status,
     );
 
@@ -167,7 +166,10 @@ async function main() {
     console.log("First divergence at block %d:", firstMismatch.block);
     console.log("  tx: %s", firstMismatch.tx);
     console.log("  indexer netQuantityAfter (abs): %d", firstMismatch.indexer);
-    console.log("  chain getActiveExpirationDates().length:   %d", firstMismatch.chain);
+    console.log(
+      "  chain getActiveExpirationDates().length:   %d",
+      firstMismatch.chain,
+    );
   } else {
     console.log("No divergence detected — indexer and chain are in sync.");
   }

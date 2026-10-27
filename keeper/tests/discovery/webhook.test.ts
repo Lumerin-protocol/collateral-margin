@@ -19,7 +19,9 @@ const silentLogger = {
   error: () => undefined,
 } as unknown as pino.Logger;
 
-function makeStubs(opts: { secret?: string; mode?: Config["chain"]["discoveryMode"] } = {}): {
+function makeStubs(
+  opts: { secret?: string; mode?: Config["chain"]["discoveryMode"] } = {},
+): {
   ingester: WebhookIngester;
   tracker: ParticipantTracker;
 } {
@@ -95,11 +97,7 @@ describe("WebhookIngester: payload extraction", () => {
 
   it("ignores fields with non-string types", () => {
     const addrs = __testing.extractAddresses({
-      data: [
-        { user: 12345 },
-        { participant: null },
-        { seller: userAt(0) },
-      ],
+      data: [{ user: 12345 }, { participant: null }, { seller: userAt(0) }],
     });
     assert.deepEqual(addrs, [userAt(0)]);
   });
@@ -118,7 +116,11 @@ describe("WebhookIngester: ingest -> tracker", () => {
     tracker.add(userAt(0));
 
     const added = ingester.ingest({
-      data: [{ user: userAt(0) }, { user: userAt(1) }, { participant: userAt(2) }],
+      data: [
+        { user: userAt(0) },
+        { user: userAt(1) },
+        { participant: userAt(2) },
+      ],
     });
 
     assert.equal(added, 2, "userAt(0) was already tracked");
