@@ -753,9 +753,9 @@ describe("CollateralVault", () => {
       };
     }
 
-    it("reports version 1.4.0", async () => {
+    it("reports version 1.4.1", async () => {
       const { vault } = await networkHelpers.loadFixture(deployVaultFixture);
-      assert.equal(await vault.read.VERSION(), "1.4.0");
+      assert.equal(await vault.read.VERSION(), "1.4.1");
     });
 
     describe("settleTransfer", () => {
@@ -845,6 +845,26 @@ describe("CollateralVault", () => {
         assert.equal(await vault.read.accountDebt([alice.account.address]), 0n);
         assert.equal(await vault.read.balanceOf([alice.account.address]), 20n);
         assert.equal(await vault.read.insuranceDebt(), 20n);
+        await assertInvariants(vault, usdc);
+      });
+
+      it("cancels backstop debt before limiting its payout to real fund balance", async () => {
+        const { vault, usdc, engine, fund, owner } = await ready();
+        const backstop = await vault.read.BACKSTOP_ADDR();
+        await vault.write.depositInsuranceFund([10n], { account: owner.account });
+        await vault.write.settleTransfer([backstop, fund, 30n], { account: engine.account });
+
+        const { result: moved } = await vault.simulate.settleTransfer([fund, backstop, 50n], {
+          account: engine.account.address,
+        });
+        await vault.write.settleTransfer([fund, backstop, 50n], { account: engine.account });
+
+        assert.equal(moved, 40n);
+        assert.equal(await vault.read.accountDebt([backstop]), 0n);
+        assert.equal(await vault.read.balanceOf([backstop]), 10n);
+        assert.equal(await vault.read.traderBadDebtTotal(), 0n);
+        assert.equal(await vault.read.insuranceDebt(), 0n);
+        assert.equal(await vault.read.halted(), false);
         await assertInvariants(vault, usdc);
       });
 

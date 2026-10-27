@@ -88,7 +88,7 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     address public constant BACKSTOP_ADDR = 0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB;
     /// @dev Upper bound for each backstop parameter (25%).
     uint16 public constant MAX_BACKSTOP_PARAM_BPS = 2_500;
-    string public constant VERSION = "1.4.0";
+    string public constant VERSION = "1.4.1";
 
     IERC20 public collateralToken;
     mapping(address => bool) public authorizedCallers;
@@ -331,9 +331,10 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     ///      When the receiver is the insurance fund it increases `traderBadDebtTotal` and the
     ///      payer's `accountDebt`.
     ///      Insurance-fund payer: first cancel up to `amount` of the receiver's `accountDebt`,
-    ///      without moving or minting anything, then pay the rest from the fund balance and
-    ///      mint any remainder to `to`, adding it to `insuranceDebt`. That mint is the borrow
-    ///      record. Borrowing is uncapped so the receiver is always paid in full.
+    ///      without moving or minting anything, then settle the rest. The protocol backstop
+    ///      receives only real fund balance; for any other receiver, mint any remainder to
+    ///      `to` and add it to `insuranceDebt`. That mint is the borrow record. Borrowing is
+    ///      uncapped so an external receiver is always paid in full.
     ///      A borrow that leaves `insuranceDebt` above the effective cap latches `halted`
     ///      after the payout. The transaction completes; a later withdrawal in the same
     ///      transaction reverts and rolls the payout back.
@@ -353,12 +354,12 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
             uint256 owed = amount - cancelled;
 
             uint256 bal = balanceOf(from);
-            if (bal >= owed) {
-                if (owed > 0) _transfer(from, to, owed);
-                return amount;
-            }
-            if (bal > 0) _transfer(from, to, bal);
-            uint256 shortfall = owed - bal;
+            uint256 paid = bal < owed ? bal : owed;
+            if (paid > 0) _transfer(from, to, paid);
+            if (paid == owed) return amount;
+            if (to == BACKSTOP_ADDR) return cancelled + paid;
+
+            uint256 shortfall = owed - paid;
             _mint(to, shortfall);
             insuranceDebt += shortfall;
             if (insuranceDebt > effectiveInsuranceDebtCap()) _latchHalt(HaltReason.CAP);

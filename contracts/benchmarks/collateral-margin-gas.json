@@ -30,21 +30,28 @@
     },
     {
       "function": "settleTransfer(address,address,uint256)",
-      "gas": "35240",
+      "gas": "35277",
       "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::fund payout cancels account debt",
       "kind": "transaction",
       "scenario": "fund payout cancels account debt"
     },
     {
       "function": "settleTransfer(address,address,uint256)",
-      "gas": "98807",
+      "gas": "98887",
       "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::fund shortfall borrows insurance debt",
       "kind": "transaction",
       "scenario": "fund shortfall borrows insurance debt"
     },
     {
       "function": "settleTransfer(address,address,uint256)",
-      "gas": "44973",
+      "gas": "57437",
+      "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::fund shortfall pays backstop only real balance",
+      "kind": "transaction",
+      "scenario": "fund shortfall pays backstop only real balance"
+    },
+    {
+      "function": "settleTransfer(address,address,uint256)",
+      "gas": "45019",
       "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::insurance fund pays a winner",
       "kind": "transaction",
       "scenario": "insurance fund pays a winner"
