@@ -150,6 +150,10 @@ export interface Config {
     maxConcurrentAccounts: number;
     /** Block-confirmation depth waited for before re-running planner on a target. */
     confirmationBlocks: number;
+    /** First retry delay after `planner.run` throws for an account; doubles per failure. */
+    retryBackoffBaseMs: number;
+    /** Ceiling on the per-account retry delay. */
+    retryBackoffMaxMs: number;
   };
   runtime: {
     /** Cadence of the periodic re-evaluation sweep in ms. Event-driven path is primary. */
@@ -409,6 +413,8 @@ export function loadConfig(): Config {
     coordinator: {
       maxConcurrentAccounts: Number(process.env.COORDINATOR_MAX_CONCURRENT ?? "1"),
       confirmationBlocks: Number(process.env.COORDINATOR_CONFIRMATION_BLOCKS ?? "1"),
+      retryBackoffBaseMs: Number(process.env.COORDINATOR_RETRY_BACKOFF_BASE_MS ?? "1000"),
+      retryBackoffMaxMs: Number(process.env.COORDINATOR_RETRY_BACKOFF_MAX_MS ?? "300000"),
     },
     runtime: {
       // Default 60s. The predictive coordinator drives the hot-path

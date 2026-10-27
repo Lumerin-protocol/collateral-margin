@@ -260,6 +260,8 @@ function buildConfig(
     coordinator: {
       maxConcurrentAccounts: 1,
       confirmationBlocks: 0,
+      retryBackoffBaseMs: 1_000,
+      retryBackoffMaxMs: 300_000,
     },
     runtime: {
       sweepIntervalMs: overrides.sweepIntervalMs ?? 60_000,

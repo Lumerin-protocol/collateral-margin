@@ -43,7 +43,7 @@ const STUB_CONFIG: Config = {
   },
   alerts: { dedupeMs: 0, imWarnUtilization: 0.8, imCriticalUtilization: 0.95 },
   triggers: { webhookPort: 0 },
-  coordinator: { maxConcurrentAccounts: 1, confirmationBlocks: 0 },
+  coordinator: { maxConcurrentAccounts: 1, confirmationBlocks: 0, retryBackoffBaseMs: 1_000, retryBackoffMaxMs: 300_000 },
   runtime: {
     sweepIntervalMs: 60_000,
     healthPort: 0,

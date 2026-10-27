@@ -19,12 +19,18 @@ import type { Planner, PlanOutcome } from "./planner.ts";
  *   - `start()` spawns the worker loop(s) and returns immediately.
  *   - The loop polls `queue.pop()`. When the queue drains it sleeps on the
  *     next `kick()` — events / sweeps wake it up.
+ *   - An account whose plan throws stays queued but is skipped for
+ *     `retryBackoffBaseMs`, doubling per consecutive failure up to
+ *     `retryBackoffMaxMs`; a timer kicks the workers when it may run again.
  *   - `stop()` flips `running=false`. Outstanding plans finish; no new ones
  *     are picked up.
  */
 export class CoordinatorExecutor {
   private running = false;
   private readonly inflight = new Set<string>();
+  /** Users whose last `planner.run` threw: consecutive failures and when they may run again. */
+  private readonly backoff = new Map<string, { failures: number; retryAt: number }>();
+  private readonly retryTimers = new Set<ReturnType<typeof setTimeout>>();
   private wakeUp: (() => void) | undefined;
   private workers: Promise<void>[] = [];
 
@@ -73,6 +79,8 @@ export class CoordinatorExecutor {
 
   async stop(): Promise<void> {
     this.running = false;
+    for (const t of this.retryTimers) clearTimeout(t);
+    this.retryTimers.clear();
     this.kick();
     await Promise.allSettled(this.workers);
     this.workers = [];
@@ -101,11 +109,13 @@ export class CoordinatorExecutor {
       this.inflight.add(next.user);
       try {
         const outcome = await this.planner.run(next.user);
+        this.backoff.delete(next.user);
         this.handleOutcome(next.user, outcome, log);
       } catch (err) {
-        // Hard failure (RPC down, unrecoverable revert). Log and re-queue
-        // with the stale snapshot so the next sweep refreshes health.
-        log.error({ user: next.user, err }, "Planner.run threw — re-queueing");
+        // Hard failure (RPC down, unrecoverable revert). Re-queue, but hold the
+        // account back for a growing delay so it cannot starve the rest of the queue.
+        const retryInMs = this.scheduleRetry(next.user);
+        log.error({ user: next.user, err, retryInMs }, "Planner.run threw — re-queueing with backoff");
         this.queue.upsert(next);
       } finally {
         this.inflight.delete(next.user);
@@ -114,16 +124,37 @@ export class CoordinatorExecutor {
     log.debug("worker loop exited");
   }
 
+  /** Records a failure for `user` and wakes the workers once its backoff expires. */
+  private scheduleRetry(user: string): number {
+    const { retryBackoffBaseMs, retryBackoffMaxMs } = this.config.coordinator;
+    const failures = (this.backoff.get(user)?.failures ?? 0) + 1;
+    const delay = Math.min(retryBackoffBaseMs * 2 ** (failures - 1), retryBackoffMaxMs);
+    this.backoff.set(user, { failures, retryAt: Date.now() + delay });
+    const timer = setTimeout(() => {
+      this.retryTimers.delete(timer);
+      this.kick();
+    }, delay);
+    timer.unref();
+    this.retryTimers.add(timer);
+    return delay;
+  }
+
+  private isBackingOff(user: string): boolean {
+    const entry = this.backoff.get(user);
+    return entry !== undefined && entry.retryAt > Date.now();
+  }
+
   /**
    * Pops the head of the queue, but skips entries already in flight on
-   * another worker. We re-queue any skipped entries so they aren't lost.
+   * another worker or still backing off after a failure. We re-queue any
+   * skipped entries so they aren't lost.
    *
    * Returns the head entry, or undefined when nothing is workable.
    */
   private popNonInflight(): ReturnType<CoordinatorQueue["pop"]> {
     const skipped: NonNullable<ReturnType<CoordinatorQueue["pop"]>>[] = [];
     let next: ReturnType<CoordinatorQueue["pop"]> = this.queue.pop();
-    while (next !== undefined && this.inflight.has(next.user)) {
+    while (next !== undefined && (this.inflight.has(next.user) || this.isBackingOff(next.user))) {
       skipped.push(next);
       next = this.queue.pop();
     }
