@@ -183,13 +183,17 @@ afterEach(async () => {
 // ─────────────────────────────────────────────────────────────────────────
 
 describe("ParticipantTracker (live RPC)", () => {
-  it("discovers a user from a Vault.Deposited event", {
+  it("does not track a user who has only a Vault.Deposited event", {
     timeout: 30_000,
   }, async () => {
     const ctx = await loadFixture(aliceDepositFixture, testClient);
     keeper = buildKeeper(ctx);
     await keeper.start();
-    await discoverUser(keeper, ctx.accounts.alice.account.address);
+    await keeper.tracker.backfill(0n, 1_000n);
+    assert.equal(
+      keeper.participants.has(ctx.accounts.alice.account.address),
+      false,
+    );
   });
 });
 
@@ -300,8 +304,8 @@ describe("Multi-account coordination", () => {
     await keeper.start();
 
     // Both users are pre-existing in the fixture snapshot; seed them
-    // directly into the tracker rather than relying on the `Deposited`
-    // watcher to back-scan. This test is about queue priority and the
+    // directly into the tracker rather than relying on a backfill.
+    // This test is about queue priority and the
     // executor's serial behavior, not tracker discovery (covered above).
     keeper.tracker.add(ctx.worseUser);
     keeper.tracker.add(ctx.betterUser);

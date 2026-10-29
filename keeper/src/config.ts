@@ -51,14 +51,11 @@ export interface Config {
     /** Logical network selector. Drives both `rpcUrl` and the viem chain object. */
     network: NetworkName;
     rpcUrl: string;
-    /** Optional: prefer to use Goldsky webhooks over RPC event subscriptions. */
-    discoveryMode: "events" | "webhook" | "both";
     /**
      * Block to start the one-shot historical backfill from on startup. We
-     * scan vault / perps / futures discovery events from this block up to
-     * the head, then hand off to the live `watchContractEvent` stream.
-     * Undefined disables backfill (forward-only mode — only safe if the
-     * webhook ingester or a long-running prior keeper has primed the set).
+     * scan perps discovery events from this block up to the head, then hand
+     * off to the live `watchContractEvent` stream. Undefined disables
+     * backfill (forward-only mode — only safe on a brand-new deployment).
      */
     backfillFromBlock?: bigint;
     /**
@@ -138,12 +135,6 @@ export interface Config {
     imWarnUtilization: number;
     /** Same, but a critical alert and ranks higher in the queue. */
     imCriticalUtilization: number;
-  };
-  triggers: {
-    /** Webhook ingestion port. Only used when discoveryMode includes "webhook". */
-    webhookPort: number;
-    /** Optional shared secret required by `Authorization: Bearer <token>` from Goldsky. */
-    webhookSecret?: string;
   };
   coordinator: {
     /** Max accounts processed concurrently — 1 means strict serial coordination. */
@@ -367,14 +358,6 @@ function resolveRpcUrl(network: NetworkName): string {
 }
 
 export function loadConfig(): Config {
-  const discoveryMode = (process.env.DISCOVERY_MODE ??
-    "events") as Config["chain"]["discoveryMode"];
-  if (!["events", "webhook", "both"].includes(discoveryMode)) {
-    throw new Error(
-      `DISCOVERY_MODE must be one of events|webhook|both, got "${discoveryMode}"`,
-    );
-  }
-
   const network = requireNetwork();
 
   return {
@@ -382,7 +365,6 @@ export function loadConfig(): Config {
     chain: {
       network,
       rpcUrl: resolveRpcUrl(network),
-      discoveryMode,
       backfillFromBlock: optionalBigInt("BACKFILL_FROM_BLOCK"),
       backfillChunkSize: BigInt(process.env.BACKFILL_CHUNK_SIZE ?? "10000"),
     },
@@ -417,10 +399,6 @@ export function loadConfig(): Config {
       imCriticalUtilization: Number(
         process.env.ALERT_IM_CRITICAL_UTIL ?? "0.95",
       ),
-    },
-    triggers: {
-      webhookPort: Number(process.env.WEBHOOK_PORT ?? "3001"),
-      webhookSecret: process.env.WEBHOOK_SECRET,
     },
     coordinator: {
       maxConcurrentAccounts: Number(

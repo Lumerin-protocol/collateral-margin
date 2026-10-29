@@ -88,7 +88,6 @@ export class Healthcheck {
     return {
       version: this.config.version,
       network: this.config.chain.network,
-      discoveryMode: this.config.chain.discoveryMode,
       dryRun: String(this.config.keeper.dryRun),
       deliveryEnabled: String(this.config.delivery.enabled),
       backstopUnwindEnabled: String(this.config.backstop.enabled),

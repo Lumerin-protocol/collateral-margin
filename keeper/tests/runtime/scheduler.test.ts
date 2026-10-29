@@ -28,7 +28,6 @@ const silentLogger = {
 
 function makeConfig(opts: { warn?: number; critical?: number } = {}): Config {
   return {
-    chain: { discoveryMode: "events" },
     vault: { address: userAt(100) },
     perps: { address: userAt(101) },
     futures: { address: userAt(102) },

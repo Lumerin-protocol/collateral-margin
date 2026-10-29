@@ -24,7 +24,6 @@ const STUB_CONFIG: Config = {
   chain: {
     network: "hardhat",
     rpcUrl: "http://stub",
-    discoveryMode: "events",
     backfillChunkSize: 10_000n,
   },
   vault: { address: "0x0000000000000000000000000000000000000001" },
@@ -45,7 +44,6 @@ const STUB_CONFIG: Config = {
     minProfitMargin: 0n,
   },
   alerts: { dedupeMs: 0, imWarnUtilization: 0.8, imCriticalUtilization: 0.95 },
-  triggers: { webhookPort: 0 },
   coordinator: {
     maxConcurrentAccounts: 1,
     confirmationBlocks: 0,
@@ -289,7 +287,6 @@ describe("runtime/healthcheck: info", () => {
     assert.deepEqual(hc.info(), {
       version: "test",
       network: "hardhat",
-      discoveryMode: "events",
       dryRun: "false",
       deliveryEnabled: "false",
       backstopUnwindEnabled: "false",

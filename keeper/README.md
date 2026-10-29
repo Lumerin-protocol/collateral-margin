@@ -91,10 +91,9 @@ src/
     predictiveIndex.ts # Sorted threshold index (down ASC, up ASC) with O(log) crossings
     coordinator.ts     # PriceFeed + tracker → index → CoordinatorQueue + executor.kick
   discovery/
-    tracker.ts         # Vault/Perps participant set + one-shot startup backfill
+    tracker.ts         # Perps participant set + one-shot startup backfill
     futuresExpiryIndex.ts # Bounded participant/position cache per Futures expiry
     combined.ts        # Deduplicated union consumed by scheduler/predictor
-    webhook.ts         # Optional Goldsky webhook ingester (Bearer-token auth)
   venues/
     types.ts           # Venue interface (multi-market aware: perps, futures, options)
     perps.ts           # Perps adapter (HashPowerPerpsDEX)
@@ -157,16 +156,13 @@ See `src/config.ts` for the authoritative shape. The minimum-viable set:
 | `HASHPRICE_USDC_ADDRESS`       | yes      | HashpriceUSD aggregator (current spot) |
 | `BTC_USDC_FEED_ADDRESS`        | yes      | Chainlink BTC/USDC AggregatorProxy (event source) |
 | `PRICE_MOVE_TRIGGER_BPS`       | no       | Skip ticks below this fractional move (default `1`) |
-| `DISCOVERY_MODE`               | no       | `events` (default) \| `webhook` \| `both` |
-| `BACKFILL_FROM_BLOCK`          | no       | Block to start the one-shot Vault/Perps startup backfill. Futures independently replays the bounded lifetime of active and previous expiries. |
+| `BACKFILL_FROM_BLOCK`          | no       | Block to start the one-shot Perps startup backfill (vault events add no participants). Futures independently replays the bounded lifetime of active and previous expiries. |
 | `BACKFILL_CHUNK_SIZE`          | no       | Per-`getLogs` page size for backfill. Default `10000` (most public RPC limit). |
 | `DRY_RUN`                      | no       | `true` to skip on-chain broadcasts     |
 | `ALERT_WEBHOOK_URL`            | no       | Slack/Discord/PagerDuty endpoint       |
 | `ALERT_DEDUPE_MS`              | no       | Dedupe window per (severity, user, market). Default `300_000` |
 | `ALERT_IM_WARN_UTIL`           | no       | IM utilization triggering warn alert. Default `0.85`         |
 | `ALERT_IM_CRITICAL_UTIL`       | no       | IM utilization triggering critical alert. Default `0.95`     |
-| `WEBHOOK_PORT`                 | no       | Goldsky ingestion port. Default `3001` |
-| `WEBHOOK_SECRET`               | no       | `Authorization: Bearer <token>` shared secret |
 | `COORDINATOR_MAX_CONCURRENT`   | no       | Concurrent plans. Default `1` (safe)   |
 | `COORDINATOR_CONFIRMATION_BLOCKS` | no    | Block confirmations after each tx. Default `1` |
 | `COORDINATOR_RETRY_BACKOFF_BASE_MS` | no  | First retry delay for an account whose plan threw; doubles per failure. Default `1000` |
@@ -257,8 +253,7 @@ Suites cover:
 - `alert/notifier` — dedupe window, severity promotion, ordering, retry-on-failure
 - `discovery/tracker` — checksum dedupe, `onAdded` / `onChanged` listeners, startup backfill
 - `discovery/futuresExpiryIndex` — scoped replay, per-expiry partitioning, rollover retention
-- `discovery/combined` — deduplicated Vault/Perps + Futures participant union
-- `discovery/webhook` — payload extraction across `data` / `records` / array shapes
+- `discovery/combined` — deduplicated Perps + Futures participant union
 - `runtime/scheduler` — alert ladder thresholds, queue upsert + executor kick wiring
 - `oracle/priceFeed` — rebase to token decimals (oracle already quotes 1 PH/s·day), dispatch, no-op on unchanged answer
 - `predict/mm` — net delta, stress, perp/futures unrealized loss, mm/im surplus

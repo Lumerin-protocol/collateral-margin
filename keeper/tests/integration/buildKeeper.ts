@@ -34,7 +34,7 @@ import { HARDHAT_PRIVATE_KEYS } from "./deployStack.ts";
 /**
  * Wires the keeper component graph against an already-deployed stack.
  * Mirrors the order in `keeper/src/index.ts::main` but skips bits the test
- * doesn't need (Healthcheck HTTP server, WebhookIngester, SIGINT handlers).
+ * doesn't need (Healthcheck HTTP server, SIGINT handlers).
  *
  * Every component sees the SAME `Chain` instance; the `publicClient` is
  * configured with a 100ms polling interval so `watchContractEvent` reacts
@@ -231,7 +231,6 @@ function buildConfig(
     chain: {
       network: "hardhat",
       rpcUrl: stack.rpcUrl,
-      discoveryMode: "events",
       backfillChunkSize: 10_000n,
     },
     vault: { address: stack.addresses.vault },
@@ -253,9 +252,6 @@ function buildConfig(
       dedupeMs: 0, // disable dedupe for tests — every alert fires
       imWarnUtilization: 0.8,
       imCriticalUtilization: 0.95,
-    },
-    triggers: {
-      webhookPort: 0,
     },
     coordinator: {
       maxConcurrentAccounts: 1,
