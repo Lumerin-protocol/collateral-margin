@@ -355,9 +355,10 @@ export class DeliveryCoordinator {
       "delivery sweep: settling",
     );
 
+    const ordered = await this.orderLosersFirst(candidates);
     const max = Math.max(1, this.config.delivery.maxBatchSize);
-    for (let i = 0; i < candidates.length; i += max) {
-      const slice = candidates.slice(i, i + max);
+    for (let i = 0; i < ordered.length; i += max) {
+      const slice = ordered.slice(i, i + max);
       try {
         await this.settleBatch(slice);
       } catch (err) {
@@ -366,6 +367,66 @@ export class DeliveryCoordinator {
           "delivery sweep: batch threw — continuing with next batch",
         );
       }
+    }
+  }
+
+  /**
+   * Sorts by settlement PnL, largest loss first. Settling a winner before the losers of the
+   * same expiry can push insurance debt over the cap and halt the vault across batches.
+   * Falls back to tracked order when the reads fail.
+   */
+  private async orderLosersFirst(
+    candidates: readonly TrackedPosition[],
+  ): Promise<readonly TrackedPosition[]> {
+    try {
+      const positions = (await this.chain.publicClient.multicall({
+        contracts: candidates.map((pos) => ({
+          address: this.config.futures.address,
+          abi: HashPowerFuturesAbi,
+          functionName: "getUserPosition" as const,
+          args: [pos.user, pos.expirationAt] as const,
+        })),
+        allowFailure: false,
+      })) as readonly { netQuantity: bigint; netEntryValue: bigint }[];
+
+      const prices = new Map<bigint, bigint>();
+      let marketPrice: bigint | undefined;
+      for (const expirationAt of new Set(
+        candidates.map((pos) => pos.expirationAt),
+      )) {
+        let price = (await this.chain.publicClient.readContract({
+          address: this.config.futures.address,
+          abi: HashPowerFuturesAbi,
+          functionName: "settlementPrice",
+          args: [expirationAt],
+        })) as bigint;
+        if (price === 0n) {
+          marketPrice ??= (await this.chain.publicClient.readContract({
+            address: this.config.futures.address,
+            abi: HashPowerFuturesAbi,
+            functionName: "getMarketPrice",
+          })) as bigint;
+          price = marketPrice;
+        }
+        prices.set(expirationAt, price);
+      }
+
+      return candidates
+        .map((pos, i) => {
+          const p = positions[i];
+          const price = prices.get(pos.expirationAt) ?? 0n;
+          const pnl =
+            p === undefined ? 0n : price * p.netQuantity - p.netEntryValue;
+          return { pos, pnl };
+        })
+        .sort((a, b) => (a.pnl < b.pnl ? -1 : a.pnl > b.pnl ? 1 : 0))
+        .map(({ pos }) => pos);
+    } catch (err) {
+      this.logger.warn(
+        { err, candidates: candidates.length },
+        "delivery sweep: could not read settlement PnL — settling in tracked order",
+      );
+      return candidates;
     }
   }
 

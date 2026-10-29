@@ -37,7 +37,7 @@
     },
     {
       "function": "settleTransfer(address,address,uint256)",
-      "gas": "98887",
+      "gas": "99247",
       "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::fund shortfall borrows insurance debt",
       "kind": "transaction",
       "scenario": "fund shortfall borrows insurance debt"

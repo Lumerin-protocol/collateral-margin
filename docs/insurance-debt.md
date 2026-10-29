@@ -38,11 +38,11 @@ Worked example, empty fund and no capital:
 
 The halt latches in three ways:
 
-- A borrow takes `insuranceDebt` above the effective cap. The crossing transaction completes and pays the winner, then latches the halt. A withdrawal later in that same transaction reverts the whole transaction, including the borrow.
+- A borrow takes `insuranceDebt` above the effective cap. The crossing transaction completes and pays the winner, then latches the halt. A withdrawal later in that same transaction reverts the whole transaction, including the borrow. If a credit to the fund later in the same transaction (usually the loser of the same fill or settlement batch) brings the debt back to or under the cap, the halt clears and `VaultResumed` follows `VaultHalted` in that transaction (CF-022). Venues pay a fill's winner before its loser, so without this a zero-sum trade could halt the vault.
 - The owner calls `halt()`.
 - `setMarginEngine(address(0))` while debt is outstanding. The effective cap is 0 while the margin engine is unset.
 
-Lowering the cap below the current debt does not halt by itself. The next borrow does. The halt does not lift itself when debt falls back under the cap. `resume()` reverts unless `insuranceDebt` is at or under the effective cap.
+Lowering the cap below the current debt does not halt by itself. The next borrow does. Once a transaction ends with the debt above the cap, the halt does not lift itself when debt later falls back under it. For futures expiries the keeper settles losers before winners for the same reason; a winner who settles their own position first can still halt the vault until the keeper settles the losers and the owner resumes. `resume()` reverts unless `insuranceDebt` is at or under the effective cap.
 
 While halted:
 

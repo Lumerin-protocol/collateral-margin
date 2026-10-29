@@ -1,4 +1,5 @@
-// Upgrades CollateralVault to 1.4.1. Version 1.4.1 prevents protocol-backstop gains from
+// Upgrades CollateralVault to 1.4.2. Version 1.4.2 clears a cap halt that the same transaction
+// repays; 1.4.1 prevents protocol-backstop gains from
 // borrow-minting; 1.4.0 added `accountDebt` (starts empty: losses written off before that
 // upgrade stay in traderBadDebtTotal only). 1.3.0 added BACKSTOP_ADDR
 // and the two global backstop params (both defaulting to 0), so no initializer runs for a
@@ -31,7 +32,7 @@ import {
   logTitle,
 } from "../lib/log.ts";
 
-const EXPECTED_VERSION = "1.4.1";
+const EXPECTED_VERSION = "1.4.2";
 
 // ERC-7201 namespaced storage slot for OpenZeppelin's `Initializable`.
 const INITIALIZABLE_STORAGE_SLOT: Hex =

@@ -753,9 +753,9 @@ describe("CollateralVault", () => {
       };
     }
 
-    it("reports version 1.4.1", async () => {
+    it("reports version 1.4.2", async () => {
       const { vault } = await networkHelpers.loadFixture(deployVaultFixture);
-      assert.equal(await vault.read.VERSION(), "1.4.1");
+      assert.equal(await vault.read.VERSION(), "1.4.2");
     });
 
     describe("settleTransfer", () => {

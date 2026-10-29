@@ -106,6 +106,8 @@ interface ChainStubOptions {
     string,
     { netQuantity: bigint; netEntryValue: bigint }
   >;
+  settlementPrice?: bigint;
+  marketPrice?: bigint;
   readContractError?: (functionName: string) => Error | undefined;
   writes?: Array<{ functionName: string; args: readonly unknown[] }>;
 }
@@ -149,6 +151,9 @@ function makeChain(opts: ChainStubOptions = {}): Chain {
           const user = (args?.[0] as Address).toLowerCase();
           return opts.activeDatesByUser?.[user] ?? [];
         }
+        if (functionName === "settlementPrice")
+          return opts.settlementPrice ?? 0n;
+        if (functionName === "getMarketPrice") return opts.marketPrice ?? 0n;
         throw new Error(`unexpected readContract: ${functionName}`);
       },
       multicall: async ({
@@ -405,6 +410,46 @@ describe("delivery/coordinator: bootstrap + settle", () => {
     );
     assert.deepEqual(writes[0]?.args[1], [DELIVERY_A]);
     assert.equal(coord.has(USER_A, DELIVERY_A), false);
+  });
+
+  it("CF-022: settles an expiry's losers before its winners", async () => {
+    const watchers: ChainStubOptions["watchers"] = {};
+    const writes: Array<{ functionName: string; args: readonly unknown[] }> =
+      [];
+    const chain = makeChain({
+      watchers,
+      writes,
+      // $42.10 entry, pinned at $45.00 (6 decimals): the long wins, the short loses.
+      positionsByUserDate: {
+        [posKey(USER_A, DELIVERY_A)]: {
+          netQuantity: 1_000n,
+          netEntryValue: 42_100_000_000n,
+        },
+        [posKey(USER_B, DELIVERY_A)]: {
+          netQuantity: -1_000n,
+          netEntryValue: -42_100_000_000n,
+        },
+      },
+      settlementPrice: 45_000_000n,
+    });
+    const coord = new DeliveryCoordinator(
+      chain,
+      makeConfig({ maxBatchSize: 1 }),
+      silentLogger,
+    );
+    await coord.start();
+    watchers.orderMatched?.([
+      matchedLog(USER_A, USER_B, DELIVERY_A, 1_000n, -1_000n),
+    ]);
+
+    await coord.sweep();
+
+    assert.equal(writes.length, 2);
+    assert.deepEqual(
+      writes.map((w) => (w.args[0] as Address[])[0]?.toLowerCase()),
+      [USER_B.toLowerCase(), USER_A.toLowerCase()],
+    );
+    coord.stop();
   });
 
   it("backfill replays OrderMatched then PositionSettled", async () => {

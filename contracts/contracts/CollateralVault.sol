@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.28;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -88,7 +88,7 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     address public constant BACKSTOP_ADDR = 0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB;
     /// @dev Upper bound for each backstop parameter (25%).
     uint16 public constant MAX_BACKSTOP_PARAM_BPS = 2_500;
-    string public constant VERSION = "1.4.1";
+    string public constant VERSION = "1.4.2";
 
     IERC20 public collateralToken;
     mapping(address => bool) public authorizedCallers;
@@ -120,6 +120,10 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     /// @dev Venues realize each leg separately, so this keeps a loss realized before an
     ///      offsetting gain from being forgiven while the gain is paid in full.
     mapping(address => uint256) public accountDebt;
+
+    /// @dev A borrow in this transaction latched the CAP halt. Venues pay a fill's winner before
+    ///      its loser pays the fund, so a repayment later in the same transaction clears it.
+    bool private transient _capHaltInTx;
 
     // ── Modifiers ───────────────────────────────────────────────────────────
 
@@ -337,7 +341,8 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     ///      uncapped so an external receiver is always paid in full.
     ///      A borrow that leaves `insuranceDebt` above the effective cap latches `halted`
     ///      after the payout. The transaction completes; a later withdrawal in the same
-    ///      transaction reverts and rolls the payout back.
+    ///      transaction reverts and rolls the payout back. If a credit to the fund later in
+    ///      the same transaction brings the debt back to or under the cap, the halt clears.
     /// @return moved Amount satisfied for `to`: cancelled debt plus the amount credited.
     function settleTransfer(address from, address to, uint256 amount) external onlyAuthorized returns (uint256 moved) {
         if (amount == 0) return 0;
@@ -362,7 +367,10 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
             uint256 shortfall = owed - paid;
             _mint(to, shortfall);
             insuranceDebt += shortfall;
-            if (insuranceDebt > effectiveInsuranceDebtCap()) _latchHalt(HaltReason.CAP);
+            if (!halted && insuranceDebt > effectiveInsuranceDebtCap()) {
+                _latchHalt(HaltReason.CAP);
+                _capHaltInTx = true;
+            }
             return amount;
         }
 
@@ -472,6 +480,14 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
         uint256 repaid = value < insuranceDebt ? value : insuranceDebt;
         super._update(INSURANCE_FUND_ADDR, address(0), repaid);
         insuranceDebt -= repaid;
+        if (_capHaltInTx) {
+            uint256 cap = effectiveInsuranceDebtCap();
+            if (insuranceDebt <= cap) {
+                _capHaltInTx = false;
+                halted = false;
+                emit VaultResumed(insuranceDebt, cap);
+            }
+        }
     }
 
     function _latchHalt(HaltReason reason) internal {
