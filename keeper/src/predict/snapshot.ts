@@ -106,12 +106,17 @@ type RiskView = {
  * predictor bounds fill loss at whatever price it is evaluating. Futures books stay
  * per expiry because the venue bounds each expiry at its own price. Pending funding
  * also rides in `getRiskView`, replacing the separate `getPendingFunding` read.
+ *
+ * `settlePerpsFunding` returns the balance `liquidatePosition` checks: it settles
+ * funding first, so a receiver is credited before the OverLiquidation guard
+ * (CF-667). A payer's debit is already in `fundingOwed`.
  */
 export async function readAccountSnapshot(
   chain: Chain,
   config: Config,
   user: Address,
   check?: FillLossCheck,
+  settlePerpsFunding = false,
 ): Promise<AccountSnapshot> {
   // Uncached: a sweep re-reads right after its own liquidation tx, and viem's cached
   // block number would pin that read to the state before it.
@@ -293,7 +298,10 @@ export async function readAccountSnapshot(
   const funding = perpRisk.pendingFunding;
   const snapshot: AccountSnapshot = {
     user,
-    balance: balance as bigint,
+    balance:
+      settlePerpsFunding && funding < 0n
+        ? (balance as bigint) - funding
+        : (balance as bigint),
     accountDebt: accountDebt as bigint,
     perp: {
       netQty: perpPosition.netQuantity,

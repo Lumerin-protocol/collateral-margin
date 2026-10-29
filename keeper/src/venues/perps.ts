@@ -182,10 +182,13 @@ export class PerpsVenue implements Venue {
     // lands inside the [MM, IM] band (or a full close on a deep crash).
     const params = await this.getMMParams();
     const [snapshot, marketPrice] = await Promise.all([
-      readAccountSnapshot(this.chain, this.config, user, {
-        params,
-        logger: this.logger,
-      }),
+      readAccountSnapshot(
+        this.chain,
+        this.config,
+        user,
+        { params, logger: this.logger },
+        true,
+      ),
       this.chain.publicClient.readContract({
         address: this.config.perps.address,
         abi: HashPowerPerpsDEXAbi,
@@ -193,8 +196,8 @@ export class PerpsVenue implements Venue {
       }) as Promise<bigint>,
     ]);
 
-    // The contract's liquidation-fee payout is disabled, so the close realizes no
-    // fee — pass 0 to the solver so its balance projection matches on-chain reality.
+    // The liquidation fee (bps of the closed notional) is left out: it only lowers
+    // the post-close balance, so the account lands at or under IM, never over it.
     const closeQty = solvePerpCloseToTarget(snapshot, params, marketPrice, 0n);
     if (closeQty === 0n) {
       return { skipped: "nothingToClose" };
