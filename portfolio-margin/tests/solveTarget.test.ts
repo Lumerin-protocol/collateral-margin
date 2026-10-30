@@ -223,6 +223,32 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
     assert.ok(imSurplus(after, PARAMS, P) <= 0n, "post-close: at/under IM");
   });
 
+  it("never closes an expiry that has matured by `now`", () => {
+    const snap = futuresSnapshot({
+      balance: BALANCE,
+      futures: {
+        positions: [
+          futuresAgg(6n, ENTRY, EXPIRY_A),
+          futuresAgg(6n, ENTRY, EXPIRY_B),
+        ],
+        orders: [],
+      },
+    });
+    const closes = solveFuturesClosesToTarget(
+      snap,
+      PARAMS,
+      P_MODERATE,
+      FEE,
+      EXPIRY_A,
+    );
+    assert.ok(closes.length > 0, "the live expiry is still closable");
+    assert.ok(closes.every((c) => c.expirationAt === EXPIRY_B));
+    assert.deepEqual(
+      solveFuturesClosesToTarget(snap, PARAMS, P_MODERATE, FEE, EXPIRY_B),
+      [],
+    );
+  });
+
   it("balances proportionally when expiries differ in size", () => {
     const snap = futuresSnapshot({
       balance: BALANCE,

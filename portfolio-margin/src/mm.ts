@@ -1,4 +1,9 @@
-import type { AccountSnapshot, MarginRequirement, MMParams, RestingOrders } from "./types.ts";
+import type {
+  AccountSnapshot,
+  MarginRequirement,
+  MMParams,
+  RestingOrders,
+} from "./types.ts";
 
 /**
  * Off-chain replica of `PortfolioMarginEngine._computeMargin`, restricted to
@@ -86,7 +91,10 @@ export function netDeltaWad(snap: AccountSnapshot, params: MMParams): bigint {
  * scaled by `10^tokenDecimals`, the same convention as `netPositionDelta`: perps
  * quantity de-scaled from its own decimals, futures whole contracts.
  */
-export function orderDeltaWad(snap: AccountSnapshot, params: MMParams): {
+export function orderDeltaWad(
+  snap: AccountSnapshot,
+  params: MMParams,
+): {
   buy: bigint;
   sell: bigint;
 } {
@@ -142,8 +150,18 @@ export function worstLegStressLoss(
 ): bigint {
   const netDelta = netDeltaWad(snap, params);
   const order = orderDeltaWad(snap, params);
-  const buyLeg = stressLoss(netDelta + order.buy, shock, P, params.tokenDecimals);
-  const sellLeg = stressLoss(netDelta - order.sell, shock, P, params.tokenDecimals);
+  const buyLeg = stressLoss(
+    netDelta + order.buy,
+    shock,
+    P,
+    params.tokenDecimals,
+  );
+  const sellLeg = stressLoss(
+    netDelta - order.sell,
+    shock,
+    P,
+    params.tokenDecimals,
+  );
   return buyLeg > sellLeg ? buyLeg : sellLeg;
 }
 
@@ -196,9 +214,25 @@ export function fillLossBound(
  * divided by the venue's quantity scale and rounded up, as both venues'
  * `getRiskView` report it (futures quantities are whole contracts, scale 1).
  */
-export function venueFillLoss(orders: RestingOrders, mark: bigint, quantityScale: bigint): bigint {
-  const buy = fillLossBound(orders.buyQty, orders.buyPQ, orders.buyP2Q, mark, true);
-  const sell = fillLossBound(orders.sellQty, orders.sellPQ, orders.sellP2Q, mark, false);
+export function venueFillLoss(
+  orders: RestingOrders,
+  mark: bigint,
+  quantityScale: bigint,
+): bigint {
+  const buy = fillLossBound(
+    orders.buyQty,
+    orders.buyPQ,
+    orders.buyP2Q,
+    mark,
+    true,
+  );
+  const sell = fillLossBound(
+    orders.sellQty,
+    orders.sellPQ,
+    orders.sellP2Q,
+    mark,
+    false,
+  );
   return ceilDiv(buy, quantityScale) + ceilDiv(sell, quantityScale);
 }
 
@@ -207,8 +241,16 @@ export function venueFillLoss(orders: RestingOrders, mark: bigint, quantityScale
  * books are bounded per expiry, at the expiry's settlement price once it has one and
  * at P until then, and summed — the venue never pools expiries.
  */
-export function fillLoss(snap: AccountSnapshot, params: MMParams, P: bigint): bigint {
-  let loss = venueFillLoss(snap.perp.orders, P, 10n ** BigInt(params.perpQuantityDecimals));
+export function fillLoss(
+  snap: AccountSnapshot,
+  params: MMParams,
+  P: bigint,
+): bigint {
+  let loss = venueFillLoss(
+    snap.perp.orders,
+    P,
+    10n ** BigInt(params.perpQuantityDecimals),
+  );
   for (const book of snap.futures.orders) {
     const mark = book.settlementPrice !== 0n ? book.settlementPrice : P;
     loss += venueFillLoss(book, mark, 1n);
@@ -224,7 +266,11 @@ export function fillLoss(snap: AccountSnapshot, params: MMParams, P: bigint): bi
  * Signed and unclamped on purpose: the clamp belongs to the requirement, not the
  * venue, and where it lands differs between IM and MM. See `unrealizedLoss`.
  */
-export function perpUnrealizedPnl(snap: AccountSnapshot, params: MMParams, P: bigint): bigint {
+export function perpUnrealizedPnl(
+  snap: AccountSnapshot,
+  params: MMParams,
+  P: bigint,
+): bigint {
   if (snap.perp.netQty === 0n) return 0n;
   const perpQtyScale = 10n ** BigInt(params.perpQuantityDecimals);
   return ((P - snap.perp.entryPrice) * snap.perp.netQty) / perpQtyScale;
@@ -310,7 +356,11 @@ function requiredAt(
  * Maintenance-margin requirement at price P. Mirrors PME's
  * `_computeMargin(user, isIM=false)` for pure-delta portfolios.
  */
-export function mmRequired(snap: AccountSnapshot, params: MMParams, P: bigint): bigint {
+export function mmRequired(
+  snap: AccountSnapshot,
+  params: MMParams,
+  P: bigint,
+): bigint {
   return requiredAt(snap, params, P, "mm");
 }
 
@@ -318,16 +368,28 @@ export function mmRequired(snap: AccountSnapshot, params: MMParams, P: bigint): 
  * Initial-margin requirement at price P. Same shape, with the IM shock and the
  * per-market PnL clamp.
  */
-export function imRequired(snap: AccountSnapshot, params: MMParams, P: bigint): bigint {
+export function imRequired(
+  snap: AccountSnapshot,
+  params: MMParams,
+  P: bigint,
+): bigint {
   return requiredAt(snap, params, P, "im");
 }
 
 /** `balance - mmRequired(P)`. Negative = liquidatable. */
-export function mmSurplus(snap: AccountSnapshot, params: MMParams, P: bigint): bigint {
+export function mmSurplus(
+  snap: AccountSnapshot,
+  params: MMParams,
+  P: bigint,
+): bigint {
   return snap.balance - mmRequired(snap, params, P);
 }
 
 /** `balance - imRequired(P)`. Negative = below IM (warn / critical band). */
-export function imSurplus(snap: AccountSnapshot, params: MMParams, P: bigint): bigint {
+export function imSurplus(
+  snap: AccountSnapshot,
+  params: MMParams,
+  P: bigint,
+): bigint {
   return snap.balance - imRequired(snap, params, P);
 }

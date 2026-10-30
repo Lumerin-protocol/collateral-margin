@@ -255,8 +255,18 @@ describe("predict/mm: settled-but-unswept expiries", () => {
     return emptySnapshot({
       futures: {
         positions: [
-          { expirationAt: EXPIRY_A, netQuantity: 1n, netEntryValue: 50n, settlementPrice: 0n },
-          { expirationAt: EXPIRY_B, netQuantity: 5n, netEntryValue: 250n, settlementPrice: 60n },
+          {
+            expirationAt: EXPIRY_A,
+            netQuantity: 1n,
+            netEntryValue: 50n,
+            settlementPrice: 0n,
+          },
+          {
+            expirationAt: EXPIRY_B,
+            netQuantity: 5n,
+            netEntryValue: 250n,
+            settlementPrice: 60n,
+          },
         ],
         orders: [],
       },
@@ -282,7 +292,12 @@ describe("predict/mm: settled-but-unswept expiries", () => {
     const snap = emptySnapshot({
       futures: {
         positions: [
-          { expirationAt: EXPIRY_A, netQuantity: 2n, netEntryValue: 200n, settlementPrice: 60n },
+          {
+            expirationAt: EXPIRY_A,
+            netQuantity: 2n,
+            netEntryValue: 200n,
+            settlementPrice: 60n,
+          },
         ],
         orders: [],
       },
@@ -613,7 +628,10 @@ describe("predict/mm: mmRequired / mmSurplus / imRequired / imSurplus", () => {
   it("clamps fill loss per side rather than letting the sides offset", () => {
     // Bid at $101 and ask at $99, both one contract, mark $100. Each side is out of
     // the money by $1 and both are charged; a net-across-sides figure would be zero.
-    const orders = book([[101_000_000n, 1_000_000n]], [[99_000_000n, 1_000_000n]]);
+    const orders = book(
+      [[101_000_000n, 1_000_000n]],
+      [[99_000_000n, 1_000_000n]],
+    );
     assert.equal(venueFillLoss(orders, 100_000_000n, QTY_SCALE), 2_000_000n);
     // Move the mark above both limits: the bid is now a gain (clamped to 0) and the
     // ask's loss grows to $2.
@@ -691,13 +709,21 @@ describe("predict/mm: mmRequired / mmSurplus / imRequired / imSurplus", () => {
 
 describe("predict/mm: fillLossBound", () => {
   /** The true instant loss if every order on a side filled at `mark`. */
-  const trueLoss = (levels: readonly Level[], mark: bigint, isBuy: boolean): bigint =>
+  const trueLoss = (
+    levels: readonly Level[],
+    mark: bigint,
+    isBuy: boolean,
+  ): bigint =>
     levels.reduce((loss, [price, qty]) => {
       const adverse = isBuy ? price - mark : mark - price;
       return adverse > 0n ? loss + adverse * qty : loss;
     }, 0n);
 
-  const boundOf = (levels: readonly Level[], mark: bigint, isBuy: boolean): bigint => {
+  const boundOf = (
+    levels: readonly Level[],
+    mark: bigint,
+    isBuy: boolean,
+  ): bigint => {
     const side = book(levels);
     return fillLossBound(side.buyQty, side.buyPQ, side.buyP2Q, mark, isBuy);
   };
@@ -705,8 +731,16 @@ describe("predict/mm: fillLossBound", () => {
   it("is exact for a single price level on either side", () => {
     const level: Level[] = [[60_000_000n, 10n]];
     for (const mark of [40_000_000n, 50_000_000n, 60_000_000n, 70_000_000n]) {
-      assert.equal(boundOf(level, mark, true), trueLoss(level, mark, true), `bid at ${mark}`);
-      assert.equal(boundOf(level, mark, false), trueLoss(level, mark, false), `ask at ${mark}`);
+      assert.equal(
+        boundOf(level, mark, true),
+        trueLoss(level, mark, true),
+        `bid at ${mark}`,
+      );
+      assert.equal(
+        boundOf(level, mark, false),
+        trueLoss(level, mark, false),
+        `ask at ${mark}`,
+      );
     }
   });
 
@@ -730,7 +764,10 @@ describe("predict/mm: fillLossBound", () => {
     for (let mark = 1_000_000n; mark <= 100_000_000n; mark += 1_370_000n) {
       for (const isBuy of [true, false]) {
         const bound = boundOf(levels, mark, isBuy);
-        assert.ok(bound >= trueLoss(levels, mark, isBuy), `${isBuy ? "bid" : "ask"} at ${mark}`);
+        assert.ok(
+          bound >= trueLoss(levels, mark, isBuy),
+          `${isBuy ? "bid" : "ask"} at ${mark}`,
+        );
       }
     }
   });
