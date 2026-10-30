@@ -296,8 +296,9 @@ resting takers at the same price) belong to the same step.
 - Backstop PnL is realized once, through the same settlement paths as a user's.
 - Insurance debt, trader bad debt, backstop bad debt and backstop position PnL
   remain separately observable.
-- A vault halt does not hide backstop exposure; unwinds keep working while
-  halted, `withdrawBackstop` does not.
+- A vault halt stops unwinds (`TradingHalted`), since a fill would open user
+  positions that cannot be reduced until the halt clears; the backstop keeps its
+  exposure until then. `withdrawBackstop` is also blocked while halted.
 
 ## Decisions taken
 

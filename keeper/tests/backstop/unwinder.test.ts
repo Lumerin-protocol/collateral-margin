@@ -14,6 +14,7 @@ import { BACKSTOP_ADDR } from "../../src/protocolAccounts.ts";
 
 const FUTURES = "0x000000000000000000000000000000000000F00d" as Address;
 const PERPS = "0x000000000000000000000000000000000000Fee5" as Address;
+const VAULT = "0x000000000000000000000000000000000000Ba5e" as Address;
 const NOW = BigInt(Math.floor(Date.now() / 1000));
 const LIVE_EXPIRY = NOW + 7n * 86_400n;
 const MATURED_EXPIRY = NOW - 86_400n;
@@ -36,6 +37,7 @@ function makeConfig(over: Partial<Config["backstop"]> = {}): Config {
   return {
     futures: { address: FUTURES },
     perps: { address: PERPS },
+    vault: { address: VAULT },
     keeper: { dryRun: true },
     coordinator: { confirmationBlocks: 1 },
     backstop: {
@@ -61,6 +63,7 @@ function revert(errorName: string): BaseError {
 function makeChain(state: {
   futuresLegs: Record<string, bigint>;
   perpsNet: bigint;
+  halted?: boolean;
   simulateFails?: (call: Call) => string | undefined;
 }) {
   const simulated: Call[] = [];
@@ -70,6 +73,9 @@ function makeChain(state: {
     },
     publicClient: {
       readContract: async (call: Call) => {
+        if (call.functionName === "halted" && call.address === VAULT) {
+          return state.halted ?? false;
+        }
         if (call.functionName === "getActiveExpirationDates") {
           assert.equal(getAddress(call.args?.[0] as Address), BACKSTOP_ADDR);
           return Object.keys(state.futuresLegs).map((k) => BigInt(k));
@@ -168,5 +174,25 @@ describe("BackstopUnwinder", () => {
     const stats = unwinder.snapshot();
     assert.equal(stats.unfilled, 1);
     assert.equal(stats.unwinds, 1);
+  });
+
+  it("X3-R4-5-2: sends no unwind and logs no error while the vault is halted", async () => {
+    const { chain, simulated } = makeChain({
+      futuresLegs: { [String(LIVE_EXPIRY)]: 4n },
+      perpsNet: -1_000_000n,
+      halted: true,
+      simulateFails: () => "TradingHalted",
+    });
+    const errors: unknown[] = [];
+    const logger = {
+      ...silentLogger,
+      child: () => logger,
+      error: (...args: unknown[]) => errors.push(args),
+    } as unknown as pino.Logger;
+    const unwinder = new BackstopUnwinder(chain, makeConfig(), logger);
+    await unwinder.tick();
+    assert.equal(simulated.length, 0);
+    assert.deepEqual(errors, [], "a halt is expected, not an error");
+    assert.equal(unwinder.snapshot().ticks, 1);
   });
 });

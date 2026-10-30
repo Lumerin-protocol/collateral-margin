@@ -1,4 +1,5 @@
 import type { Abi, Address } from "viem";
+import { CollateralVaultAbi } from "collateral-margin-abi/CollateralVault.ts";
 import type pino from "pino";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
@@ -68,6 +69,10 @@ export interface BackstopUnwinderStats {
  *
  * Matured futures legs are left to the delivery coordinator: the venue rejects
  * them with `ExpirationDateNotAvailable`, and settlement is the correct exit.
+ *
+ * Nothing is sent while the vault is halted: the venues revert `TradingHalted`,
+ * because a fill would open user positions that cannot be reduced until the
+ * halt clears.
  */
 export class BackstopUnwinder {
   private timer: NodeJS.Timeout | undefined;
@@ -130,6 +135,15 @@ export class BackstopUnwinder {
     try {
       this.stats.ticks++;
       this.stats.lastTickAt = Date.now();
+      const halted = await this.chain.publicClient.readContract({
+        address: this.config.vault.address,
+        abi: CollateralVaultAbi,
+        functionName: "halted",
+      });
+      if (halted) {
+        this.logger.debug("vault halted — backstop unwinds paused");
+        return;
+      }
       const legs: BackstopLegStats[] = [];
       await this.tickFutures(legs);
       await this.tickPerps(legs);
