@@ -90,11 +90,13 @@ function buildHarness({
       },
       multicall: async ({
         contracts,
+        allowFailure,
       }: {
         contracts: readonly { functionName: string }[];
+        allowFailure?: boolean;
       }) => {
         const currentPrice = oracleAnswer / 100n; // 8→6 decimals
-        return contracts.map((c) => {
+        const results = contracts.map((c) => {
           switch (c.functionName) {
             case "imSpotShock":
               return IM_SHOCK;
@@ -150,6 +152,9 @@ function buildHarness({
               throw new Error(`unexpected multicall: ${c.functionName}`);
           }
         });
+        return allowFailure === true
+          ? results.map((result) => ({ status: "success", result }))
+          : results;
       },
     },
   } as unknown as Chain;

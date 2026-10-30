@@ -355,6 +355,7 @@ export class PredictiveCoordinator {
         this.chain,
         this.config,
         allUsers,
+        { logger: this.logger },
       );
       let enqueued = 0;
       let alertsFired = 0;

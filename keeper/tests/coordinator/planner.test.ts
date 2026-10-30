@@ -97,7 +97,10 @@ function makeChainStub(
         }
         // Triple per user — match readAccountHealthBatch's contract.
         assert.equal(contracts.length, 3, "single-user triple");
-        return [snap.balance, snap.im, snap.mm];
+        return [snap.balance, snap.im, snap.mm].map((result) => ({
+          status: "success",
+          result,
+        }));
       },
     },
   } as unknown as Chain;

@@ -98,6 +98,7 @@ export class Scheduler {
         this.chain,
         this.config,
         users,
+        { logger: this.logger },
       );
       let underwater = 0;
       let warned = 0;

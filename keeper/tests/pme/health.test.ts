@@ -16,9 +16,9 @@ function userAt(idx: number): Address {
 }
 
 /**
- * Minimal stub that emulates `publicClient.multicall({ contracts, allowFailure: false })`.
- * The handler receives the calls in order and returns one result per call —
- * matching viem's contract.
+ * Minimal stub that emulates `publicClient.multicall({ contracts, allowFailure: true })`.
+ * The handler receives the calls in order and returns one result per call; each is
+ * settled as a success, matching viem's contract.
  */
 function makeChainStub(
   handler: (calls: readonly unknown[]) => readonly unknown[],
@@ -28,7 +28,10 @@ function makeChainStub(
     publicClient: {
       multicall: async ({ contracts }: { contracts: readonly unknown[] }) => {
         multicallInvocations++;
-        return handler(contracts);
+        return handler(contracts).map((result) => ({
+          status: "success",
+          result,
+        }));
       },
     },
   } as unknown as Chain;
@@ -158,12 +161,9 @@ describe("pme/health: readAccountHealthBatch", () => {
       }),
     );
 
-    const result = await readAccountHealthBatch(
-      stub,
-      makeConfigStub(),
-      users,
-      2,
-    );
+    const result = await readAccountHealthBatch(stub, makeConfigStub(), users, {
+      chunkSize: 2,
+    });
 
     // 5 users / chunk 2 = 3 multicalls
     assert.equal(getInvocations(), 3);
@@ -185,5 +185,45 @@ describe("pme/health: readAccountHealthBatch", () => {
         assert.equal(r.mmRequired, BigInt(30_000 + i));
       }
     }
+  });
+
+  it("CF-008: an account whose margin read reverts does not hide the rest of its chunk", async () => {
+    const users = [userAt(0), userAt(1), userAt(2)];
+    const reverting = users[1];
+    // viem's multicall: with `allowFailure: false` one failing call rejects the whole
+    // batch; with `true` each call settles to `{ status, result | error }`.
+    const stub = {
+      publicClient: {
+        multicall: async ({
+          contracts,
+          allowFailure,
+        }: {
+          contracts: readonly { functionName: string; args: [Address] }[];
+          allowFailure?: boolean;
+        }) => {
+          const settled = contracts.map((c) =>
+            c.args[0] === reverting && c.functionName !== "balanceOf"
+              ? { status: "failure", error: new Error("getRiskView reverted") }
+              : {
+                  status: "success",
+                  result: c.functionName === "balanceOf" ? 1_000n : 100n,
+                },
+          );
+          if (allowFailure === false) {
+            const failed = settled.find((s) => s.status === "failure");
+            if (failed !== undefined) throw failed.error;
+            return settled.map((s) => s.result);
+          }
+          return settled;
+        },
+      },
+    } as unknown as Chain;
+
+    const result = await readAccountHealthBatch(stub, makeConfigStub(), users);
+    assert.deepEqual(
+      result.map((h) => h.user),
+      [users[0], users[2]],
+    );
+    assert.ok(result.every((h) => h.mmSurplus === 900n));
   });
 });

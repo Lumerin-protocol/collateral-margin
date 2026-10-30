@@ -404,7 +404,9 @@ export class Planner {
   }
 
   private async readHealth(user: Address): Promise<AccountHealth> {
-    const [h] = await readAccountHealthBatch(this.chain, this.config, [user]);
+    const [h] = await readAccountHealthBatch(this.chain, this.config, [user], {
+      logger: this.logger,
+    });
     if (h === undefined) {
       throw new Error(`readAccountHealthBatch returned no entry for ${user}`);
     }

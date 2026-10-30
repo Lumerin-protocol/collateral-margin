@@ -59,7 +59,9 @@ function makeChain(opts: {
           opts.healthScript.length,
           "script length matches user count",
         );
-        return opts.healthScript.flatMap((h) => [h.balance, h.im, h.mm]);
+        return opts.healthScript
+          .flatMap((h) => [h.balance, h.im, h.mm])
+          .map((result) => ({ status: "success", result }));
       },
       readContract: async () => [],
       watchContractEvent: () => () => undefined,

@@ -564,7 +564,7 @@ resource "aws_cloudwatch_metric_alarm" "keeper_errors" {
   count               = var.vault_monitoring.create && var.keeper_service.create ? 1 : 0
   provider            = aws.use1
   alarm_name          = "${local.shortname}-keeper-errors-${local.vault_mon_env}"
-  alarm_description   = "Keeper logged an error (pino level 50). Sweeps that throw skip liquidation for that cycle. Read /ecs/col-mar-keeper logs, restart if the loop is stuck, then top up any uncovered loss."
+  alarm_description   = "Keeper logged an error (pino level 50). Sweeps that throw skip liquidation for that cycle. \"account health read failed\" means the margin engine reverts for that user (a venue getRiskView fails), so the account cannot trade, withdraw or be liquidated until the venue is fixed. Read /ecs/col-mar-keeper logs, restart if the loop is stuck, then top up any uncovered loss."
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods  = 1
   metric_name         = "KeeperErrorCount"

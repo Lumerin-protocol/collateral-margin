@@ -107,13 +107,16 @@ function buildHarness({
       },
       multicall: async ({
         contracts,
+        allowFailure,
       }: {
         contracts: readonly { functionName: string }[];
+        allowFailure?: boolean;
       }) => {
         // The harness inspects `functionName` on each contract and assembles
         // a matching response array. Snapshot-read calls and health-read
-        // calls share the same multicall path, so one handler covers both.
-        return contracts.map((c) => {
+        // calls share the same multicall path, so one handler covers both;
+        // health reads settle each call (`allowFailure: true`).
+        const results = contracts.map((c) => {
           switch (c.functionName) {
             case "imSpotShock":
               return 10n ** 17n;
@@ -179,6 +182,9 @@ function buildHarness({
               );
           }
         });
+        return allowFailure === true
+          ? results.map((result) => ({ status: "success", result }))
+          : results;
       },
     },
   } as unknown as Chain;
