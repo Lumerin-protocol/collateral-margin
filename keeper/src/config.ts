@@ -82,6 +82,12 @@ export interface Config {
      * a full chunk stays well under Base's block gas limit.
      */
     maxLotsPerLiquidationTx: number;
+    /**
+     * Time limit for one futures close solve on the solver worker thread. A solve
+     * past it terminates the worker and fails the plan, so the executor backs the
+     * account off instead of waiting on it.
+     */
+    solverTimeoutMs: number;
   };
   pme: { address: Address };
   oracle: {
@@ -384,6 +390,7 @@ export function loadConfig(): Config {
       maxLotsPerLiquidationTx: Number(
         process.env.FUTURES_MAX_LOTS_PER_LIQUIDATION_TX ?? "50",
       ),
+      solverTimeoutMs: Number(process.env.FUTURES_SOLVER_TIMEOUT_MS ?? "10000"),
     },
     pme: { address: requireAddress("PME_ADDRESS") },
     oracle: {

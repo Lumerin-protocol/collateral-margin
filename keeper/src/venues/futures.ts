@@ -5,11 +5,9 @@ import type { Config } from "../config.ts";
 import { HashPowerFuturesAbi } from "../abi/HashPowerFutures.ts";
 import { sendLiquidate } from "../tx/liquidate.ts";
 import { readAccountSnapshot, readMMParams } from "../predict/snapshot.ts";
-import {
-  type MMParams,
-  solveFuturesClosesToTarget,
-} from "@hashpower/portfolio-margin";
+import type { MMParams } from "@hashpower/portfolio-margin";
 import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
+import { FuturesCloseSolver } from "./futuresSolver.ts";
 import type {
   LiquidateOrdersOutcome,
   MarketId,
@@ -62,6 +60,7 @@ export class FuturesVenue implements Venue {
   private readonly config: Config;
   private readonly logger: pino.Logger;
   private readonly ethUsdFeed: EthUsdFeed | undefined;
+  private readonly solver: FuturesCloseSolver;
   private mmParams: MMParams | undefined;
 
   constructor(
@@ -74,6 +73,7 @@ export class FuturesVenue implements Venue {
     this.config = config;
     this.logger = logger.child({ venue: "futures" });
     this.ethUsdFeed = ethUsdFeed;
+    this.solver = new FuturesCloseSolver(config.futures.solverTimeoutMs);
   }
 
   marketLabel(marketId: MarketId): string {
@@ -196,28 +196,14 @@ export class FuturesVenue implements Venue {
     ]);
 
     // Liquidation-fee payout is disabled on-chain — pass 0 so the projection matches.
-    const allCloses = solveFuturesClosesToTarget(
+    // Matured legs are left to the delivery coordinator: the venue skips them.
+    const closes = await this.solver.solve({
       snapshot,
       params,
-      marketPrice,
-      0n,
-    );
-    // A matured leg is worth its settlement price, not the live mark: the venue
-    // refuses to liquidate it (`PositionMatured` / skipped in the batch) and the
-    // delivery coordinator settles it instead. Sending it would only waste a slot.
-    const nowSec = BigInt(Math.floor(Date.now() / 1000));
-    const closes = allCloses.filter((c) => c.expirationAt > nowSec);
-    if (closes.length < allCloses.length) {
-      this.logger.info(
-        {
-          user,
-          maturedLegs: allCloses
-            .filter((c) => c.expirationAt <= nowSec)
-            .map((c) => c.expirationAt.toString()),
-        },
-        "Futures reduceToTarget: skipping matured legs (settlement, not liquidation)",
-      );
-    }
+      currentPrice: marketPrice,
+      liquidationFee: 0n,
+      now: BigInt(Math.floor(Date.now() / 1000)),
+    });
     if (closes.length === 0) {
       return { skipped: "nothingToClose" };
     }

@@ -31,6 +31,7 @@ const STUB_CONFIG: Config = {
   futures: {
     address: "0x0000000000000000000000000000000000000003",
     maxLotsPerLiquidationTx: 50,
+    solverTimeoutMs: 10_000,
   },
   pme: { address: "0x0000000000000000000000000000000000000004" },
   oracle: {

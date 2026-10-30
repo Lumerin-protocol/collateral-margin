@@ -71,7 +71,11 @@ const silentLogger = {
 
 function makeConfigStub(dryRun: boolean, maxLots = 50): Config {
   return {
-    futures: { address: FUTURES, maxLotsPerLiquidationTx: maxLots },
+    futures: {
+      address: FUTURES,
+      maxLotsPerLiquidationTx: maxLots,
+      solverTimeoutMs: 10_000,
+    },
     vault: { address: "0x000000000000000000000000000000000000aa01" as Address },
     pme: { address: "0x000000000000000000000000000000000000aa02" as Address },
     perps: { address: "0x000000000000000000000000000000000000aa03" as Address },
