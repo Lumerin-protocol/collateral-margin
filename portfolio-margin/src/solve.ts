@@ -666,10 +666,12 @@ const MAX_STAGE_SPLITS = 64;
  * Legs from the empty prefix to `target`, safe to run as one `liquidatePositions`
  * call. The venue runs legs in order, stops before a leg once the account is
  * healthy, and reverts `OverLiquidation` if a close leaves the balance above IM.
- * Starting from one stage (a single leg per expiry), any stage holding a leg that
- * would overshoot IM is split at its midpoint prefix. Stage ends are path prefixes
- * before the first healthy one, so every leg starts underwater; at worst the split
- * reaches single contracts, which is the round-robin path itself.
+ * Starting from one stage (a single leg per expiry), a stage is split at its
+ * midpoint prefix while a leg in it would overshoot IM, or while the venue would
+ * stop partway through it: that would leave the later expiries of the stage
+ * untouched, draining one book before the others. So the venue stops on a stage
+ * boundary, which is a round-robin prefix, or inside a single-contract stage. At
+ * worst the splits reach single contracts, which is the round-robin path itself.
  */
 function stagedLegs(
   snap: AccountSnapshot,
@@ -689,15 +691,15 @@ function stagedLegs(
         stageOf.push(s);
       }
     }
-    const bad = overLiquidatingLeg(
+    const s = stageToSplit(
       snap,
       legs,
+      stageOf,
       params,
       currentPrice,
       liquidationFee,
     );
-    if (bad === undefined || split === MAX_STAGE_SPLITS) return legs;
-    const s = stageOf[bad] ?? 0;
+    if (s === undefined || split === MAX_STAGE_SPLITS) return legs;
     const lo = cuts[s] ?? 0n;
     const hi = cuts[s + 1] ?? 0n;
     if (hi - lo <= 1n) return legs;
@@ -705,21 +707,29 @@ function stagedLegs(
   }
 }
 
-/** Index of the first leg `liquidatePositions` would revert `OverLiquidation` on, if any. */
-function overLiquidatingLeg(
+/**
+ * Replays `liquidatePositions` over `legs` and returns the stage that must be split:
+ * the one holding a leg that reverts `OverLiquidation`, or the one the venue stops
+ * inside because the account turned healthy before its last leg.
+ */
+function stageToSplit(
   snap: AccountSnapshot,
   legs: readonly FuturesCloseLeg[],
+  stageOf: readonly number[],
   params: MMParams,
   currentPrice: bigint,
   liquidationFee: bigint,
 ): number | undefined {
   let state = snap;
   for (const [i, leg] of legs.entries()) {
-    if (mmSurplus(state, params, currentPrice) >= 0n) return undefined;
+    if (mmSurplus(state, params, currentPrice) >= 0n) {
+      return i > 0 && stageOf[i - 1] === stageOf[i] ? stageOf[i] : undefined;
+    }
     state = simulateFuturesClose(state, [leg], currentPrice, liquidationFee);
     const im = imRequired(state, params, currentPrice);
-    if (im > mmRequired(state, params, currentPrice) && state.balance > im)
-      return i;
+    if (im > mmRequired(state, params, currentPrice) && state.balance > im) {
+      return stageOf[i];
+    }
   }
   return undefined;
 }

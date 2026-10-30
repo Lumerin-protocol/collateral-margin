@@ -223,6 +223,37 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
     assert.ok(imSurplus(after, PARAMS, P) <= 0n, "post-close: at/under IM");
   });
 
+  it("stays balanced when the venue stops at the first healthy leg", () => {
+    const snap = futuresSnapshot({
+      balance: BALANCE,
+      futures: {
+        positions: [
+          futuresAgg(600n, ENTRY, EXPIRY_A),
+          futuresAgg(600n, ENTRY, EXPIRY_B),
+        ],
+        orders: [],
+      },
+    });
+    snap.balance = (BALANCE * 600n) / 6n;
+    const P = P_MODERATE;
+    assert.ok(mmSurplus(snap, PARAMS, P) < 0n, "fixture must start underwater");
+
+    const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE);
+    let state = snap;
+    for (const leg of closes) {
+      if (mmSurplus(state, PARAMS, P) >= 0n) break;
+      state = simulateFuturesClose(state, [leg], P, FEE);
+      assert.ok(imSurplus(state, PARAMS, P) <= 0n, "never above IM");
+    }
+    assert.ok(mmSurplus(state, PARAMS, P) >= 0n, "healthy after the batch");
+    const [a, b] = state.futures.positions.map((p) => 600n - p.netQuantity);
+    assert.ok(a !== undefined && b !== undefined && a > 0n && b > 0n);
+    assert.ok(
+      a - b <= 1n && b - a <= 1n,
+      `balanced within one (A=${a}, B=${b})`,
+    );
+  });
+
   it("never closes an expiry that has matured by `now`", () => {
     const snap = futuresSnapshot({
       balance: BALANCE,
