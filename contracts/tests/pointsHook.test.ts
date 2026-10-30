@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { network } from "hardhat";
 import {
   KEEPER_POINTS,
@@ -89,6 +90,56 @@ describe("PointsHook", () => {
       assert.equal(await points.read.balanceOf([bob.account.address]), 0n);
       assert.equal(await points.read.balanceOf([alice.account.address]), MAKER_PTS);
     });
+
+    for (const env of ["dev", "prd"]) {
+      it(`X3-R4-5-4: with ${env}'s POINTS_MIN_FEE a fee-free backstop unwind earns nothing, a one-contract trade does`, async () => {
+        const { hook, points, owner, venue, alice, bob } =
+          await networkHelpers.loadFixture(deployHookFixture);
+        const config = readFileSync(
+          new URL(`../../config/${env}.env`, import.meta.url),
+          "utf8",
+        );
+        const minFee = BigInt(
+          config.match(/^POINTS_MIN_FEE=(\d+)$/m)?.[1] ?? "0",
+        );
+        await hook.write.setMinFee([minFee], { account: owner.account });
+
+        const BACKSTOP = "0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB";
+        const mark = 32_830_000n; // prd mark, USDC per contract
+        const takerFee = (mark * 10n) / 10_000n; // 10 bps, the live taker fee
+        // The venues charge the backstop no taker fee on an unwind fill.
+        await hook.write.onFill(
+          [alice.account.address, BACKSTOP, mark, 0n, 0n, 0n, 0n],
+          {
+            account: venue.account,
+          },
+        );
+        assert.equal(
+          await points.read.balanceOf([BACKSTOP]),
+          0n,
+          "backstop earns no points",
+        );
+
+        await hook.write.onFill(
+          [
+            alice.account.address,
+            bob.account.address,
+            mark,
+            0n,
+            takerFee,
+            0n,
+            0n,
+          ],
+          {
+            account: venue.account,
+          },
+        );
+        assert.ok(
+          (await points.read.balanceOf([bob.account.address])) > 0n,
+          "a one-contract taker trade earns",
+        );
+      });
+    }
   });
 
   describe("maker price-improvement multiplier", () => {
