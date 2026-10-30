@@ -200,7 +200,10 @@ protocol ledgers rather than users:
   fills as a taker inside the vault's `backstopUnwindBandBps` around the mark
   and pays the caller `backstopUnwindFeeBps` of the filled notional from the
   venue fee pot. No liquidity inside the band reverts `TimeInForceNotFilled`
-  and is retried next tick. `/health` exposes `backstopOpenLegs`,
+  and is retried next tick. Each leg and venue fails on its own: a futures
+  date unlisted by a window shrink (`ExpirationDateNotAvailable`) logs a
+  warning and waits for settlement, any other revert logs an error and the
+  sweep continues with the remaining legs. `/health` exposes `backstopOpenLegs`,
   `backstopUnwinds`, `backstopUnfilledAttempts` and `backstopFeeEarned`.
 
 ## Dry run

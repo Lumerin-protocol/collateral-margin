@@ -195,4 +195,46 @@ describe("BackstopUnwinder", () => {
     assert.deepEqual(errors, [], "a halt is expected, not an error");
     assert.equal(unwinder.snapshot().ticks, 1);
   });
+
+  it("X3-R4-5-1: a non-recoverable revert on one leg does not stop the other legs or perps", async () => {
+    const revoked = LIVE_EXPIRY;
+    const unlisted = LIVE_EXPIRY + 86_400n;
+    const healthy = LIVE_EXPIRY + 2n * 86_400n;
+    const { chain, simulated } = makeChain({
+      futuresLegs: {
+        [String(revoked)]: 3n,
+        [String(unlisted)]: -2n,
+        [String(healthy)]: 5n,
+      },
+      perpsNet: -1_000_000n,
+      simulateFails: (call) => {
+        if (call.address !== FUTURES) return undefined;
+        if (call.args?.[0] === revoked) return "NotAuthorized";
+        if (call.args?.[0] === unlisted) return "ExpirationDateNotAvailable";
+        return undefined;
+      },
+    });
+    const errors: unknown[] = [];
+    const warnings: unknown[] = [];
+    const logger = {
+      ...silentLogger,
+      child: () => logger,
+      warn: (...args: unknown[]) => warnings.push(args),
+      error: (...args: unknown[]) => errors.push(args),
+    } as unknown as pino.Logger;
+    const unwinder = new BackstopUnwinder(chain, makeConfig(), logger);
+    await unwinder.tick();
+
+    assert.deepEqual(
+      simulated.map((c) => [c.address, c.args]),
+      [
+        [FUTURES, [healthy, 5n]],
+        [PERPS, [1_000_000n]],
+      ],
+      "the healthy futures leg and perps are still unwound",
+    );
+    assert.equal(errors.length, 1, "only the NotAuthorized leg is an error");
+    assert.equal(warnings.length, 1, "the unlisted-date leg only warns");
+    assert.equal(unwinder.snapshot().legs.length, 4);
+  });
 });
