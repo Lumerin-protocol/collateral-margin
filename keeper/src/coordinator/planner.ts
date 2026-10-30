@@ -305,23 +305,33 @@ export class Planner {
         continue;
       }
       const ids = openOrders.map((o) => o.id);
-      const result = await venue.liquidateOrders(user, ids);
-      if ("feeEarned" in result) {
+      const batch = this.config.coordinator.maxOrdersPerLiquidationTx;
+      let feeEarned = 0n;
+      let ordersClosed = 0;
+      let result: Awaited<ReturnType<Venue["liquidateOrders"]>> = {
+        feeEarned: 0n,
+      };
+      // The venue keeps earlier batches' cancels, so a later skip (account
+      // healthy again) only ends the loop.
+      for (let i = 0; i < ids.length; i += batch) {
+        const chunk = ids.slice(i, i + batch);
+        result = await venue.liquidateOrders(user, chunk);
+        if (!("feeEarned" in result)) break;
+        feeEarned += result.feeEarned;
+        ordersClosed += chunk.length;
+      }
+      if (ordersClosed > 0) {
         log.info(
-          {
-            venue: venue.name,
-            count: openOrders.length,
-            feeEarned: result.feeEarned,
-          },
+          { venue: venue.name, count: ordersClosed, feeEarned },
           "Orders-leg: liquidated open orders",
         );
         reports.push({
           kind: "ordersLeg",
           venue: venue.name,
-          feeEarned: result.feeEarned,
-          ordersClosed: openOrders.length,
+          feeEarned,
+          ordersClosed,
         });
-      } else {
+      } else if (!("feeEarned" in result)) {
         // Race: orders cleared between read and call. Treat as a no-op.
         reports.push({
           kind: "ordersLeg",

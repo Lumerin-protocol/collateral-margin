@@ -167,6 +167,7 @@ See `src/config.ts` for the authoritative shape. The minimum-viable set:
 | `COORDINATOR_CONFIRMATION_BLOCKS` | no    | Block confirmations after each tx. Default `1` |
 | `COORDINATOR_RETRY_BACKOFF_BASE_MS` | no  | First retry delay for an account whose plan threw; doubles per failure. Default `1000` |
 | `COORDINATOR_RETRY_BACKOFF_MAX_MS` | no   | Ceiling on that retry delay. Default `300000` (5 min) |
+| `COORDINATOR_MAX_ORDERS_PER_TX` | no  | Order ids per `liquidateOrders` tx (each costs about 140k gas). Default `50` |
 | `KEEPER_MIN_PROFIT_MARGIN`     | no       | Bail on plans that would net ≤ this in token decimals. Default `0` |
 | `SWEEP_INTERVAL_MS`            | no       | Periodic safety-net sweep cadence (predictor handles the hot path). Default `60_000` |
 | `HEALTH_PORT`                  | no       | `/health` and `/ready` port. Default `3000` |

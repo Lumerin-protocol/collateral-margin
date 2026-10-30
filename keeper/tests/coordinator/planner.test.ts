@@ -108,6 +108,7 @@ function makeConfigStub(): Config {
     vault: { address: VAULT },
     pme: { address: PME },
     keeper: { dryRun: false },
+    coordinator: { maxOrdersPerLiquidationTx: 50 },
   } as Config;
 }
 

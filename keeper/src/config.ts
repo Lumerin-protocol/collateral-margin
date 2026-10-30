@@ -145,6 +145,11 @@ export interface Config {
     retryBackoffBaseMs: number;
     /** Ceiling on the per-account retry delay. */
     retryBackoffMaxMs: number;
+    /**
+     * Max order ids per `liquidateOrders` tx. Each cancel re-checks the whole
+     * portfolio (~140k gas), so 50 stays well under the 16.7M per-tx gas cap.
+     */
+    maxOrdersPerLiquidationTx: number;
   };
   runtime: {
     /** Cadence of the periodic re-evaluation sweep in ms. Event-driven path is primary. */
@@ -412,6 +417,9 @@ export function loadConfig(): Config {
       ),
       retryBackoffMaxMs: Number(
         process.env.COORDINATOR_RETRY_BACKOFF_MAX_MS ?? "300000",
+      ),
+      maxOrdersPerLiquidationTx: Number(
+        process.env.COORDINATOR_MAX_ORDERS_PER_TX ?? "50",
       ),
     },
     runtime: {

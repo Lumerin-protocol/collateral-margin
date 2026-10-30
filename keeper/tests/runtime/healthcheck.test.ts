@@ -49,6 +49,7 @@ const STUB_CONFIG: Config = {
     confirmationBlocks: 0,
     retryBackoffBaseMs: 1_000,
     retryBackoffMaxMs: 300_000,
+    maxOrdersPerLiquidationTx: 50,
   },
   runtime: {
     sweepIntervalMs: 60_000,
