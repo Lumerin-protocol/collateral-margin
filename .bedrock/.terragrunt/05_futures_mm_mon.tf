@@ -4,7 +4,8 @@
 #
 # Mirror of 05_perps_mm_mon.tf with venue-specific names and metric namespace.
 # The portfolio runner logs "portfolio tick" once per successful loop.
-# Component alarms do not notify. The composite does.
+# Component alarms do not notify. The composite does, plus the error and
+# warning log alarms, which use the shared alert topics like the keeper.
 ################################################################################
 
 locals {
@@ -323,6 +324,53 @@ resource "aws_cloudwatch_metric_alarm" "futures_mm_cancel_fail" {
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Futures MM Cancel Failure Alarm"
+    Capability = "Monitoring"
+  })
+}
+
+# Error and warning log alerts, routed like the keeper's (07_col_mar_vault_mon.tf):
+# any error notifies the critical topic (Slack on dev, page on prd); a sustained
+# run of warnings notifies Slack only. One-off warnings stay on the dashboard.
+resource "aws_cloudwatch_metric_alarm" "futures_mm_error_logged" {
+  count               = var.vault_monitoring.create && var.futures_mm_service.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-futures-mm-error-logged-${local.futures_mm_env_suffix}"
+  alarm_description   = "Futures market maker logged an error (pino level 50). Read its ECS logs; check quotes and inventory."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ErrorCount"
+  namespace           = local.futures_mm_metric_ns
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Futures MM Error Logged"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "futures_mm_warnings" {
+  count               = var.vault_monitoring.create && var.futures_mm_service.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-futures-mm-warnings-${local.futures_mm_env_suffix}"
+  alarm_description   = "Futures market maker logged 20+ warnings (pino level 40) in 15 minutes, e.g. throttling, cancel-all or init retries. Read its ECS logs."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "WarnCount"
+  namespace           = local.futures_mm_metric_ns
+  period              = 900
+  statistic           = "Sum"
+  threshold           = 20
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Futures MM Warnings"
     Capability = "Monitoring"
   })
 }

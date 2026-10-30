@@ -400,6 +400,53 @@ resource "aws_cloudwatch_metric_alarm" "perps_mm_cancel_fail" {
   })
 }
 
+# Error and warning log alerts, routed like the keeper's (07_col_mar_vault_mon.tf):
+# any error notifies the critical topic (Slack on dev, page on prd); a sustained
+# run of warnings notifies Slack only. One-off warnings stay on the dashboard.
+resource "aws_cloudwatch_metric_alarm" "perps_mm_error_logged" {
+  count               = var.vault_monitoring.create && var.perps_mm_service.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-perps-mm-error-logged-${local.perps_mm_env_suffix}"
+  alarm_description   = "Perps market maker logged an error (pino level 50). Read its ECS logs; check quotes and inventory."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "ErrorCount"
+  namespace           = local.perps_mm_metric_ns
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Perps MM Error Logged"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "perps_mm_warnings" {
+  count               = var.vault_monitoring.create && var.perps_mm_service.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-perps-mm-warnings-${local.perps_mm_env_suffix}"
+  alarm_description   = "Perps market maker logged 20+ warnings (pino level 40) in 15 minutes, e.g. throttling, cancel-all or init retries. Read its ECS logs."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "WarnCount"
+  namespace           = local.perps_mm_metric_ns
+  period              = 900
+  statistic           = "Sum"
+  threshold           = 20
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Perps MM Warnings"
+    Capability = "Monitoring"
+  })
+}
+
 # WARNING - Elevated error rate
 resource "aws_cloudwatch_metric_alarm" "perps_mm_error_rate" {
   count               = var.perps_mm_service.create ? 1 : 0
