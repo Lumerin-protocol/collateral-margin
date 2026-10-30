@@ -196,7 +196,10 @@ Inside one maintenance window, per environment:
    liquidation between the venue upgrade and this step gave it a leg. Then
    futures `resetState(accountsWithOrders)` to cancel resting orders; accounts
    are flat, so it only emits `OrderCancelled`. Verify every pointer is 0 and
-   the backstop is flat.
+   the backstop is flat. (That was the 6.7.0 behavior. Since perps 6.14.2 /
+   futures 6.15.2, `forceClosePositions` hands each closed position to the
+   backstop like a liquidation, so the backstop is not listed; closing every
+   user leaves it flat, and a one-sided subset moves its net onto it.)
 4. `setFutureExpirationDatesCount(3)` on futures. The window shrinks from 5 to
    3 delivery dates as part of this migration; it must happen after step 3,
    because a shrink unlists the two furthest dates and `resetState` only walks
