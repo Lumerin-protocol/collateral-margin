@@ -43,6 +43,9 @@ import {
 const { CW_NAMESPACE } = process.env as Record<string, string>;
 /** Empty where the market maker service is not deployed. */
 const MM_HEALTH_URL = process.env.MM_HEALTH_URL ?? "";
+/** Venue dimension values, matching the per-venue metrics the subgraph tags by address. */
+const FUTURES_VENUE = process.env.FUTURES_ADDRESS?.toLowerCase() ?? "";
+const PERPS_VENUE = process.env.PERPS_ADDRESS?.toLowerCase() ?? "";
 
 export async function handler(): Promise<{ statusCode: number; body: string }> {
   log(`vault monitor ${new Date().toISOString()}`);
@@ -112,10 +115,26 @@ export async function collect(): Promise<{
   // now. Negative means a loss is forming that BadDebt has not recorded yet.
   const equity =
     vault.backstopBalance + backstop.unrealizedPnl + backstop.pendingFunding;
+  // Band + caller fee is what an unwind may give away; above the liquidation fee
+  // the venue kept, a self-dealing liquidate-and-unwind loop profits (X3-R3A-2).
+  const unwindBudget = Math.min(
+    ...backstop.unwindBudgetBps.map((venue) => venue.bps),
+  );
+  const overBudget = Math.max(
+    0,
+    vault.backstopUnwindBandBps + vault.backstopUnwindFeeBps - unwindBudget,
+  );
   const futuresNet = backstop.futuresLegs.reduce(
     (sum, leg) => sum + leg.net,
     0n,
   );
+  const abs = (n: bigint) => (n < 0n ? -n : n);
+  // Gross exposure at the mark: futures legs at different expiries do not offset.
+  const futuresNotional =
+    backstop.futuresLegs.reduce((sum, leg) => sum + abs(leg.net), 0n) *
+    backstop.futuresMark;
+  const perpsNotional =
+    (abs(backstop.perpsNet) * backstop.perpsMark) / 1_000_000n;
 
   const points: MetricDatum[] = [
     metric("InsuranceFundBalance", usdc(vault.insuranceFundBalance)),
@@ -136,6 +155,7 @@ export async function collect(): Promise<{
     metric("BackstopEquity", usdc(equity)),
     metric("BackstopUnwindBandBps", vault.backstopUnwindBandBps, "Count"),
     metric("BackstopUnwindFeeBps", vault.backstopUnwindFeeBps, "Count"),
+    metric("BackstopUnwindOverBudgetBps", overBudget, "Count"),
     metric(
       "BackstopOpenLegs",
       backstop.futuresLegs.length + (backstop.perpsNet === 0n ? 0 : 1),
@@ -144,6 +164,19 @@ export async function collect(): Promise<{
     // Raw contract units: futures counts whole contracts, perps is 1e6-scaled.
     metric("BackstopFuturesNetQuantity", futuresNet, "Count"),
     metric("BackstopPerpsNetQuantity", backstop.perpsNet, "Count"),
+    metric("BackstopNotional", usdc(futuresNotional + perpsNotional)),
+    metric(
+      "BackstopNotional",
+      usdc(futuresNotional),
+      "None",
+      dim("Venue", FUTURES_VENUE),
+    ),
+    metric(
+      "BackstopNotional",
+      usdc(perpsNotional),
+      "None",
+      dim("Venue", PERPS_VENUE),
+    ),
     metric("Halted", vault.halted ? 1 : 0, "Count"),
     metric("FuturesFeeBalance", usdc(vault.futuresFeeBalance)),
     metric("PerpsFeeBalance", usdc(vault.perpsFeeBalance)),
@@ -161,6 +194,11 @@ export async function collect(): Promise<{
         "Count",
         dim("ExpirationAt", leg.expirationAt),
       ),
+    );
+  }
+  for (const { venue, bps } of backstop.unwindBudgetBps) {
+    points.push(
+      metric("BackstopUnwindBudgetBps", bps, "Count", dim("Venue", venue)),
     );
   }
   for (const venue of vault.venues) {

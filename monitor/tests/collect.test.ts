@@ -37,6 +37,8 @@ const venueAbi = parseAbi([
   "function getOrderBookPrices(uint256 expirationAt, uint256 maxLevels) view returns (uint256[] bids, uint256[] asks)",
   "function getMarketPrice() view returns (uint256)",
   "function getExpirationDates() view returns (uint256[])",
+  "function liquidationFeeBps() view returns (uint16)",
+  "function liquidatorShareBps() view returns (uint16)",
 ]);
 const mmAbi = parseAbi([
   "function balanceOf(address user) view returns (uint256)",
@@ -195,6 +197,19 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
           ? riskView(-15_000_000n, 0n)
           : riskView(4_000_000n, 1_000_000n),
       });
+    case "liquidationFeeBps":
+      // futures keeps 200 × 80% = 160 bps, perps 300 × 80% = 240 bps.
+      return encodeFunctionResult({
+        abi: venueAbi,
+        functionName,
+        result: isFutures ? 200 : 300,
+      });
+    case "liquidatorShareBps":
+      return encodeFunctionResult({
+        abi: venueAbi,
+        functionName,
+        result: 2_000,
+      });
     case "getActiveExpirationDates":
       return encodeFunctionResult({
         abi: venueAbi,
@@ -328,10 +343,10 @@ describe("collect", () => {
   });
 
   it("batches contract reads into two multicalls per check", () => {
-    // backstop 5 + 2 legs; market maker 8 + 2 reads for each of 3 expiries
+    // backstop 11 + 2 legs; market maker 8 + 2 reads for each of 3 expiries
     assert.deepEqual(
       [...multicallSizes].sort((a, b) => a - b),
-      [2, 5, 6, 8],
+      [2, 6, 8, 11],
     );
   });
 
@@ -369,6 +384,25 @@ describe("collect", () => {
     assert.equal(value("BackstopFuturesNetQuantity"), 2);
     assert.equal(value("BackstopFuturesNetQuantity", "100"), 2);
     assert.equal(value("BackstopPerpsNetQuantity"), -7_000_000);
+  });
+
+  it("reports backstop exposure at the mark in USDC", () => {
+    assert.equal(value("BackstopNotional", process.env.FUTURES_ADDRESS), 80); // 2 × $40
+    assert.equal(value("BackstopNotional", process.env.PERPS_ADDRESS), 280); // 7 × $40
+    assert.equal(value("BackstopNotional"), 360);
+  });
+
+  it("X3-R3A-2: flags an unwind band plus fee above the kept liquidation fee", () => {
+    assert.equal(
+      value("BackstopUnwindBudgetBps", process.env.FUTURES_ADDRESS),
+      160,
+    );
+    assert.equal(
+      value("BackstopUnwindBudgetBps", process.env.PERPS_ADDRESS),
+      240,
+    );
+    // band 200 + fee 25 against the tighter 160 bps budget
+    assert.equal(value("BackstopUnwindOverBudgetBps"), 65);
   });
 
   it("tags per-venue bad debt with the venue address", () => {

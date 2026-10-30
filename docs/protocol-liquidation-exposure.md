@@ -248,7 +248,17 @@ Monitoring (`col-mar-vault-{env}` dashboard, [monitor/](../monitor/src/index.ts)
 | `BackstopBalance`, `BackstopUnrealizedPnl`, `BackstopPendingFunding` | The parts of equity. |
 | `BackstopBadDebtTotal` | Realized backstop losses, vault-wide and per venue. Included in `TraderBadDebtTotal` and `UncoveredLoss`. |
 | `BackstopFuturesNetQuantity` (total and per `ExpirationAt`), `BackstopPerpsNetQuantity`, `BackstopOpenLegs` | Exposure in raw units. |
+| `BackstopNotional` (total and per `Venue`) | Gross exposure at the mark in USDC; futures legs at different expiries add, they do not offset. |
 | `BackstopUnwindBandBps`, `BackstopUnwindFeeBps` | Current parameters. |
+| `BackstopUnwindBudgetBps` (per `Venue`) | Liquidation fee the venue keeps, `liquidationFeeBps × (1 − liquidatorShareBps)`, read from the venue at the subgraph block. |
+| `BackstopUnwindOverBudgetBps` | `band + fee − min(budget)`, floored at 0. Warning alarm above 0. |
+
+Backstop alarms beyond `BackstopEquity < 0`: `BackstopNotional` above
+`backstop_notional_warn_usd` (warning), `BackstopEquity` below
+`-backstop_loss_crit_usd` (critical, pages on prd), `BackstopOpenLegs` held for
+6 hours (warning), and `BackstopUnwindOverBudgetBps > 0` (warning). Thresholds
+are per environment in `.bedrock/<env>/terraform.tfvars` (prd 2,000 / 500 USD,
+sized to the insurance fund; raise them as the fund grows).
 
 ## Operating the backstop
 
@@ -264,6 +274,19 @@ Monitoring (`col-mar-vault-{env}` dashboard, [monitor/](../monitor/src/index.ts)
 - Parameters: `setBackstopParams(bandBps, feeBps)` on the vault applies to both
   venues at once. Start at `(0, 0)` and raise only when the ledger has legs that
   the book is not taking at the mark.
+- Budget (X3-R3A-2): keep `band + fee` at or below the smaller
+  `BackstopUnwindBudgetBps` (160 bps on prd: 200 bps fee, 20% to the
+  liquidator). The liquidation already paid for that much, so in the worst case
+  an unwind breaks even. Above it, anyone can liquidate an account and unwind
+  the leg against their own order at the band edge for a profit paid by the
+  protocol; the contracts do not prevent it, so the over-budget alarm does.
+  Lowering `liquidationFeeBps` or raising `liquidatorShareBps` on a venue
+  shrinks the budget, so recheck the band after either.
+- Backstop leg unfilled (alarm after 6 h): confirm the keeper unwinder is on and
+  not erroring, then widen the band in steps (for example 50 → 100 → 150 bps
+  minus the fee) and give the book time between steps. Go past the budget only
+  to deleverage on purpose, accepting a loss of up to
+  `(band + fee − budget) × notional`, and lower it again once the leg is gone.
 
 ## Step 2: book-first liquidation
 

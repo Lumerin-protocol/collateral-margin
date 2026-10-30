@@ -289,6 +289,94 @@ resource "aws_cloudwatch_metric_alarm" "vault_backstop_equity" {
   })
 }
 
+resource "aws_cloudwatch_metric_alarm" "vault_backstop_loss" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-backstop-loss-${local.vault_mon_env}"
+  alarm_description   = "Protocol backstop equity is below -${var.vault_monitoring.backstop_loss_crit_usd} USD: its parked positions are losing enough to take a real bite out of the insurance fund once they unwind or settle. Check the keeper unwinder, widen the band with setBackstopParams (past the BackstopUnwindBudgetBps budget if deleveraging is cheaper than holding), or unwind by hand, and prepare a depositInsuranceFund top-up. See docs/protocol-liquidation-exposure.md#operating-the-backstop."
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "BackstopEquity"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Minimum"
+  threshold           = -var.vault_monitoring.backstop_loss_crit_usd
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Backstop Loss"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "vault_backstop_notional" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-backstop-notional-${local.vault_mon_env}"
+  alarm_description   = "Protocol backstop exposure at the mark (BackstopNotional, both venues) is above ${var.vault_monitoring.backstop_notional_warn_usd} USD: a large liquidation was handed to the backstop. Watch BackstopEquity, confirm the keeper unwinder is filling, and widen the band with setBackstopParams up to the BackstopUnwindBudgetBps budget if the book is not taking it. See docs/protocol-liquidation-exposure.md#operating-the-backstop. Warning only."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "BackstopNotional"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = var.vault_monitoring.backstop_notional_warn_usd
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Backstop Notional"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "vault_backstop_over_budget" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-backstop-over-budget-${local.vault_mon_env}"
+  alarm_description   = "The vault's backstop unwind band + caller fee is above the liquidation fee a venue keeps (liquidationFeeBps x (1 - liquidatorShareBps), BackstopUnwindBudgetBps). An unwind then gives away more than the liquidation earned, and anyone can profit by liquidating and unwinding against themselves (X3-R3A-2). Expected only while deliberately deleveraging; otherwise lower it with setBackstopParams. See docs/protocol-liquidation-exposure.md#operating-the-backstop. Warning only."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "BackstopUnwindOverBudgetBps"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = 0
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Backstop Over Budget"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "vault_backstop_unfilled" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-backstop-unfilled-${local.vault_mon_env}"
+  alarm_description   = "The protocol backstop has held an open leg for 6 hours: the book is not taking it inside the unwind band. Check the keeper unwinder is running, then widen the band with setBackstopParams in steps up to the BackstopUnwindBudgetBps budget (past it only to deleverage deliberately). See docs/protocol-liquidation-exposure.md#operating-the-backstop. Warning only."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 6
+  metric_name         = "BackstopOpenLegs"
+  namespace           = local.vault_mon_ns
+  period              = 3600
+  statistic           = "Minimum"
+  threshold           = 1
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Backstop Unfilled"
+    Capability = "Monitoring"
+  })
+}
+
 resource "aws_cloudwatch_metric_alarm" "vault_util_warn" {
   count               = var.vault_monitoring.create ? 1 : 0
   provider            = aws.use1
@@ -904,6 +992,10 @@ resource "aws_cloudwatch_dashboard" "vault" {
             alarms = concat(
               aws_cloudwatch_metric_alarm.vault_uncovered_loss[*].arn,
               aws_cloudwatch_metric_alarm.vault_backstop_equity[*].arn,
+              aws_cloudwatch_metric_alarm.vault_backstop_loss[*].arn,
+              aws_cloudwatch_metric_alarm.vault_backstop_notional[*].arn,
+              aws_cloudwatch_metric_alarm.vault_backstop_over_budget[*].arn,
+              aws_cloudwatch_metric_alarm.vault_backstop_unfilled[*].arn,
               aws_cloudwatch_metric_alarm.vault_util_warn[*].arn,
               aws_cloudwatch_metric_alarm.vault_util_crit[*].arn,
               aws_cloudwatch_metric_alarm.vault_halted[*].arn,
@@ -1232,6 +1324,45 @@ resource "aws_cloudwatch_dashboard" "vault" {
             metrics = [
               [var.vault_monitoring.oracle_metric_namespace, "oracle_data_age_minutes", "Environment", local.vault_mon_env, { label = "Hashprice age" }],
             ]
+          }
+        },
+        {
+          type   = "metric"
+          x      = 0
+          y      = 52
+          width  = 12
+          height = 6
+          properties = {
+            title  = "Backstop unwind band + fee vs kept liquidation fee (bps)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "BackstopUnwindBandBps", { label = "Band", stat = "Maximum" }],
+              [local.vault_mon_ns, "BackstopUnwindFeeBps", { label = "Caller fee", stat = "Maximum" }],
+              [local.vault_mon_ns, "BackstopUnwindOverBudgetBps", { label = "Over budget", stat = "Maximum" }],
+              [{ expression = "SEARCH('{${local.vault_mon_ns},Venue} MetricName=\"BackstopUnwindBudgetBps\"', 'Minimum', 300)", id = "budget", label = "Budget" }],
+            ]
+            yAxis = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 12
+          y      = 52
+          width  = 12
+          height = 6
+          properties = {
+            title  = "Protocol backstop exposure at the mark (USDC)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "BackstopNotional", { label = "Total", stat = "Maximum" }],
+              [{ expression = "SEARCH('{${local.vault_mon_ns},Venue} MetricName=\"BackstopNotional\"', 'Maximum', 300)", id = "venues", label = "" }],
+            ]
+            annotations = { horizontal = [{ label = "warn", value = var.vault_monitoring.backstop_notional_warn_usd }] }
+            yAxis = { left = { min = 0 } }
           }
         },
       ],

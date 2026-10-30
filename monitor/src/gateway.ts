@@ -151,6 +151,11 @@ export interface ChainState {
   pendingFunding: bigint;
   futuresLegs: { expirationAt: bigint; net: bigint }[];
   perpsNet: bigint;
+  /** Mark prices, collateral-token units: futures is per whole contract, perps per 1e6 units. */
+  futuresMark: bigint;
+  perpsMark: bigint;
+  /** Liquidation fee each venue keeps after the liquidator's share, in bps of notional. */
+  unwindBudgetBps: { venue: Address; bps: number }[];
 }
 
 export async function readChainState(
@@ -164,12 +169,26 @@ export async function readChainState(
     "function getActiveExpirationDates(address user) view returns (uint256[])",
     "function getUserPosition(address user, uint256 expirationAt) view returns (Position)",
     "function getUserPosition(address user) view returns (Position)",
+    "function liquidationFeeBps() view returns (uint16)",
+    "function liquidatorShareBps() view returns (uint16)",
+    "function getMarketPrice() view returns (uint256)",
   ]);
   const futures = { ...at, abi, address: FUTURES_ADDRESS };
   const perps = { ...at, abi, address: PERPS_ADDRESS };
 
-  const [usdcRaw, futuresRisk, expiries, perpsRisk, perpsPosition] =
-    await chain.multicall({
+  const [
+    usdcRaw,
+    futuresRisk,
+    expiries,
+    perpsRisk,
+    perpsPosition,
+    futuresLiquidationFee,
+    futuresLiquidatorShare,
+    perpsLiquidationFee,
+    perpsLiquidatorShare,
+    futuresMark,
+    perpsMark,
+  ] = await chain.multicall({
       ...at,
       multicallAddress: MULTICALL3,
       allowFailure: false,
@@ -200,6 +219,12 @@ export async function readChainState(
           functionName: "getUserPosition",
           args: [BACKSTOP],
         },
+        { ...futures, functionName: "liquidationFeeBps" },
+        { ...futures, functionName: "liquidatorShareBps" },
+        { ...perps, functionName: "liquidationFeeBps" },
+        { ...perps, functionName: "liquidatorShareBps" },
+        { ...futures, functionName: "getMarketPrice" },
+        { ...perps, functionName: "getMarketPrice" },
       ],
     });
 
@@ -212,7 +237,7 @@ export async function readChainState(
       functionName: "getUserPosition",
       args: [BACKSTOP, expirationAt],
     })),
-  })) as { netQuantity: bigint; netEntryValue: bigint }[];
+  })) as unknown as { netQuantity: bigint; netEntryValue: bigint }[];
   const futuresLegs = expiries.flatMap((expirationAt, index) => {
     const net = positions[index].netQuantity;
     return net === 0n ? [] : [{ expirationAt, net }];
@@ -224,7 +249,24 @@ export async function readChainState(
     pendingFunding: perpsRisk.pendingFunding,
     futuresLegs,
     perpsNet: perpsPosition.netQuantity,
+    futuresMark,
+    perpsMark,
+    unwindBudgetBps: [
+      {
+        venue: FUTURES_ADDRESS,
+        bps: keptBps(futuresLiquidationFee, futuresLiquidatorShare),
+      },
+      {
+        venue: PERPS_ADDRESS,
+        bps: keptBps(perpsLiquidationFee, perpsLiquidatorShare),
+      },
+    ],
   };
+}
+
+/** Same rounding as the venues: the liquidator's share rounds down, the venue keeps the rest. */
+function keptBps(feeBps: number, liquidatorShareBps: number): number {
+  return feeBps - Math.floor((feeBps * liquidatorShareBps) / 10_000);
 }
 
 /** One order book and the market maker's position in it. Prices are collateral-token units. */
