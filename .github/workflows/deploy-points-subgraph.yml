@@ -115,7 +115,8 @@ jobs:
 
   build:
     name: 🔨 Build
-    runs-on: ubuntu-latest
+    # matchstick ships no binary for Ubuntu 26, which ubuntu-latest became in 2026-10.
+    runs-on: ubuntu-24.04
     needs: setup
     environment: ${{ github.event_name != 'pull_request' && needs.setup.outputs.environment || '' }}
     outputs:
