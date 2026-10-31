@@ -271,7 +271,7 @@ function keptBps(feeBps: number, liquidatorShareBps: number): number {
 
 /** One order book and the market maker's position in it. Prices are collateral-token units. */
 export interface MarketBook {
-  /** "perps" or "futures-<expirationAt>". */
+  /** "perp" or "fut-<mon>-<dd>" (marketName). */
   market: string;
   /** notional = price * |net| / quantityScale: perps 1e6, futures whole contracts. */
   quantityScale: bigint;
@@ -373,7 +373,7 @@ export async function readMarketMaker(
 
   const markets: MarketBook[] = [
     {
-      market: "perps",
+      market: marketName("perps"),
       quantityScale: 1_000_000n,
       markPrice: perpsPrice,
       bids: perpsBids,
@@ -387,7 +387,7 @@ export async function readMarketMaker(
       ];
       const position = futuresReads[2 * index + 1] as { netQuantity: bigint };
       return {
-        market: `futures-${expirationAt}`,
+        market: marketName(`futures:${expirationAt}`),
         quantityScale: 1n,
         markPrice: futuresPrice,
         bids,
@@ -439,12 +439,26 @@ export async function readMarketMakerHealth(
     throttled: body.risk.throttled,
     pauseNew: body.risk.pauseNew,
     markets: body.markets.map((market) => ({
-      // Same ids as the book metrics: "futures:<exp>" becomes "futures-<exp>".
-      market: market.id.replace(":", "-"),
+      market: marketName(market.id),
       breaker: market.breaker,
       ownOrders: market.ownOrders,
     })),
   };
+}
+
+const MONTHS = "jan feb mar apr may jun jul aug sep oct nov dec".split(" ");
+
+/**
+ * Market dimension value, shared by the book metrics and the market maker's
+ * /health ids ("perps", "futures:<expirationAt>"): "perp", or "fut-<mon>-<dd>"
+ * from the expiry's UTC date. Listed expiries are under a year apart, so the
+ * year is left out.
+ */
+export function marketName(id: string): string {
+  if (id === "perps") return "perp";
+  const expiry = new Date(Number(id.slice("futures:".length)) * 1000);
+  const day = String(expiry.getUTCDate()).padStart(2, "0");
+  return `fut-${MONTHS[expiry.getUTCMonth()]}-${day}`;
 }
 
 /** Block timestamp at a pinned height, for when the subgraph omits its own. */

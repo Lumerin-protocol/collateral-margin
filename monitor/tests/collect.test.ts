@@ -50,6 +50,8 @@ const mmAbi = parseAbi([
   "function getEthBalance(address addr) view returns (uint256)",
 ]);
 const MARGIN_ENGINE = "0x0000000000000000000000000000000000000009";
+/** Listed futures expiries (12:00 UTC): 2026-11-25, 2026-12-25, 2027-01-24, 2027-02-23. */
+const [EXP1, EXP2, EXP3, EXP4] = [1_795_608_000n, 1_798_200_000n, 1_800_792_000n, 1_803_384_000n];
 let failMarketMaker = false;
 let failHealth = false;
 
@@ -59,9 +61,9 @@ const healthResponse = () => ({
   risk: { throttled: false, pauseNew: true },
   markets: [
     { id: "perps", breaker: "active", ownOrders: 20 },
-    { id: "futures:100", breaker: "quarantined", ownOrders: 0 },
-    { id: "futures:200", breaker: "degraded", ownOrders: 7 },
-    { id: "futures:300", breaker: "active", ownOrders: 12 },
+    { id: `futures:${EXP1}`, breaker: "quarantined", ownOrders: 0 },
+    { id: `futures:${EXP2}`, breaker: "degraded", ownOrders: 7 },
+    { id: `futures:${EXP3}`, breaker: "active", ownOrders: 12 },
   ],
   stats: { lastTickAt: Date.now() - 30_000 },
 });
@@ -210,10 +212,10 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
   switch (functionName) {
     case "getOrderBookPrices": {
       if (failMarketMaker) throw new Error("book read reverted");
-      // perps two-sided; futures 100 two-sided, 200 bids only, 300 two-sided.
+      // perps two-sided; futures EXP1 two-sided, EXP2 bids only, EXP3 two-sided.
       const expiry = isFutures ? args?.[0] : undefined;
       const bids = [39_500_000n, 39_490_000n];
-      const asks = expiry === 200n ? [] : [39_510_000n];
+      const asks = expiry === EXP2 ? [] : [39_510_000n];
       return encodeFunctionResult({
         abi: venueAbi,
         functionName,
@@ -230,7 +232,7 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
       return encodeFunctionResult({
         abi: venueAbi,
         functionName,
-        result: [100n, 200n, 300n, 400n],
+        result: [EXP1, EXP2, EXP3, EXP4],
       });
     case "getRiskView":
       return encodeFunctionResult({
@@ -257,12 +259,12 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
       return encodeFunctionResult({
         abi: venueAbi,
         functionName,
-        result: [100n, 200n],
+        result: [EXP1, EXP2],
       });
     case "getUserPosition":
       if (isMm) {
-        // MM: perps +56 units; futures 100 → -9, 200 → flat, 300 → +25.
-        const byExpiry: Record<string, bigint> = { "100": -9n, "300": 25n };
+        // MM: perps +56 units; futures EXP1 → -9, EXP2 → flat, EXP3 → +25.
+        const byExpiry: Record<string, bigint> = { [String(EXP1)]: -9n, [String(EXP3)]: 25n };
         return encodeFunctionResult({
           abi: venueAbi,
           functionName,
@@ -274,12 +276,12 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
           },
         });
       }
-      // futures: expiry 100 → +2, expiry 200 → flat; perps → -7e6
+      // futures: expiry EXP1 → +2, expiry EXP2 → flat; perps → -7e6
       return encodeFunctionResult({
         abi: venueAbi,
         functionName,
         result: isFutures
-          ? { netQuantity: args?.[1] === 100n ? 2n : 0n, netEntryValue: 0n }
+          ? { netQuantity: args?.[1] === EXP1 ? 2n : 0n, netEntryValue: 0n }
           : { netQuantity: -7_000_000n, netEntryValue: 0n },
       });
     default:
@@ -467,7 +469,9 @@ describe("collect", () => {
     assert.equal(value("BackstopEquity"), 40); // 50 - 11 + 1
     assert.equal(value("BackstopOpenLegs"), 2); // one futures expiry, one perps
     assert.equal(value("BackstopFuturesNetQuantity"), 2);
-    assert.equal(value("BackstopFuturesNetQuantity", "100"), 2);
+    assert.equal(value("BackstopFuturesNetQuantity", "fut-nov-25"), 2);
+    const leg = points.find((p) => p.MetricName === "BackstopFuturesNetQuantity" && p.Dimensions);
+    assert.equal(leg?.Dimensions?.[0]?.Name, "Market");
     assert.equal(value("BackstopPerpsNetQuantity"), -7_000_000);
   });
 
@@ -507,6 +511,16 @@ describe("collect", () => {
     assert.ok(Math.abs((value("BtcUsdFeedAgeSeconds") ?? 0) - 60) <= 5);
   });
 
+  it("names markets perp and fut-<mon>-<dd> by the expiry's UTC date", () => {
+    const markets = new Set(
+      points
+        .filter((p) => p.MetricName === "BookBidLevels")
+        .map((p) => p.Dimensions?.[0]?.Value),
+    );
+    assert.deepEqual([...markets].sort(), ["fut-dec-25", "fut-jan-24", "fut-nov-25", "perp"]);
+    assert.equal(value("MmOwnOrders", "fut-jan-24"), 12);
+  });
+
   it("tags per-venue bad debt with the venue address", () => {
     assert.equal(value("TraderBadDebtTotal", process.env.FUTURES_ADDRESS), 30);
     assert.equal(
@@ -516,19 +530,19 @@ describe("collect", () => {
   });
 
   it("counts book levels per market and flags the emptiest side", () => {
-    assert.equal(value("BookBidLevels", "perps"), 2);
-    assert.equal(value("BookAskLevels", "perps"), 1);
-    assert.equal(value("BookAskLevels", "futures-200"), 0);
+    assert.equal(value("BookBidLevels", "perp"), 2);
+    assert.equal(value("BookAskLevels", "perp"), 1);
+    assert.equal(value("BookAskLevels", "fut-dec-25"), 0);
     assert.equal(value("BookMinSideLevels"), 0);
     // only the nearest MM_FUTURES_MARKETS expiries are watched
-    assert.ok(!points.some((p) => p.Dimensions?.[0]?.Value === "futures-400"));
-    const spread = value("BookSpreadBps", "perps") ?? 0;
+    assert.ok(!points.some((p) => p.Dimensions?.[0]?.Value === "fut-feb-23"));
+    const spread = value("BookSpreadBps", "perp") ?? 0;
     assert.ok(Math.abs(spread - 2.53) < 0.01, `spread ${spread}`);
   });
 
   it("measures how far each book's mid sits from the mark", () => {
     // mid 39.505 against a $40 mark
-    const drift = value("BookMidDriftBps", "perps") ?? 0;
+    const drift = value("BookMidDriftBps", "perp") ?? 0;
     assert.ok(Math.abs(drift - 123.75) < 0.01, `drift ${drift}`);
     assert.ok(Math.abs((value("BookMaxMidDriftBps") ?? 0) - 123.75) < 0.01);
     // a one-sided book has no mid
@@ -536,7 +550,7 @@ describe("collect", () => {
       !points.some(
         (p) =>
           p.MetricName === "BookMidDriftBps" &&
-          p.Dimensions?.[0]?.Value === "futures-200",
+          p.Dimensions?.[0]?.Value === "fut-dec-25",
       ),
     );
   });
@@ -551,14 +565,14 @@ describe("collect", () => {
     assert.equal(value("MmQuarantinedMarkets"), 1);
     assert.equal(value("MmMarketCount"), 4);
     assert.equal(value("MmMinOwnOrders"), 0);
-    assert.equal(value("MmOwnOrders", "perps"), 20);
-    assert.equal(value("MmOwnOrders", "futures-100"), 0);
+    assert.equal(value("MmOwnOrders", "perp"), 20);
+    assert.equal(value("MmOwnOrders", "fut-nov-25"), 0);
     assert.match(summary, /mm_status=running quarantined=1 min_own_orders=0/);
   });
 
   it("reports market-maker position notional in USDC", () => {
-    assert.equal(value("MmPositionNotional", "perps"), 2_240); // 56 × $40
-    assert.equal(value("MmPositionNotional", "futures-100"), 360); // 9 × $40
+    assert.equal(value("MmPositionNotional", "perp"), 2_240); // 56 × $40
+    assert.equal(value("MmPositionNotional", "fut-nov-25"), 360); // 9 × $40
     assert.equal(value("MmPerpsPositionNotional"), 2_240);
     assert.equal(value("MmFuturesMaxPositionNotional"), 1_000); // 25 × $40
   });

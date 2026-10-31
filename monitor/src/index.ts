@@ -24,6 +24,7 @@ import {
   type FeedHistory,
   type MarketMakerHealth,
   type MarketMakerState,
+  marketName,
   readBitcoinTip,
   readBlockNumber,
   readBlockTimestamp,
@@ -236,7 +237,7 @@ export async function collect(): Promise<{
         "BackstopFuturesNetQuantity",
         leg.net,
         "Count",
-        dim("ExpirationAt", leg.expirationAt),
+        dim("Market", marketName(`futures:${leg.expirationAt}`)),
       ),
     );
   }
@@ -384,7 +385,7 @@ function marketMakerMetrics(
     const absNet = book.mmNet < 0n ? -book.mmNet : book.mmNet;
     const notional = usdc((absNet * book.markPrice) / book.quantityScale);
     minSide = Math.min(minSide, book.bids.length, book.asks.length);
-    if (book.market === "perps") perpsNotional = notional;
+    if (book.market === marketName("perps")) perpsNotional = notional;
     else futuresMaxNotional = Math.max(futuresMaxNotional, notional);
 
     points.push(
