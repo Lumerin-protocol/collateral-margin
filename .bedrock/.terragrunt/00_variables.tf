@@ -241,14 +241,17 @@ variable "vault_monitoring" {
 }
 
 variable "vault_env" {
-  description = "Vault monitor addresses and subgraph URLs from config/dev.env or config/prd.env (VAULT_ADDRESS, FUTURES_ADDRESS, PERPS_ADDRESS, MM_ADDRESS, VAULT_SUBGRAPH_URL, POINTS_SUBGRAPH_URL). All required; the Lambda does not validate its environment."
+  description = "Vault monitor addresses and subgraph URLs from config/dev.env or config/prd.env (VAULT_ADDRESS, FUTURES_ADDRESS, PERPS_ADDRESS, MM_ADDRESS, VAULT_SUBGRAPH_URL, POINTS_SUBGRAPH_URL, FUTURES_SUBGRAPH_URL, DERIVATIVES_SUBGRAPH_URL, HASHPRICE_ORACLE_SUBGRAPH_URL). All required; the Lambda does not validate its environment."
   type = object({
-    subgraph_url        = string
-    points_subgraph_url = string
-    vault_address       = string
-    futures_address     = string
-    perps_address       = string
-    mm_address          = string
+    subgraph_url             = string
+    points_subgraph_url      = string
+    futures_subgraph_url     = string
+    derivatives_subgraph_url = string
+    oracles_subgraph_url     = string
+    vault_address            = string
+    futures_address          = string
+    perps_address            = string
+    mm_address               = string
   })
   validation {
     condition     = alltrue([for value in values(var.vault_env) : value != ""])

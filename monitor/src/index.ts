@@ -32,6 +32,8 @@ import {
   readMarketMakerHealth,
   readPointsMeta,
   readPrices,
+  readSubgraphMeta,
+  WATCHED_SUBGRAPHS,
   readVault,
 } from "./gateway.ts";
 import {
@@ -89,6 +91,7 @@ export async function collect(): Promise<{
     makerHealth,
     bitcoinTip,
     prices,
+    subgraphMetas,
   ] = await Promise.all([
       readChainState(at, vault.collateralToken),
       // Goldsky leaves _meta.block.timestamp null; the age alarm needs the real one.
@@ -127,6 +130,21 @@ export async function collect(): Promise<{
         log(`price check failed: ${error?.shortMessage ?? error}`);
         return null;
       }),
+      // Best-effort: these subgraphs feed the UI and market maker, not the vault check.
+      Promise.all(
+        Object.entries(WATCHED_SUBGRAPHS)
+          .filter(([, url]) => url)
+          .map(([name, url]) =>
+            readSubgraphMeta(url).then(
+              (meta) => ({ name, meta }),
+              (error) => {
+                failed.push(`subgraph_${name}`);
+                log(`${name} subgraph check failed: ${error}`);
+                return null;
+              },
+            ),
+          ),
+      ),
     ]);
   const head = Number(headBlock);
 
@@ -261,6 +279,24 @@ export async function collect(): Promise<{
         pointsMeta.hasIndexingErrors ? 1 : 0,
         "Count",
         dim("Subgraph", "points"),
+      ),
+    );
+  }
+
+  for (const entry of subgraphMetas) {
+    if (!entry) continue;
+    points.push(
+      metric(
+        "SubgraphBlocksBehind",
+        Math.max(0, head - entry.meta.block),
+        "Count",
+        dim("Subgraph", entry.name),
+      ),
+      metric(
+        "SubgraphIndexingErrors",
+        entry.meta.hasIndexingErrors ? 1 : 0,
+        "Count",
+        dim("Subgraph", entry.name),
       ),
     );
   }

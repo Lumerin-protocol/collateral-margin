@@ -458,12 +458,27 @@ export function readBlockNumber() {
 }
 
 /** Points-subgraph head, so the caller can measure its lag against the chain. */
-export async function readPointsMeta(): Promise<{
+export function readPointsMeta() {
+  return readSubgraphMeta(POINTS_SUBGRAPH_URL);
+}
+
+/**
+ * Subgraphs the monitor only watches for lag and indexing errors, keyed by the
+ * Subgraph dimension. An unset URL is skipped.
+ */
+export const WATCHED_SUBGRAPHS = {
+  futures: process.env.FUTURES_SUBGRAPH_URL ?? "",
+  derivatives: process.env.DERIVATIVES_SUBGRAPH_URL ?? "",
+  oracles: process.env.HASHPRICE_ORACLE_SUBGRAPH_URL ?? "",
+};
+
+/** A subgraph's indexed head and error flag from `_meta`. */
+export async function readSubgraphMeta(url: string): Promise<{
   block: number;
   hasIndexingErrors: boolean;
 }> {
   const { _meta } = await gql(
-    POINTS_SUBGRAPH_URL,
+    url,
     `{ _meta { block { number } hasIndexingErrors } }`,
   );
   return {

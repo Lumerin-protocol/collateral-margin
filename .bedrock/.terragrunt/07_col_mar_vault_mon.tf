@@ -44,6 +44,14 @@ locals {
     "hashprice" = { metric = "HashpriceFeedAgeSeconds", seconds = 7200 }
     "btc-usd"   = { metric = "BtcUsdFeedAgeSeconds", seconds = 3600 }
   }
+  # Subgraphs watched for lag and indexing errors beyond the vault one. Futures
+  # and derivatives feed the UI's positions and orders; the market maker reads
+  # oracles only to backfill volatility at startup.
+  watched_subgraphs = {
+    "futures"     = { title = "Futures", severity = "critical" }
+    "derivatives" = { title = "Derivatives", severity = "critical" }
+    "oracles"     = { title = "Hashprice oracle", severity = "warning" }
+  }
   btc_halving_reminders = { "500" = "warning", "495" = "warning", "30" = "warning", "14" = "warning", "7" = "warning", "2" = "critical", "1" = "critical" }
   # The portfolio market maker is the futures_mm service.
   vault_mm_health     = var.vault_monitoring.create && var.futures_mm_service.create
@@ -166,17 +174,20 @@ resource "aws_lambda_function" "vault_mon" {
 
   environment {
     variables = {
-      VAULT_SUBGRAPH_URL  = var.vault_env.subgraph_url
-      POINTS_SUBGRAPH_URL = var.vault_env.points_subgraph_url
-      VAULT_ADDRESS       = var.vault_env.vault_address
-      FUTURES_ADDRESS     = var.vault_env.futures_address
-      PERPS_ADDRESS       = var.vault_env.perps_address
-      MM_ADDRESS          = var.vault_env.mm_address
-      MM_FUTURES_MARKETS  = tostring(var.vault_monitoring.mm_futures_markets)
-      MM_HEALTH_URL       = local.vault_mm_health_url
-      ETH_RPC_URL         = "${local.vault_rpc_host}/${var.alchemy_api_key}"
-      BITCOIN_RPC_URL     = local.vault_btc_rpc_url
-      CW_NAMESPACE        = local.vault_mon_ns
+      VAULT_SUBGRAPH_URL            = var.vault_env.subgraph_url
+      POINTS_SUBGRAPH_URL           = var.vault_env.points_subgraph_url
+      FUTURES_SUBGRAPH_URL          = var.vault_env.futures_subgraph_url
+      DERIVATIVES_SUBGRAPH_URL      = var.vault_env.derivatives_subgraph_url
+      HASHPRICE_ORACLE_SUBGRAPH_URL = var.vault_env.oracles_subgraph_url
+      VAULT_ADDRESS                 = var.vault_env.vault_address
+      FUTURES_ADDRESS               = var.vault_env.futures_address
+      PERPS_ADDRESS                 = var.vault_env.perps_address
+      MM_ADDRESS                    = var.vault_env.mm_address
+      MM_FUTURES_MARKETS            = tostring(var.vault_monitoring.mm_futures_markets)
+      MM_HEALTH_URL                 = local.vault_mm_health_url
+      ETH_RPC_URL                   = "${local.vault_rpc_host}/${var.alchemy_api_key}"
+      BITCOIN_RPC_URL               = local.vault_btc_rpc_url
+      CW_NAMESPACE                  = local.vault_mon_ns
     }
   }
 
@@ -730,6 +741,52 @@ resource "aws_cloudwatch_metric_alarm" "points_subgraph_behind" {
   })
 }
 
+resource "aws_cloudwatch_metric_alarm" "watched_subgraph_behind" {
+  for_each            = var.vault_monitoring.create ? local.watched_subgraphs : {}
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-${each.key}-subgraph-behind-${local.vault_mon_env}"
+  alarm_description   = "${each.value.title} subgraph is more than ${var.vault_monitoring.max_subgraph_age_minutes} minutes of blocks behind the chain head. The tag is still indexing or stalled, so the UI and anything reading it show stale data. Check goldsky subgraph log --filter error."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "SubgraphBlocksBehind"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = var.vault_monitoring.max_subgraph_age_minutes * 30
+  treat_missing_data  = "ignore"
+  dimensions          = { Subgraph = each.key }
+  alarm_actions       = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+  ok_actions          = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar ${each.value.title} Subgraph Behind"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "watched_subgraph_errors" {
+  for_each            = var.vault_monitoring.create ? merge({ "points" = { title = "Points", severity = "critical" } }, local.watched_subgraphs) : {}
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-${each.key}-subgraph-errors-${local.vault_mon_env}"
+  alarm_description   = "${each.value.title} subgraph reports indexing errors (_meta.hasIndexingErrors). A handler failed; the subgraph stops or skips data. Check goldsky subgraph log --filter error, fix the mapping and redeploy."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "SubgraphIndexingErrors"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = 1
+  treat_missing_data  = "ignore"
+  dimensions          = { Subgraph = each.key }
+  alarm_actions       = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+  ok_actions          = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar ${each.value.title} Subgraph Errors"
+    Capability = "Monitoring"
+  })
+}
+
 resource "aws_cloudwatch_metric_alarm" "vault_subgraph_errors" {
   count               = var.vault_monitoring.create ? 1 : 0
   provider            = aws.use1
@@ -1164,6 +1221,8 @@ resource "aws_cloudwatch_dashboard" "vault" {
               aws_cloudwatch_metric_alarm.vault_subgraph_behind[*].arn,
               aws_cloudwatch_metric_alarm.points_subgraph_behind[*].arn,
               aws_cloudwatch_metric_alarm.vault_subgraph_errors[*].arn,
+              [for alarm in aws_cloudwatch_metric_alarm.watched_subgraph_behind : alarm.arn],
+              [for alarm in aws_cloudwatch_metric_alarm.watched_subgraph_errors : alarm.arn],
               aws_cloudwatch_metric_alarm.keeper_unhealthy[*].arn,
               aws_cloudwatch_metric_alarm.keeper_silent[*].arn,
               aws_cloudwatch_metric_alarm.keeper_errors[*].arn,

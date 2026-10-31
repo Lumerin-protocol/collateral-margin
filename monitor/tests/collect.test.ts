@@ -18,6 +18,9 @@ import {
 process.env.CW_NAMESPACE = "Test";
 process.env.VAULT_SUBGRAPH_URL = "https://vault.test/gql";
 process.env.POINTS_SUBGRAPH_URL = "https://points.test/gql";
+process.env.FUTURES_SUBGRAPH_URL = "https://futures.test/gql";
+process.env.DERIVATIVES_SUBGRAPH_URL = "https://derivatives.test/gql";
+process.env.HASHPRICE_ORACLE_SUBGRAPH_URL = "https://oracles.test/gql";
 process.env.ETH_RPC_URL = "https://rpc.test/v2/key";
 process.env.VAULT_ADDRESS = "0x0000000000000000000000000000000000000001";
 process.env.FUTURES_ADDRESS = "0x0000000000000000000000000000000000000002";
@@ -333,6 +336,14 @@ function graphql(url: string) {
         },
       },
     };
+  const meta = (behindVault: number, hasIndexingErrors: boolean) => ({
+    data: {
+      _meta: { block: { number: String(BLOCK - behindVault) }, hasIndexingErrors },
+    },
+  });
+  if (url.startsWith("https://futures.test")) return meta(17, false);
+  if (url.startsWith("https://derivatives.test")) return meta(0, true);
+  if (url.startsWith("https://oracles.test")) return meta(-3, false);
   throw new Error(`unexpected url ${url}`);
 }
 
@@ -438,6 +449,16 @@ describe("collect", () => {
   it("reports points-subgraph drift against the chain head", () => {
     assert.equal(value("SubgraphBlocksBehind", "points"), 10);
     assert.equal(value("SubgraphIndexingErrors", "points"), 1);
+  });
+
+  it("reports lag and indexing errors for the futures, derivatives and oracle subgraphs", () => {
+    // chain head is 3 blocks past the vault subgraph block
+    assert.equal(value("SubgraphBlocksBehind", "futures"), 20);
+    assert.equal(value("SubgraphIndexingErrors", "futures"), 0);
+    assert.equal(value("SubgraphBlocksBehind", "derivatives"), 3);
+    assert.equal(value("SubgraphIndexingErrors", "derivatives"), 1);
+    assert.equal(value("SubgraphBlocksBehind", "oracles"), 0);
+    assert.equal(value("SubgraphIndexingErrors", "oracles"), 0);
   });
 
   it("derives backstop equity from balance, unrealized PnL and funding", () => {
