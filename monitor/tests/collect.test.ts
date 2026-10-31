@@ -25,6 +25,7 @@ process.env.PERPS_ADDRESS = "0x0000000000000000000000000000000000000003";
 process.env.MM_ADDRESS = "0x0000000000000000000000000000000000000004";
 process.env.MM_FUTURES_MARKETS = "3";
 process.env.MM_HEALTH_URL = "https://mm.test/health/raw";
+process.env.BITCOIN_RPC_URL = "https://btc.test/v2/key";
 
 const venueAbi = parseAbi([
   "struct RiskView { int256 netPositionDelta; int256 unrealizedPnl; int256 pendingFunding; uint256 buyOrderDelta; uint256 sellOrderDelta; uint256 buyOrderFillLoss; uint256 sellOrderFillLoss; }",
@@ -291,6 +292,23 @@ function graphql(url: string) {
   throw new Error(`unexpected url ${url}`);
 }
 
+/** Bitcoin tip 4,000 blocks before the 1,050,000 halving, 9.5-minute blocks over the last 2,016. */
+const BTC_TIP = 1_046_000;
+const BTC_TIP_TIME = 1_900_000_000;
+const BTC_BLOCK_SECONDS = 570;
+
+function bitcoinRpc(request: { id: number; method: string; params: unknown[] }) {
+  const { id, method, params } = request;
+  let result: unknown;
+  if (method === "getblockcount") result = BTC_TIP;
+  else if (method === "getblockhash") result = `hash-${params[0]}`;
+  else if (method === "getblockheader") {
+    const height = Number(String(params[0]).slice("hash-".length));
+    result = { height, time: BTC_TIP_TIME - (BTC_TIP - height) * BTC_BLOCK_SECONDS };
+  } else throw new Error(`unexpected bitcoin rpc ${method}`);
+  return { jsonrpc: "2.0", id, result, error: null };
+}
+
 const userAgents = new Set<string>();
 
 globalThis.fetch = (async (
@@ -302,6 +320,8 @@ globalThis.fetch = (async (
     return failHealth
       ? new Response("busy", { status: 503 })
       : Response.json(healthResponse());
+  if (url.startsWith("https://btc.test"))
+    return Response.json(bitcoinRpc(JSON.parse(String(init?.body))));
   userAgents.add(new Headers(init?.headers).get("user-agent") ?? "");
   const body = JSON.parse(String(init?.body));
   const payload = url.startsWith("https://rpc.test")
@@ -403,6 +423,12 @@ describe("collect", () => {
     );
     // band 200 + fee 25 against the tighter 160 bps budget
     assert.equal(value("BackstopUnwindOverBudgetBps"), 65);
+  });
+
+  it("counts down to the next Bitcoin halving from the node's tip", () => {
+    assert.equal(value("BtcBlocksUntilHalving"), 4_000);
+    const days = value("BtcDaysUntilHalving") ?? 0;
+    assert.ok(Math.abs(days - (4_000 * BTC_BLOCK_SECONDS) / 86_400) < 1e-9, `days ${days}`);
   });
 
   it("tags per-venue bad debt with the venue address", () => {

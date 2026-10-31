@@ -26,6 +26,10 @@ locals {
   vault_warning_actions  = var.vault_monitoring.notifications_enabled ? [local.vault_slack_topic_arn] : []
   vault_critical_actions = var.vault_monitoring.notifications_enabled ? [local.vault_critical_topic_arn] : []
   vault_rpc_host         = var.account_lifecycle == "prd" ? "https://base-mainnet.g.alchemy.com/v2" : "https://base-sepolia.g.alchemy.com/v2"
+  vault_btc_rpc_url      = var.bitcoin_rpc_url != "" ? var.bitcoin_rpc_url : "https://bitcoin-mainnet.g.alchemy.com/v2/${var.alchemy_api_key}"
+  # Days before the Bitcoin halving at which a reminder fires, and its severity.
+  # 500 and 495 are temporary, to see the alarms fire (about 503 days out on 2026-10-31).
+  btc_halving_reminders = { "500" = "warning", "495" = "warning", "30" = "warning", "14" = "warning", "7" = "warning", "2" = "critical", "1" = "critical" }
   # The portfolio market maker is the futures_mm service.
   vault_mm_health     = var.vault_monitoring.create && var.futures_mm_service.create
   vault_mm_health_url = local.vault_mm_health ? "https://futuresmm.${local.hp_dns["exc"].name}/health/raw" : ""
@@ -156,6 +160,7 @@ resource "aws_lambda_function" "vault_mon" {
       MM_FUTURES_MARKETS  = tostring(var.vault_monitoring.mm_futures_markets)
       MM_HEALTH_URL       = local.vault_mm_health_url
       ETH_RPC_URL         = "${local.vault_rpc_host}/${var.alchemy_api_key}"
+      BITCOIN_RPC_URL     = local.vault_btc_rpc_url
       CW_NAMESPACE        = local.vault_mon_ns
     }
   }
@@ -373,6 +378,27 @@ resource "aws_cloudwatch_metric_alarm" "vault_backstop_unfilled" {
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Vault Backstop Unfilled"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "btc_halving" {
+  for_each            = var.vault_monitoring.create ? local.btc_halving_reminders : {}
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-btc-halving-${each.key}d-${local.vault_mon_env}"
+  alarm_description   = "The Bitcoin halving is about ${each.key} day(s) away (BtcDaysUntilHalving, from the average block time over the last 2,016 blocks; BtcBlocksUntilHalving is exact). It halves the subsidy part of hashprice in one block, far beyond the MM shock: raise margin requirements on the published schedule (CF-321) with setShocks, and check futures expiries that straddle it. Fires once per halving; ${each.value == "critical" ? "pages on lmn" : "warning only"}."
+  comparison_operator = "LessThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "BtcDaysUntilHalving"
+  namespace           = local.vault_mon_ns
+  period              = 3600
+  statistic           = "Minimum"
+  threshold           = tonumber(each.key)
+  treat_missing_data  = "ignore"
+  alarm_actions       = each.value == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar BTC Halving ${each.key}d"
     Capability = "Monitoring"
   })
 }
@@ -996,6 +1022,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
               aws_cloudwatch_metric_alarm.vault_backstop_notional[*].arn,
               aws_cloudwatch_metric_alarm.vault_backstop_over_budget[*].arn,
               aws_cloudwatch_metric_alarm.vault_backstop_unfilled[*].arn,
+              [for alarm in aws_cloudwatch_metric_alarm.btc_halving : alarm.arn],
               aws_cloudwatch_metric_alarm.vault_util_warn[*].arn,
               aws_cloudwatch_metric_alarm.vault_util_crit[*].arn,
               aws_cloudwatch_metric_alarm.vault_halted[*].arn,
@@ -1362,7 +1389,24 @@ resource "aws_cloudwatch_dashboard" "vault" {
               [{ expression = "SEARCH('{${local.vault_mon_ns},Venue} MetricName=\"BackstopNotional\"', 'Maximum', 300)", id = "venues", label = "" }],
             ]
             annotations = { horizontal = [{ label = "warn", value = var.vault_monitoring.backstop_notional_warn_usd }] }
-            yAxis = { left = { min = 0 } }
+            yAxis       = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 0
+          y      = 58
+          width  = 12
+          height = 6
+          properties = {
+            title  = "Days until the Bitcoin halving"
+            region = var.default_region
+            period = 3600
+            view   = "singleValue"
+            metrics = [
+              [local.vault_mon_ns, "BtcDaysUntilHalving", { label = "Days", stat = "Minimum" }],
+              [local.vault_mon_ns, "BtcBlocksUntilHalving", { label = "Blocks", stat = "Minimum" }],
+            ]
           }
         },
       ],

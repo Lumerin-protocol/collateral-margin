@@ -149,6 +149,13 @@ variable "alchemy_api_key" {
   sensitive   = true
 }
 
+variable "bitcoin_rpc_url" {
+  description = "Bitcoin JSON-RPC URL for the vault monitor's halving countdown (Alchemy bitcoin-mainnet). Empty composes it from alchemy_api_key"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "liquidator_private_key" {
   description = "Keeper signer. Injected as LIQUIDATOR_PRIVATE_KEY"
   type        = string

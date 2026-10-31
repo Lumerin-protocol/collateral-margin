@@ -19,8 +19,11 @@
  */
 import type { MetricDatum } from "@aws-sdk/client-cloudwatch";
 import {
+  type BitcoinTip,
+  DIFFICULTY_PERIOD,
   type MarketMakerHealth,
   type MarketMakerState,
+  readBitcoinTip,
   readBlockNumber,
   readBlockTimestamp,
   readChainState,
@@ -46,6 +49,8 @@ const MM_HEALTH_URL = process.env.MM_HEALTH_URL ?? "";
 /** Venue dimension values, matching the per-venue metrics the subgraph tags by address. */
 const FUTURES_VENUE = process.env.FUTURES_ADDRESS?.toLowerCase() ?? "";
 const PERPS_VENUE = process.env.PERPS_ADDRESS?.toLowerCase() ?? "";
+/** Bitcoin consensus: the block subsidy halves every 210,000 blocks. */
+const HALVING_INTERVAL = 210_000;
 
 export async function handler(): Promise<{ statusCode: number; body: string }> {
   log(`vault monitor ${new Date().toISOString()}`);
@@ -78,6 +83,7 @@ export async function collect(): Promise<{
     pointsMeta,
     maker,
     makerHealth,
+    bitcoinTip,
   ] = await Promise.all([
       readChainState(at, vault.collateralToken),
       // Goldsky leaves _meta.block.timestamp null; the age alarm needs the real one.
@@ -101,6 +107,11 @@ export async function collect(): Promise<{
             return null;
           })
         : undefined,
+      // Best-effort: the halving countdown must not fail the vault debt check.
+      readBitcoinTip().catch((error) => {
+        log(`halving check failed: ${error}`);
+        return null;
+      }),
     ]);
   const head = Number(headBlock);
 
@@ -239,6 +250,8 @@ export async function collect(): Promise<{
     );
   }
 
+  if (bitcoinTip) points.push(...halvingMetrics(bitcoinTip));
+
   const book = maker ? marketMakerMetrics(maker, decimals) : null;
   points.push(...(book?.points ?? []));
   points.push(metric("MarketCheckSuccess", book ? 1 : 0, "Count"));
@@ -255,6 +268,21 @@ export async function collect(): Promise<{
     `block=${block} head=${head} behind=${behind} age=${age}s debt=${vault.insuranceDebt} gap_raw=${gapRaw} ` +
     `halted=${vault.halted} backstop_equity=${equity} ${book?.summary ?? "mm=failed"}${healthSummary}`;
   return { points, summary };
+}
+
+/**
+ * Countdown to the next Bitcoin halving, which cuts the subsidy part of
+ * hashprice in half in one block. Days use the average block time over the
+ * last retarget period, so the reminder alarms fire close to the real date.
+ */
+function halvingMetrics({ height, time, periodStartTime }: BitcoinTip): MetricDatum[] {
+  const next = (Math.floor(height / HALVING_INTERVAL) + 1) * HALVING_INTERVAL;
+  const blocks = next - height;
+  const blockSeconds = (time - periodStartTime) / DIFFICULTY_PERIOD;
+  return [
+    metric("BtcBlocksUntilHalving", blocks, "Count"),
+    metric("BtcDaysUntilHalving", (blocks * blockSeconds) / 86_400),
+  ];
 }
 
 /**

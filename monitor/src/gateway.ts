@@ -471,3 +471,53 @@ export async function readPointsMeta(): Promise<{
     hasIndexingErrors: Boolean(_meta.hasIndexingErrors),
   };
 }
+
+/** Blocks between Bitcoin difficulty retargets; the block-time average spans one. */
+export const DIFFICULTY_PERIOD = 2016;
+
+/** Bitcoin tip height and the header times at the tip and one retarget period back. */
+export interface BitcoinTip {
+  height: number;
+  time: number;
+  periodStartTime: number;
+}
+
+/**
+ * Terraform hands the Lambda BITCOIN_RPC_URL (Alchemy's bitcoin-mainnet); a
+ * local run composes it from ALCHEMY_API_KEY. Resolved per call so a missing
+ * URL fails only the halving countdown.
+ */
+function resolveBitcoinRpcUrl(): string {
+  const explicit = process.env.BITCOIN_RPC_URL;
+  if (explicit) return explicit;
+  const apiKey = process.env.ALCHEMY_API_KEY;
+  if (!apiKey) throw new Error("set BITCOIN_RPC_URL or ALCHEMY_API_KEY");
+  return `https://bitcoin-mainnet.g.alchemy.com/v2/${apiKey}`;
+}
+
+async function bitcoinRpc<T>(method: string, params: unknown[] = []): Promise<T> {
+  const response = await fetch(resolveBitcoinRpcUrl(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const body = await response.json();
+  if (body.error) throw new Error(`bitcoin ${method}: ${JSON.stringify(body.error)}`);
+  return body.result as T;
+}
+
+async function bitcoinHeaderTime(height: number): Promise<number> {
+  const hash = await bitcoinRpc<string>("getblockhash", [height]);
+  const header = await bitcoinRpc<{ time: number }>("getblockheader", [hash, true]);
+  return header.time;
+}
+
+export async function readBitcoinTip(): Promise<BitcoinTip> {
+  const height = await bitcoinRpc<number>("getblockcount");
+  const [time, periodStartTime] = await Promise.all([
+    bitcoinHeaderTime(height),
+    bitcoinHeaderTime(height - DIFFICULTY_PERIOD),
+  ]);
+  return { height, time, periodStartTime };
+}
