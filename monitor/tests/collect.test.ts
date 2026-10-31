@@ -116,6 +116,41 @@ const riskView = (unrealizedPnl: bigint, pendingFunding: bigint) => ({
   sellOrderFillLoss: 0n,
 });
 
+/**
+ * Price feeds, answered per block: the subgraph block now, block 0 as the
+ * past (the 1 h and 24 h look-backs both clamp to it at this test height).
+ */
+const HASHPRICE_FEED = "0x00000000000000000000000000000000000000f1";
+const BTC_FEED = "0x00000000000000000000000000000000000000f2";
+const feedAbi = parseAbi([
+  "function priceOracle() view returns (address)",
+  "function btcUsdOracle() view returns (address)",
+  "function decimals() view returns (uint8)",
+  "function latestRoundData() view returns (uint80, int256, uint256, uint256, uint80)",
+  "function mmSpotShock() view returns (uint256)",
+]);
+const FEEDS: Record<string, { now: bigint; past: bigint; ageSeconds: number }> = {
+  [HASHPRICE_FEED]: { now: 3_300_000_000n, past: 3_000_000_000n, ageSeconds: 120 },
+  [BTC_FEED]: { now: 8_000_000_000_000n, past: 7_600_000_000_000n, ageSeconds: 60 },
+};
+
+function feedCall(to: string, data: `0x${string}`, block: string): `0x${string}` {
+  const { functionName } = decodeFunctionData({ abi: feedAbi, data });
+  if (functionName === "btcUsdOracle")
+    return encodeFunctionResult({ abi: feedAbi, functionName, result: BTC_FEED });
+  if (functionName === "decimals")
+    return encodeFunctionResult({ abi: feedAbi, functionName, result: 8 });
+  assert.equal(functionName, "latestRoundData");
+  const feed = FEEDS[to];
+  const answer = block === toHex(BLOCK) ? feed.now : feed.past;
+  const updatedAt = BigInt(Math.floor(Date.now() / 1000) - feed.ageSeconds);
+  return encodeFunctionResult({
+    abi: feedAbi,
+    functionName,
+    result: [1n, answer, updatedAt, updatedAt, 1n],
+  });
+}
+
 function ethCall(to: string, data: `0x${string}`): `0x${string}` {
   const address = to.toLowerCase();
   if (address === process.env.VAULT_ADDRESS) {
@@ -128,6 +163,10 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
       result: BigInt(u(1_800)),
     });
   }
+  if (address === MARGIN_ENGINE && data.startsWith(toFunctionSelector("function mmSpotShock()")))
+    return encodeFunctionResult({ abi: feedAbi, functionName: "mmSpotShock", result: 10n ** 17n });
+  if (address === process.env.FUTURES_ADDRESS && data.startsWith(toFunctionSelector("function priceOracle()")))
+    return encodeFunctionResult({ abi: feedAbi, functionName: "priceOracle", result: HASHPRICE_FEED });
   if (address === MARGIN_ENGINE)
     return encodeFunctionResult({
       abi: mmAbi,
@@ -264,6 +303,11 @@ function rpc(request: { id: number; method: string; params: unknown[] }) {
         { to: string; data: `0x${string}` },
         string,
       ];
+      // Price history is read at past blocks; every other read is pinned.
+      if (call.to.toLowerCase() in FEEDS) {
+        result = feedCall(call.to.toLowerCase(), call.data, block);
+        break;
+      }
       assert.equal(
         block,
         toHex(BLOCK),
@@ -429,6 +473,17 @@ describe("collect", () => {
     assert.equal(value("BtcBlocksUntilHalving"), 4_000);
     const days = value("BtcDaysUntilHalving") ?? 0;
     assert.ok(Math.abs(days - (4_000 * BTC_BLOCK_SECONDS) / 86_400) < 1e-9, `days ${days}`);
+  });
+
+  it("reports hashprice and BTC prices, their moves, feed ages and the MM shock", () => {
+    assert.equal(value("HashpriceUsd"), 33);
+    assert.equal(value("BtcUsd"), 80_000);
+    assert.ok(Math.abs((value("HashpriceChange24hPct") ?? 0) - 10) < 1e-9);
+    assert.ok(Math.abs((value("HashpriceChange1hPct") ?? 0) - 10) < 1e-9);
+    assert.ok(Math.abs((value("BtcChange24hPct") ?? 0) - 400 / 76) < 1e-9);
+    assert.equal(value("MmSpotShockPct"), 10);
+    assert.ok(Math.abs((value("HashpriceFeedAgeSeconds") ?? 0) - 120) <= 5);
+    assert.ok(Math.abs((value("BtcUsdFeedAgeSeconds") ?? 0) - 60) <= 5);
   });
 
   it("tags per-venue bad debt with the venue address", () => {

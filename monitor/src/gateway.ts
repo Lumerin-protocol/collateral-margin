@@ -521,3 +521,76 @@ export async function readBitcoinTip(): Promise<BitcoinTip> {
   ]);
   return { height, time, periodStartTime };
 }
+
+/** Base produces a block every 2 seconds; price look-backs are counted in blocks. */
+const BASE_BLOCK_SECONDS = 2n;
+const BLOCKS_1H = 3_600n / BASE_BLOCK_SECONDS;
+const BLOCKS_24H = 86_400n / BASE_BLOCK_SECONDS;
+
+const feedAbi = parseAbi([
+  "function priceOracle() view returns (address)",
+  "function btcUsdOracle() view returns (address)",
+  "function decimals() view returns (uint8)",
+  "function latestRoundData() view returns (uint80, int256, uint256, uint256, uint80)",
+  "function mmSpotShock() view returns (uint256)",
+]);
+
+/** A feed's answer now, 1 h and 24 h back, and when it last updated. Raw feed units. */
+export interface FeedHistory {
+  decimals: number;
+  now: bigint;
+  ago1h: bigint;
+  ago24h: bigint;
+  updatedAt: number;
+}
+
+async function readFeed(feed: Address, block: bigint): Promise<FeedHistory> {
+  const answerAt = async (blockNumber: bigint) =>
+    (
+      await chain.readContract({
+        address: feed,
+        abi: feedAbi,
+        functionName: "latestRoundData",
+        blockNumber: blockNumber < 0n ? 0n : blockNumber,
+      })
+    ) as readonly [bigint, bigint, bigint, bigint, bigint];
+  const [decimals, latest, hour, day] = await Promise.all([
+    chain.readContract({ address: feed, abi: feedAbi, functionName: "decimals", blockNumber: block }),
+    answerAt(block),
+    answerAt(block - BLOCKS_1H),
+    answerAt(block - BLOCKS_24H),
+  ]);
+  return {
+    decimals,
+    now: latest[1],
+    ago1h: hour[1],
+    ago24h: day[1],
+    updatedAt: Number(latest[3]),
+  };
+}
+
+/**
+ * Hashprice USD (the futures venue's oracle) and the BTC/USD feed it is built
+ * from, with look-backs at past blocks, plus the PME's MM spot shock that sizes
+ * the move alarms.
+ */
+export async function readPrices(
+  at: { blockNumber: bigint },
+  marginEngine: Address,
+): Promise<{ hashprice: FeedHistory; btcUsd: FeedHistory; mmSpotShock: bigint }> {
+  const hashpriceFeed = await chain.readContract({
+    address: FUTURES_ADDRESS,
+    abi: feedAbi,
+    functionName: "priceOracle",
+    ...at,
+  });
+  const [btcFeed, mmSpotShock] = await Promise.all([
+    chain.readContract({ address: hashpriceFeed, abi: feedAbi, functionName: "btcUsdOracle", ...at }),
+    chain.readContract({ address: marginEngine, abi: feedAbi, functionName: "mmSpotShock", ...at }),
+  ]);
+  const [hashprice, btcUsd] = await Promise.all([
+    readFeed(hashpriceFeed, at.blockNumber),
+    readFeed(btcFeed, at.blockNumber),
+  ]);
+  return { hashprice, btcUsd, mmSpotShock };
+}

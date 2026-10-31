@@ -21,6 +21,7 @@ import type { MetricDatum } from "@aws-sdk/client-cloudwatch";
 import {
   type BitcoinTip,
   DIFFICULTY_PERIOD,
+  type FeedHistory,
   type MarketMakerHealth,
   type MarketMakerState,
   readBitcoinTip,
@@ -30,6 +31,7 @@ import {
   readMarketMaker,
   readMarketMakerHealth,
   readPointsMeta,
+  readPrices,
   readVault,
 } from "./gateway.ts";
 import {
@@ -84,6 +86,7 @@ export async function collect(): Promise<{
     maker,
     makerHealth,
     bitcoinTip,
+    prices,
   ] = await Promise.all([
       readChainState(at, vault.collateralToken),
       // Goldsky leaves _meta.block.timestamp null; the age alarm needs the real one.
@@ -110,6 +113,11 @@ export async function collect(): Promise<{
       // Best-effort: the halving countdown must not fail the vault debt check.
       readBitcoinTip().catch((error) => {
         log(`halving check failed: ${error}`);
+        return null;
+      }),
+      // Best-effort for the same reason.
+      readPrices(at, vault.marginEngine).catch((error) => {
+        log(`price check failed: ${error?.shortMessage ?? error}`);
         return null;
       }),
     ]);
@@ -251,6 +259,14 @@ export async function collect(): Promise<{
   }
 
   if (bitcoinTip) points.push(...halvingMetrics(bitcoinTip));
+  if (prices) {
+    points.push(
+      ...feedMetrics("Hashprice", "HashpriceFeedAgeSeconds", prices.hashprice),
+      ...feedMetrics("Btc", "BtcUsdFeedAgeSeconds", prices.btcUsd),
+      // WAD → percent, the unit the move alarms compare against.
+      metric("MmSpotShockPct", Number(prices.mmSpotShock) / 1e16),
+    );
+  }
 
   const book = maker ? marketMakerMetrics(maker, decimals) : null;
   points.push(...(book?.points ?? []));
@@ -268,6 +284,22 @@ export async function collect(): Promise<{
     `block=${block} head=${head} behind=${behind} age=${age}s debt=${vault.insuranceDebt} gap_raw=${gapRaw} ` +
     `halted=${vault.halted} backstop_equity=${equity} ${book?.summary ?? "mm=failed"}${healthSummary}`;
   return { points, summary };
+}
+
+/**
+ * A feed's USD price and its signed change over 1 h and 24 h, in percent. The
+ * alarms compare |change| with the MM spot shock: a move that size puts the
+ * most levered accounts at liquidation.
+ */
+function feedMetrics(prefix: string, ageMetric: string, feed: FeedHistory): MetricDatum[] {
+  const change = (past: bigint) =>
+    past > 0n ? (Number(feed.now - past) / Number(past)) * 100 : 0;
+  return [
+    metric(`${prefix}Usd`, toUnits(feed.now, feed.decimals)),
+    metric(`${prefix}Change1hPct`, change(feed.ago1h)),
+    metric(`${prefix}Change24hPct`, change(feed.ago24h)),
+    metric(ageMetric, Math.max(0, Math.floor(Date.now() / 1000) - feed.updatedAt), "Seconds"),
+  ];
 }
 
 /**

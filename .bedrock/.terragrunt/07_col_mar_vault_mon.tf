@@ -29,6 +29,21 @@ locals {
   vault_btc_rpc_url      = var.bitcoin_rpc_url != "" ? var.bitcoin_rpc_url : "https://bitcoin-mainnet.g.alchemy.com/v2/${var.alchemy_api_key}"
   # Days before the Bitcoin halving at which a reminder fires, and its severity.
   # 500 and 495 are temporary, to see the alarms fire (about 503 days out on 2026-10-31).
+  # 24 h price moves as a fraction of the PME MM spot shock (read on-chain, so
+  # the thresholds follow setShocks). BTC/USD is already inside hashprice USD,
+  # so its alarms are warnings.
+  price_move_alarms = {
+    "hashprice-warn" = { metric = "HashpriceChange24hPct", ratio = 0.5, severity = "warning" }
+    "hashprice-crit" = { metric = "HashpriceChange24hPct", ratio = 1, severity = "critical" }
+    "btc-warn"       = { metric = "BtcChange24hPct", ratio = 0.5, severity = "warning" }
+    "btc-crit"       = { metric = "BtcChange24hPct", ratio = 1, severity = "warning" }
+  }
+  # Feed age above which the price is treated as frozen. Hashprice updates per
+  # Bitcoin block, and hour-long gaps between blocks happen every few days.
+  price_feed_age_alarms = {
+    "hashprice" = { metric = "HashpriceFeedAgeSeconds", seconds = 7200 }
+    "btc-usd"   = { metric = "BtcUsdFeedAgeSeconds", seconds = 3600 }
+  }
   btc_halving_reminders = { "500" = "warning", "495" = "warning", "30" = "warning", "14" = "warning", "7" = "warning", "2" = "critical", "1" = "critical" }
   # The portfolio market maker is the futures_mm service.
   vault_mm_health     = var.vault_monitoring.create && var.futures_mm_service.create
@@ -399,6 +414,73 @@ resource "aws_cloudwatch_metric_alarm" "btc_halving" {
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar BTC Halving ${each.key}d"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "price_move" {
+  for_each            = var.vault_monitoring.create ? local.price_move_alarms : {}
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-price-move-${each.key}-${local.vault_mon_env}"
+  alarm_description   = "${each.value.metric} moved at least ${each.value.ratio * 100}% of the MM spot shock in 24 h (|change| / MmSpotShockPct >= ${each.value.ratio}). A move the size of the MM shock puts the most levered accounts at liquidation: check the keeper is liquidating, the insurance fund and backstop exposure, and whether to raise margins with setShocks. ${each.value.severity == "critical" ? "Pages on lmn." : "Warning only."}"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  threshold           = each.value.ratio
+  treat_missing_data  = "ignore"
+  alarm_actions       = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+  ok_actions          = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+
+  metric_query {
+    id = "change"
+    metric {
+      metric_name = each.value.metric
+      namespace   = local.vault_mon_ns
+      period      = 300
+      stat        = "Average"
+    }
+  }
+
+  metric_query {
+    id = "mm"
+    metric {
+      metric_name = "MmSpotShockPct"
+      namespace   = local.vault_mon_ns
+      period      = 300
+      stat        = "Maximum"
+    }
+  }
+
+  metric_query {
+    id          = "ratio"
+    expression  = "ABS(change) / mm"
+    label       = "24 h move / MM shock"
+    return_data = true
+  }
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Price Move ${each.key}"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "price_feed_age" {
+  for_each            = var.vault_monitoring.create ? local.price_feed_age_alarms : {}
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-price-feed-age-${each.key}-${local.vault_mon_env}"
+  alarm_description   = "${each.value.metric} is above ${each.value.seconds / 60} minutes: the feed looks frozen, which hides price moves from margin and from the move alarms. Check the hashprice oracle keeper and the Chainlink BTC/USD feed. Warning only."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = each.value.metric
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Minimum"
+  threshold           = each.value.seconds
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Price Feed Age ${each.key}"
     Capability = "Monitoring"
   })
 }
@@ -1023,6 +1105,8 @@ resource "aws_cloudwatch_dashboard" "vault" {
               aws_cloudwatch_metric_alarm.vault_backstop_over_budget[*].arn,
               aws_cloudwatch_metric_alarm.vault_backstop_unfilled[*].arn,
               [for alarm in aws_cloudwatch_metric_alarm.btc_halving : alarm.arn],
+              [for alarm in aws_cloudwatch_metric_alarm.price_move : alarm.arn],
+              [for alarm in aws_cloudwatch_metric_alarm.price_feed_age : alarm.arn],
               aws_cloudwatch_metric_alarm.vault_util_warn[*].arn,
               aws_cloudwatch_metric_alarm.vault_util_crit[*].arn,
               aws_cloudwatch_metric_alarm.vault_halted[*].arn,
@@ -1406,6 +1490,24 @@ resource "aws_cloudwatch_dashboard" "vault" {
             metrics = [
               [local.vault_mon_ns, "BtcDaysUntilHalving", { label = "Days", stat = "Minimum" }],
               [local.vault_mon_ns, "BtcBlocksUntilHalving", { label = "Blocks", stat = "Minimum" }],
+            ]
+          }
+        },
+        {
+          type   = "metric"
+          x      = 12
+          y      = 58
+          width  = 12
+          height = 6
+          properties = {
+            title  = "24 h price moves vs MM spot shock (%)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "HashpriceChange24hPct", { label = "Hashprice 24 h" }],
+              [local.vault_mon_ns, "BtcChange24hPct", { label = "BTC 24 h" }],
+              [local.vault_mon_ns, "MmSpotShockPct", { label = "MM shock", stat = "Maximum" }],
             ]
           }
         },
