@@ -347,6 +347,50 @@ describe("NonceManager", () => {
     );
   });
 
+  it("retries a fee cap below the base fee from the fresh base fee, logging warnings only", async () => {
+    // Base's base fee can triple within half a minute (daily around 00:02 UTC), so a fee
+    // read seconds earlier is rejected; a 15% bump alone stays below the new base fee.
+    const mocks = makeMocks({ startNonce: 106_830, receiptFor: async () => RECEIPT });
+    (mocks.publicClient as unknown as { getBlock: () => Promise<{ baseFeePerGas: bigint }> }).getBlock =
+      async () => ({ baseFeePerGas: 18_800_000n });
+    const levels: string[] = [];
+    const record = (level: string) => () => levels.push(level);
+    const logger = {
+      child: () => ({ info: noop, debug: noop, warn: record("warn"), error: record("error") }),
+    } as never;
+    const nm = new NonceManager(
+      mocks.publicClient,
+      mocks.walletClient,
+      account,
+      chain,
+      { maxReplacements: 2, replacementFeeBumpPct: 15 },
+      logger,
+    );
+
+    const attempts: { nonce: number; fee: bigint }[] = [];
+    const broadcast = ({ nonce, maxFeePerGas }: { nonce: number; maxFeePerGas: bigint }) => {
+      attempts.push({ nonce, fee: maxFeePerGas });
+      if (maxFeePerGas < 18_800_000n) {
+        return Promise.reject(
+          new Error("The fee cap (`maxFeePerGas` = 0.012 gwei) cannot be lower than the block base fee."),
+        );
+      }
+      return Promise.resolve("0xok" as const);
+    };
+
+    const outcome = await nm.submit(broadcast, { maxFeePerGas: 12_000_000n, label: "perps" });
+    assert.equal(outcome.gasUsed, RECEIPT.gasUsed);
+    assert.deepEqual(
+      attempts.map((a) => a.nonce),
+      [106_830, 106_830],
+      "recovered on the first retry, same nonce",
+    );
+    assert.ok(attempts[1].fee > 18_800_000n, "retry fee above the fresh base fee");
+    assert.ok(levels.includes("warn"), "the rejected attempt is logged");
+    assert.ok(!levels.includes("error"), "a recovered send logs no error");
+    assert.equal(mocks.cancelCalls.length, 0);
+  });
+
   it("resetNonce() forces a fresh chain read on the next submit", async () => {
     let counts = 0;
     const mocks = makeMocks({ startNonce: 0, receiptFor: async () => RECEIPT });

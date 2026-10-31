@@ -170,8 +170,9 @@ export class NonceManager {
         }
         // A submission error (revert-on-send, RPC error). Fee-bump-and-retry a
         // couple of times; a persistent failure likely means the nonce is
-        // wedged, so unstick it below.
-        this.logger.error(
+        // wedged, so unstick it below. A warning only: the caller logs the error
+        // if the send does not recover.
+        this.logger.warn(
           { err, label: opts.label, nonce, attempt },
           "tx submission failed",
         );
@@ -182,6 +183,7 @@ export class NonceManager {
           throw err instanceof Error ? err : new Error(String(err));
         }
         fee = this.bump(fee);
+        if (isFeeCapTooLowError(err)) fee = await this.aboveBaseFee(fee);
       }
     }
 
@@ -195,6 +197,17 @@ export class NonceManager {
 
   private bump(fee: bigint): bigint {
     return (fee * BigInt(100 + this.bumpPct)) / 100n;
+  }
+
+  /** At least twice the latest base fee, which can outrun a fee bump within seconds. */
+  private async aboveBaseFee(fee: bigint): Promise<bigint> {
+    try {
+      const { baseFeePerGas } = await this.publicClient.getBlock({ blockTag: "latest" });
+      const floor = (baseFeePerGas ?? 0n) * 2n;
+      return fee > floor ? fee : floor;
+    } catch {
+      return fee;
+    }
   }
 
   private async waitWithTimeout(
@@ -252,6 +265,13 @@ const NONCE_DESYNC_PATTERNS = [
   "noncetoohigh",
 ] as const;
 
+/** viem's `FeeCapTooLowError` and the raw RPC rejection of a fee cap below the base fee. */
+const FEE_CAP_TOO_LOW_PATTERNS = [
+  "feecaptoolowerror",
+  "cannot be lower than the block base fee",
+  "max fee per gas less than block base fee",
+] as const;
+
 /**
  * True when `err` (or anything in its `cause` chain) means the nonce we used is
  * stale relative to the chain — i.e. the tx needs a *new* nonce, not a fee bump.
@@ -261,6 +281,14 @@ const NONCE_DESYNC_PATTERNS = [
  * the same nonce and are handled by the fee-bump replacement path.
  */
 export function isNonceDesyncError(err: unknown): boolean {
+  return errorChainMatches(err, NONCE_DESYNC_PATTERNS);
+}
+
+export function isFeeCapTooLowError(err: unknown): boolean {
+  return errorChainMatches(err, FEE_CAP_TOO_LOW_PATTERNS);
+}
+
+function errorChainMatches(err: unknown, patterns: readonly string[]): boolean {
   const seen = new Set<unknown>();
   let cur: unknown = err;
   while (cur && typeof cur === "object" && !seen.has(cur)) {
@@ -276,7 +304,7 @@ export function isNonceDesyncError(err: unknown): boolean {
       .filter((v): v is string => typeof v === "string")
       .join(" | ")
       .toLowerCase();
-    if (NONCE_DESYNC_PATTERNS.some((p) => haystack.includes(p))) {
+    if (patterns.some((p) => haystack.includes(p))) {
       return true;
     }
     cur = e.cause;
