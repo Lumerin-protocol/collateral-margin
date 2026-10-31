@@ -37,6 +37,25 @@ locals {
   vault_warning_actions  = var.vault_monitoring.notifications_enabled && local.vault_slack_topic_arn != "" ? [local.vault_slack_topic_arn] : []
   vault_critical_actions = var.vault_monitoring.notifications_enabled && local.vault_critical_topic_arn != "" ? [local.vault_critical_topic_arn] : []
   vault_rpc_host         = var.account_lifecycle == "prd" ? "https://base-mainnet.g.alchemy.com/v2" : "https://base-sepolia.g.alchemy.com/v2"
+  vault_btc_rpc_url      = var.bitcoin_rpc_url != "" ? var.bitcoin_rpc_url : "https://bitcoin-mainnet.g.alchemy.com/v2/${var.alchemy_api_key}"
+  # Days before the Bitcoin halving at which a reminder fires, and its severity.
+  # 500 and 495 are temporary, to see the alarms fire (about 503 days out on 2026-10-31).
+  # 24 h price moves as a fraction of the PME MM spot shock (read on-chain, so
+  # the thresholds follow setShocks). BTC/USD is already inside hashprice USD,
+  # so its alarms are warnings.
+  price_move_alarms = {
+    "hashprice-warn" = { metric = "HashpriceChange24hPct", ratio = 0.5, severity = "warning" }
+    "hashprice-crit" = { metric = "HashpriceChange24hPct", ratio = 1, severity = "critical" }
+    "btc-warn"       = { metric = "BtcChange24hPct", ratio = 0.5, severity = "warning" }
+    "btc-crit"       = { metric = "BtcChange24hPct", ratio = 1, severity = "warning" }
+  }
+  # Feed age above which the price is treated as frozen. Hashprice updates per
+  # Bitcoin block, and hour-long gaps between blocks happen every few days.
+  price_feed_age_alarms = {
+    "hashprice" = { metric = "HashpriceFeedAgeSeconds", seconds = 7200 }
+    "btc-usd"   = { metric = "BtcUsdFeedAgeSeconds", seconds = 3600 }
+  }
+  btc_halving_reminders = { "500" = "warning", "495" = "warning", "30" = "warning", "14" = "warning", "7" = "warning", "2" = "critical", "1" = "critical" }
   # The portfolio market maker is the futures_mm service.
   vault_mm_health     = var.vault_monitoring.create && var.futures_mm_service.create
   vault_mm_health_url = local.vault_mm_health ? "https://futuresmm.${local.hp_dns["exc"].name}/health/raw" : ""
@@ -167,6 +186,7 @@ resource "aws_lambda_function" "vault_mon" {
       MM_FUTURES_MARKETS  = tostring(var.vault_monitoring.mm_futures_markets)
       MM_HEALTH_URL       = local.vault_mm_health_url
       ETH_RPC_URL         = "${local.vault_rpc_host}/${var.alchemy_api_key}"
+      BITCOIN_RPC_URL     = local.vault_btc_rpc_url
       CW_NAMESPACE        = local.vault_mon_ns
     }
   }
@@ -296,6 +316,182 @@ resource "aws_cloudwatch_metric_alarm" "vault_backstop_equity" {
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Vault Backstop Equity"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "vault_backstop_loss" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-backstop-loss-${local.vault_mon_env}"
+  alarm_description   = "Protocol backstop equity is below -${var.vault_monitoring.backstop_loss_crit_usd} USD: its parked positions are losing enough to take a real bite out of the insurance fund once they unwind or settle. Check the keeper unwinder, widen the band with setBackstopParams (past the BackstopUnwindBudgetBps budget if deleveraging is cheaper than holding), or unwind by hand, and prepare a depositInsuranceFund top-up. See docs/protocol-liquidation-exposure.md#operating-the-backstop."
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "BackstopEquity"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Minimum"
+  threshold           = -var.vault_monitoring.backstop_loss_crit_usd
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Backstop Loss"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "vault_backstop_notional" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-backstop-notional-${local.vault_mon_env}"
+  alarm_description   = "Protocol backstop exposure at the mark (BackstopNotional, both venues) is above ${var.vault_monitoring.backstop_notional_warn_usd} USD: a large liquidation was handed to the backstop. Watch BackstopEquity, confirm the keeper unwinder is filling, and widen the band with setBackstopParams up to the BackstopUnwindBudgetBps budget if the book is not taking it. See docs/protocol-liquidation-exposure.md#operating-the-backstop. Warning only."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "BackstopNotional"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = var.vault_monitoring.backstop_notional_warn_usd
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Backstop Notional"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "vault_backstop_over_budget" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-backstop-over-budget-${local.vault_mon_env}"
+  alarm_description   = "The vault's backstop unwind band + caller fee is above the liquidation fee a venue keeps (liquidationFeeBps x (1 - liquidatorShareBps), BackstopUnwindBudgetBps). An unwind then gives away more than the liquidation earned, and anyone can profit by liquidating and unwinding against themselves (X3-R3A-2). Expected only while deliberately deleveraging; otherwise lower it with setBackstopParams. See docs/protocol-liquidation-exposure.md#operating-the-backstop. Warning only."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "BackstopUnwindOverBudgetBps"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = 0
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Backstop Over Budget"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "vault_backstop_unfilled" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-backstop-unfilled-${local.vault_mon_env}"
+  alarm_description   = "The protocol backstop has held an open leg for 6 hours: the book is not taking it inside the unwind band. Check the keeper unwinder is running, then widen the band with setBackstopParams in steps up to the BackstopUnwindBudgetBps budget (past it only to deleverage deliberately). See docs/protocol-liquidation-exposure.md#operating-the-backstop. Warning only."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 6
+  metric_name         = "BackstopOpenLegs"
+  namespace           = local.vault_mon_ns
+  period              = 3600
+  statistic           = "Minimum"
+  threshold           = 1
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Backstop Unfilled"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "btc_halving" {
+  for_each            = var.vault_monitoring.create ? local.btc_halving_reminders : {}
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-btc-halving-${each.key}d-${local.vault_mon_env}"
+  alarm_description   = "The Bitcoin halving is about ${each.key} day(s) away (BtcDaysUntilHalving, from the average block time over the last 2,016 blocks; BtcBlocksUntilHalving is exact). It halves the subsidy part of hashprice in one block, far beyond the MM shock: raise margin requirements on the published schedule (CF-321) with setShocks, and check futures expiries that straddle it. Fires once per halving; ${each.value == "critical" ? "pages on lmn" : "warning only"}."
+  comparison_operator = "LessThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "BtcDaysUntilHalving"
+  namespace           = local.vault_mon_ns
+  period              = 3600
+  statistic           = "Minimum"
+  threshold           = tonumber(each.key)
+  treat_missing_data  = "ignore"
+  alarm_actions       = each.value == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar BTC Halving ${each.key}d"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "price_move" {
+  for_each            = var.vault_monitoring.create ? local.price_move_alarms : {}
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-price-move-${each.key}-${local.vault_mon_env}"
+  alarm_description   = "${each.value.metric} moved at least ${each.value.ratio * 100}% of the MM spot shock in 24 h (|change| / MmSpotShockPct >= ${each.value.ratio}). A move the size of the MM shock puts the most levered accounts at liquidation: check the keeper is liquidating, the insurance fund and backstop exposure, and whether to raise margins with setShocks. ${each.value.severity == "critical" ? "Pages on lmn." : "Warning only."}"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  threshold           = each.value.ratio
+  treat_missing_data  = "ignore"
+  alarm_actions       = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+  ok_actions          = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+
+  metric_query {
+    id = "change"
+    metric {
+      metric_name = each.value.metric
+      namespace   = local.vault_mon_ns
+      period      = 300
+      stat        = "Average"
+    }
+  }
+
+  metric_query {
+    id = "mm"
+    metric {
+      metric_name = "MmSpotShockPct"
+      namespace   = local.vault_mon_ns
+      period      = 300
+      stat        = "Maximum"
+    }
+  }
+
+  metric_query {
+    id          = "ratio"
+    expression  = "ABS(change) / mm"
+    label       = "24 h move / MM shock"
+    return_data = true
+  }
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Price Move ${each.key}"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "price_feed_age" {
+  for_each            = var.vault_monitoring.create ? local.price_feed_age_alarms : {}
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-price-feed-age-${each.key}-${local.vault_mon_env}"
+  alarm_description   = "${each.value.metric} is above ${each.value.seconds / 60} minutes: the feed looks frozen, which hides price moves from margin and from the move alarms. Check the hashprice oracle keeper and the Chainlink BTC/USD feed. Warning only."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = each.value.metric
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Minimum"
+  threshold           = each.value.seconds
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Price Feed Age ${each.key}"
     Capability = "Monitoring"
   })
 }
@@ -575,7 +771,7 @@ resource "aws_cloudwatch_metric_alarm" "keeper_errors" {
   count               = var.vault_monitoring.create && var.keeper_service.create ? 1 : 0
   provider            = aws.use1
   alarm_name          = "${local.shortname}-keeper-errors-${local.vault_mon_env}"
-  alarm_description   = "Keeper logged an error (pino level 50). Sweeps that throw skip liquidation for that cycle. Read /ecs/col-mar-keeper logs, restart if the loop is stuck, then top up any uncovered loss."
+  alarm_description   = "Keeper logged an error (pino level 50). Sweeps that throw skip liquidation for that cycle. \"account health read failed\" means the margin engine reverts for that user (a venue getRiskView fails), so the account cannot trade, withdraw or be liquidated until the venue is fixed. Read /ecs/col-mar-keeper logs, restart if the loop is stuck, then top up any uncovered loss."
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods  = 1
   metric_name         = "KeeperErrorCount"
@@ -915,6 +1111,13 @@ resource "aws_cloudwatch_dashboard" "vault" {
             alarms = concat(
               aws_cloudwatch_metric_alarm.vault_uncovered_loss[*].arn,
               aws_cloudwatch_metric_alarm.vault_backstop_equity[*].arn,
+              aws_cloudwatch_metric_alarm.vault_backstop_loss[*].arn,
+              aws_cloudwatch_metric_alarm.vault_backstop_notional[*].arn,
+              aws_cloudwatch_metric_alarm.vault_backstop_over_budget[*].arn,
+              aws_cloudwatch_metric_alarm.vault_backstop_unfilled[*].arn,
+              [for alarm in aws_cloudwatch_metric_alarm.btc_halving : alarm.arn],
+              [for alarm in aws_cloudwatch_metric_alarm.price_move : alarm.arn],
+              [for alarm in aws_cloudwatch_metric_alarm.price_feed_age : alarm.arn],
               aws_cloudwatch_metric_alarm.vault_util_warn[*].arn,
               aws_cloudwatch_metric_alarm.vault_util_crit[*].arn,
               aws_cloudwatch_metric_alarm.vault_halted[*].arn,
@@ -1242,6 +1445,80 @@ resource "aws_cloudwatch_dashboard" "vault" {
             view   = "timeSeries"
             metrics = [
               [var.vault_monitoring.oracle_metric_namespace, "oracle_data_age_minutes", "Environment", local.vault_mon_env, { label = "Hashprice age" }],
+            ]
+          }
+        },
+        {
+          type   = "metric"
+          x      = 0
+          y      = 52
+          width  = 12
+          height = 6
+          properties = {
+            title  = "Backstop unwind band + fee vs kept liquidation fee (bps)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "BackstopUnwindBandBps", { label = "Band", stat = "Maximum" }],
+              [local.vault_mon_ns, "BackstopUnwindFeeBps", { label = "Caller fee", stat = "Maximum" }],
+              [local.vault_mon_ns, "BackstopUnwindOverBudgetBps", { label = "Over budget", stat = "Maximum" }],
+              [{ expression = "SEARCH('{${local.vault_mon_ns},Venue} MetricName=\"BackstopUnwindBudgetBps\"', 'Minimum', 300)", id = "budget", label = "Budget" }],
+            ]
+            yAxis = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 12
+          y      = 52
+          width  = 12
+          height = 6
+          properties = {
+            title  = "Protocol backstop exposure at the mark (USDC)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "BackstopNotional", { label = "Total", stat = "Maximum" }],
+              [{ expression = "SEARCH('{${local.vault_mon_ns},Venue} MetricName=\"BackstopNotional\"', 'Maximum', 300)", id = "venues", label = "" }],
+            ]
+            annotations = { horizontal = [{ label = "warn", value = var.vault_monitoring.backstop_notional_warn_usd }] }
+            yAxis       = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 0
+          y      = 58
+          width  = 12
+          height = 6
+          properties = {
+            title  = "Days until the Bitcoin halving"
+            region = var.default_region
+            period = 3600
+            view   = "singleValue"
+            metrics = [
+              [local.vault_mon_ns, "BtcDaysUntilHalving", { label = "Days", stat = "Minimum" }],
+              [local.vault_mon_ns, "BtcBlocksUntilHalving", { label = "Blocks", stat = "Minimum" }],
+            ]
+          }
+        },
+        {
+          type   = "metric"
+          x      = 12
+          y      = 58
+          width  = 12
+          height = 6
+          properties = {
+            title  = "24 h price moves vs MM spot shock (%)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "HashpriceChange24hPct", { label = "Hashprice 24 h" }],
+              [local.vault_mon_ns, "BtcChange24hPct", { label = "BTC 24 h" }],
+              [local.vault_mon_ns, "MmSpotShockPct", { label = "MM shock", stat = "Maximum" }],
             ]
           }
         },

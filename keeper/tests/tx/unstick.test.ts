@@ -42,14 +42,22 @@ function makeChain(opts: ChainStubOpts = {}) {
   const chain = {
     account: { address: SIGNER },
     publicClient: {
-      getTransactionCount: async ({ blockTag }: { blockTag: "latest" | "pending" }) => {
+      getTransactionCount: async ({
+        blockTag,
+      }: {
+        blockTag: "latest" | "pending";
+      }) => {
         txCountCalls.push(blockTag);
         if (blockTag === "latest") {
-          const v = latestSeq[Math.min(latestIdx, latestSeq.length - 1)] as number;
+          const v = latestSeq[
+            Math.min(latestIdx, latestSeq.length - 1)
+          ] as number;
           latestIdx++;
           return v;
         }
-        const v = pendingSeq[Math.min(pendingIdx, pendingSeq.length - 1)] as number;
+        const v = pendingSeq[
+          Math.min(pendingIdx, pendingSeq.length - 1)
+        ] as number;
         pendingIdx++;
         return v;
       },
@@ -69,7 +77,8 @@ function makeChain(opts: ChainStubOpts = {}) {
         maxPriorityFeePerGas: bigint;
       }) => {
         const idx = sendIdx++;
-        if (opts.onSendTransaction !== undefined) return opts.onSendTransaction(req, idx);
+        if (opts.onSendTransaction !== undefined)
+          return opts.onSendTransaction(req, idx);
         sends.push({
           nonce: req.nonce,
           to: req.to,
@@ -77,7 +86,7 @@ function makeChain(opts: ChainStubOpts = {}) {
           maxFeePerGas: req.maxFeePerGas,
           maxPriorityFeePerGas: req.maxPriorityFeePerGas,
         });
-        return ("0x" + idx.toString(16).padStart(64, "0")) as Hex;
+        return `0x${idx.toString(16).padStart(64, "0")}` as Hex;
       },
     },
   } as unknown as Chain;
@@ -87,7 +96,9 @@ function makeChain(opts: ChainStubOpts = {}) {
 
 describe("isReplacementUnderpriced", () => {
   it("matches the exact error string viem surfaces from Alchemy / Geth", () => {
-    const err = new Error("Some wrapper text\nreplacement transaction underpriced");
+    const err = new Error(
+      "Some wrapper text\nreplacement transaction underpriced",
+    );
     assert.equal(isReplacementUnderpriced(err), true);
   });
 
@@ -108,7 +119,10 @@ describe("isReplacementUnderpriced", () => {
 
   it("does not match unrelated errors", () => {
     assert.equal(isReplacementUnderpriced(new Error("nonce too low")), false);
-    assert.equal(isReplacementUnderpriced(new Error("insufficient funds for gas")), false);
+    assert.equal(
+      isReplacementUnderpriced(new Error("insufficient funds for gas")),
+      false,
+    );
     assert.equal(isReplacementUnderpriced("not even an Error"), false);
     assert.equal(isReplacementUnderpriced(undefined), false);
   });
@@ -116,10 +130,17 @@ describe("isReplacementUnderpriced", () => {
 
 describe("unstickPendingNonces", () => {
   it("is a no-op when pending == latest (nothing stuck)", async () => {
-    const { chain, sends } = makeChain({ latestNonces: [42], pendingNonces: [42] });
+    const { chain, sends } = makeChain({
+      latestNonces: [42],
+      pendingNonces: [42],
+    });
     const cancelled = await unstickPendingNonces(chain, silentLogger);
     assert.equal(cancelled, 0);
-    assert.equal(sends.length, 0, "no cancellation broadcasts when mempool is clear");
+    assert.equal(
+      sends.length,
+      0,
+      "no cancellation broadcasts when mempool is clear",
+    );
   });
 
   it("cancels every nonce in [latest, pending) with a 3x-bumped self-transfer", async () => {
@@ -129,7 +150,10 @@ describe("unstickPendingNonces", () => {
     const { chain, sends } = makeChain({
       latestNonces: [10, 13],
       pendingNonces: [13],
-      fees: { maxFeePerGas: 2_000_000_000n, maxPriorityFeePerGas: 200_000_000n },
+      fees: {
+        maxFeePerGas: 2_000_000_000n,
+        maxPriorityFeePerGas: 200_000_000n,
+      },
     });
     const cancelled = await unstickPendingNonces(chain, silentLogger);
     assert.equal(cancelled, 3);
@@ -169,7 +193,7 @@ describe("unstickPendingNonces", () => {
           maxFeePerGas: r.maxFeePerGas,
           maxPriorityFeePerGas: r.maxPriorityFeePerGas,
         });
-        return ("0x" + idx.toString(16).padStart(64, "0")) as Hex;
+        return `0x${idx.toString(16).padStart(64, "0")}` as Hex;
       },
     });
     // No exception, no abort — successful cancels still recorded.
@@ -195,7 +219,11 @@ describe("unstickPendingNonces", () => {
       () => unstickPendingNonces(chain, silentLogger),
       /refusing to process 33 stuck nonces/,
     );
-    assert.equal(sends.length, 0, "must not broadcast anything when the cap is exceeded");
+    assert.equal(
+      sends.length,
+      0,
+      "must not broadcast anything when the cap is exceeded",
+    );
   });
 
   it("uses pending blockTag when reading the upper nonce bound, not just latest", async () => {
@@ -251,12 +279,17 @@ describe("withUnstickRetry", () => {
     let writeAttempts = 0;
     const out = await withUnstickRetry(chain, silentLogger, async () => {
       writeAttempts++;
-      if (writeAttempts === 1) throw new Error("replacement transaction underpriced");
+      if (writeAttempts === 1)
+        throw new Error("replacement transaction underpriced");
       return "0xdeadbeef" as Hex;
     });
     assert.equal(out, "0xdeadbeef");
     assert.equal(writeAttempts, 2, "exactly one retry");
-    assert.equal(sends.length, 3, "unstick cancelled all 3 pending nonces between attempts");
+    assert.equal(
+      sends.length,
+      3,
+      "unstick cancelled all 3 pending nonces between attempts",
+    );
   });
 
   it("does not retry more than once — a second underpriced error surfaces", async () => {
@@ -275,6 +308,10 @@ describe("withUnstickRetry", () => {
         }),
       /replacement transaction underpriced/,
     );
-    assert.equal(writeAttempts, 2, "exactly two attempts (initial + one retry), no infinite loop");
+    assert.equal(
+      writeAttempts,
+      2,
+      "exactly two attempts (initial + one retry), no infinite loop",
+    );
   });
 });

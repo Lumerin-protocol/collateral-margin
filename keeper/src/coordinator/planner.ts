@@ -105,7 +105,10 @@ export class Planner {
     // — this is the common case for re-evaluation triggers.
     let health = await this.readHealth(user);
     if (health.mmSurplus >= 0n) {
-      log.debug({ mmSurplus: health.mmSurplus }, "Account healthy on entry — no plan to run");
+      log.debug(
+        { mmSurplus: health.mmSurplus },
+        "Account healthy on entry — no plan to run",
+      );
       return { kind: "healthy", mmSurplus: health.mmSurplus };
     }
 
@@ -147,25 +150,45 @@ export class Planner {
     const exhausted = new Set<Venue["name"]>();
     for (let iter = 0; iter < Planner.MAX_POSITION_ITERATIONS; iter++) {
       const rankedVenues = await this.rankVenuesByLoss(user);
-      const actionable = rankedVenues.filter((v) => !exhausted.has(v.venue.name));
+      const actionable = rankedVenues.filter(
+        (v) => !exhausted.has(v.venue.name),
+      );
 
       if (rankedVenues.length === 0) {
         // No positions left to close anywhere but still unhealthy → bad debt.
         log.error(
-          { mmSurplus: health.mmSurplus, totalFee, positionsClosed, ordersClosed },
+          {
+            mmSurplus: health.mmSurplus,
+            totalFee,
+            positionsClosed,
+            ordersClosed,
+          },
           "BadDebt: no positions remain but account still under MM",
         );
-        return { kind: "badDebt", mmSurplus: health.mmSurplus, feeEarned: totalFee };
+        return {
+          kind: "badDebt",
+          mmSurplus: health.mmSurplus,
+          feeEarned: totalFee,
+        };
       }
       if (actionable.length === 0) {
         // Every venue with positions reported `nothingToClose` — the account
         // is under MM on-chain but no venue's off-chain sizing found a close
         // (a snapshot/price race). Re-queue rather than force a full close.
         log.warn(
-          { mmSurplus: health.mmSurplus, totalFee, positionsClosed, ordersClosed },
+          {
+            mmSurplus: health.mmSurplus,
+            totalFee,
+            positionsClosed,
+            ordersClosed,
+          },
           "Position-leg: all venues report nothingToClose — stalling",
         );
-        return { kind: "stalled", reason: "nothingToClose", mmSurplus: health.mmSurplus };
+        return {
+          kind: "stalled",
+          reason: "nothingToClose",
+          mmSurplus: health.mmSurplus,
+        };
       }
 
       const worst = actionable[0];
@@ -211,13 +234,19 @@ export class Planner {
           feeEarned: 0n,
           skipped: result.skipped,
         });
-        if (result.skipped === "nothingToClose") exhausted.add(worst.venue.name);
+        if (result.skipped === "nothingToClose")
+          exhausted.add(worst.venue.name);
       }
 
       health = await this.readHealth(user);
       if (health.mmSurplus >= 0n) {
         log.info(
-          { mmSurplus: health.mmSurplus, totalFee, positionsClosed, ordersClosed },
+          {
+            mmSurplus: health.mmSurplus,
+            totalFee,
+            positionsClosed,
+            ordersClosed,
+          },
           "Account healthy after position-leg — done",
         );
         return {
@@ -244,7 +273,11 @@ export class Planner {
       },
       "Planner.run: hit iteration cap, re-queueing",
     );
-    return { kind: "stalled", reason: "iterationCap", mmSurplus: health.mmSurplus };
+    return {
+      kind: "stalled",
+      reason: "iterationCap",
+      mmSurplus: health.mmSurplus,
+    };
   }
 
   /**
@@ -252,7 +285,10 @@ export class Planner {
    * the "no orders" case internally and returns `{ skipped: "notLiquidatable" }`
    * — we collapse that to a zero-fee no-op.
    */
-  private async runOrdersLeg(user: Address, log: pino.Logger): Promise<StepReport[]> {
+  private async runOrdersLeg(
+    user: Address,
+    log: pino.Logger,
+  ): Promise<StepReport[]> {
     const reports: StepReport[] = [];
     for (const venue of this.venues) {
       // Read first so we can both (a) report `ordersClosed` count for
@@ -260,23 +296,42 @@ export class Planner {
       // orders — saves the `simulateContract` round-trip in the common case.
       const openOrders = await venue.readOpenOrders(user);
       if (openOrders.length === 0) {
-        reports.push({ kind: "ordersLeg", venue: venue.name, feeEarned: 0n, ordersClosed: 0 });
+        reports.push({
+          kind: "ordersLeg",
+          venue: venue.name,
+          feeEarned: 0n,
+          ordersClosed: 0,
+        });
         continue;
       }
       const ids = openOrders.map((o) => o.id);
-      const result = await venue.liquidateOrders(user, ids);
-      if ("feeEarned" in result) {
+      const batch = this.config.coordinator.maxOrdersPerLiquidationTx;
+      let feeEarned = 0n;
+      let ordersClosed = 0;
+      let result: Awaited<ReturnType<Venue["liquidateOrders"]>> = {
+        feeEarned: 0n,
+      };
+      // The venue keeps earlier batches' cancels, so a later skip (account
+      // healthy again) only ends the loop.
+      for (let i = 0; i < ids.length; i += batch) {
+        const chunk = ids.slice(i, i + batch);
+        result = await venue.liquidateOrders(user, chunk);
+        if (!("feeEarned" in result)) break;
+        feeEarned += result.feeEarned;
+        ordersClosed += chunk.length;
+      }
+      if (ordersClosed > 0) {
         log.info(
-          { venue: venue.name, count: openOrders.length, feeEarned: result.feeEarned },
+          { venue: venue.name, count: ordersClosed, feeEarned },
           "Orders-leg: liquidated open orders",
         );
         reports.push({
           kind: "ordersLeg",
           venue: venue.name,
-          feeEarned: result.feeEarned,
-          ordersClosed: openOrders.length,
+          feeEarned,
+          ordersClosed,
         });
-      } else {
+      } else if (!("feeEarned" in result)) {
         // Race: orders cleared between read and call. Treat as a no-op.
         reports.push({
           kind: "ordersLeg",
@@ -308,9 +363,14 @@ export class Planner {
    * portfolio requirement instead of per-venue positions, which is a bigger change
    * than this loop.
    */
-  private async rankVenuesByLoss(
-    user: Address,
-  ): Promise<Array<{ venue: Venue; totalLoss: bigint; totalNotional: bigint; positionCount: number }>> {
+  private async rankVenuesByLoss(user: Address): Promise<
+    Array<{
+      venue: Venue;
+      totalLoss: bigint;
+      totalNotional: bigint;
+      positionCount: number;
+    }>
+  > {
     const ranked: Array<{
       venue: Venue;
       totalLoss: bigint;
@@ -326,18 +386,27 @@ export class Planner {
         totalLoss += p.unrealizedLoss;
         totalNotional += p.notional;
       }
-      ranked.push({ venue, totalLoss, totalNotional, positionCount: positions.length });
+      ranked.push({
+        venue,
+        totalLoss,
+        totalNotional,
+        positionCount: positions.length,
+      });
     }
     ranked.sort((a, b) => {
-      if (a.totalLoss !== b.totalLoss) return a.totalLoss < b.totalLoss ? 1 : -1;
-      if (a.totalNotional !== b.totalNotional) return a.totalNotional < b.totalNotional ? 1 : -1;
+      if (a.totalLoss !== b.totalLoss)
+        return a.totalLoss < b.totalLoss ? 1 : -1;
+      if (a.totalNotional !== b.totalNotional)
+        return a.totalNotional < b.totalNotional ? 1 : -1;
       return 0;
     });
     return ranked;
   }
 
   private async readHealth(user: Address): Promise<AccountHealth> {
-    const [h] = await readAccountHealthBatch(this.chain, this.config, [user]);
+    const [h] = await readAccountHealthBatch(this.chain, this.config, [user], {
+      logger: this.logger,
+    });
     if (h === undefined) {
       throw new Error(`readAccountHealthBatch returned no entry for ${user}`);
     }

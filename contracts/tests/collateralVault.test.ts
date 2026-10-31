@@ -753,9 +753,9 @@ describe("CollateralVault", () => {
       };
     }
 
-    it("reports version 1.3.0", async () => {
+    it("reports version 1.4.2", async () => {
       const { vault } = await networkHelpers.loadFixture(deployVaultFixture);
-      assert.equal(await vault.read.VERSION(), "1.3.0");
+      assert.equal(await vault.read.VERSION(), "1.4.2");
     });
 
     describe("settleTransfer", () => {
@@ -783,6 +783,89 @@ describe("CollateralVault", () => {
         assert.equal(await vault.read.insuranceFundBalance(), 40n);
         assert.equal(await vault.read.traderBadDebtTotal(), 60n);
         assert.equal(await vault.read.uncoveredLoss(), 60n);
+      });
+
+      it("books a trader shortfall owed to the fund as the payer's account debt", async () => {
+        const { vault, alice, engine, fund } = await ready();
+        await vault.write.deposit([40n], { account: alice.account });
+        await viem.assertions.emitWithArgs(
+          vault.write.settleTransfer([alice.account.address, fund, 100n], { account: engine.account }),
+          vault,
+          "AccountDebtAccrued",
+          [getAddress(alice.account.address), 60n],
+        );
+        assert.equal(await vault.read.accountDebt([alice.account.address]), 60n);
+      });
+
+      it("does not book a fee shortfall as account debt", async () => {
+        const { vault, alice, bob, engine } = await ready();
+        await vault.write.settleTransfer([alice.account.address, bob.account.address, 100n], {
+          account: engine.account,
+        });
+        assert.equal(await vault.read.accountDebt([alice.account.address]), 0n);
+      });
+
+      it("cancels the receiver's account debt before paying from the fund", async () => {
+        const { vault, usdc, alice, engine, fund, owner } = await ready();
+        await vault.write.depositInsuranceFund([100n], { account: owner.account });
+        await vault.write.settleTransfer([alice.account.address, fund, 30n], { account: engine.account });
+        await viem.assertions.emitWithArgs(
+          vault.write.settleTransfer([fund, alice.account.address, 50n], { account: engine.account }),
+          vault,
+          "AccountDebtRecovered",
+          [getAddress(alice.account.address), 30n],
+        );
+        assert.equal(await vault.read.accountDebt([alice.account.address]), 0n);
+        assert.equal(await vault.read.balanceOf([alice.account.address]), 20n);
+        assert.equal(await vault.read.insuranceFundBalance(), 80n);
+        assert.equal(await vault.read.traderBadDebtTotal(), 0n);
+        await assertInvariants(vault, usdc);
+      });
+
+      it("keeps the rest of the debt when a payout is smaller than it", async () => {
+        const { vault, alice, engine, fund, owner } = await ready();
+        await vault.write.depositInsuranceFund([100n], { account: owner.account });
+        await vault.write.settleTransfer([alice.account.address, fund, 30n], { account: engine.account });
+        const { result: moved } = await vault.simulate.settleTransfer([fund, alice.account.address, 10n], {
+          account: engine.account.address,
+        });
+        await vault.write.settleTransfer([fund, alice.account.address, 10n], { account: engine.account });
+        assert.equal(moved, 10n);
+        assert.equal(await vault.read.accountDebt([alice.account.address]), 20n);
+        assert.equal(await vault.read.traderBadDebtTotal(), 20n);
+        assert.equal(await vault.read.balanceOf([alice.account.address]), 0n);
+        assert.equal(await vault.read.insuranceFundBalance(), 100n);
+      });
+
+      it("borrows only the part of a payout left after cancelling debt", async () => {
+        const { vault, usdc, alice, engine, fund, owner } = await ready();
+        await vault.write.setInsuranceDebtCap([1000n], { account: owner.account });
+        await vault.write.settleTransfer([alice.account.address, fund, 30n], { account: engine.account });
+        await vault.write.settleTransfer([fund, alice.account.address, 50n], { account: engine.account });
+        assert.equal(await vault.read.accountDebt([alice.account.address]), 0n);
+        assert.equal(await vault.read.balanceOf([alice.account.address]), 20n);
+        assert.equal(await vault.read.insuranceDebt(), 20n);
+        await assertInvariants(vault, usdc);
+      });
+
+      it("cancels backstop debt before limiting its payout to real fund balance", async () => {
+        const { vault, usdc, engine, fund, owner } = await ready();
+        const backstop = await vault.read.BACKSTOP_ADDR();
+        await vault.write.depositInsuranceFund([10n], { account: owner.account });
+        await vault.write.settleTransfer([backstop, fund, 30n], { account: engine.account });
+
+        const { result: moved } = await vault.simulate.settleTransfer([fund, backstop, 50n], {
+          account: engine.account.address,
+        });
+        await vault.write.settleTransfer([fund, backstop, 50n], { account: engine.account });
+
+        assert.equal(moved, 40n);
+        assert.equal(await vault.read.accountDebt([backstop]), 0n);
+        assert.equal(await vault.read.balanceOf([backstop]), 10n);
+        assert.equal(await vault.read.traderBadDebtTotal(), 0n);
+        assert.equal(await vault.read.insuranceDebt(), 0n);
+        assert.equal(await vault.read.halted(), false);
+        await assertInvariants(vault, usdc);
       });
 
       it("emits fee shortfalls without counting them as reserve losses", async () => {

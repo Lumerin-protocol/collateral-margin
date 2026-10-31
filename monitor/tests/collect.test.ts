@@ -25,6 +25,7 @@ process.env.PERPS_ADDRESS = "0x0000000000000000000000000000000000000003";
 process.env.MM_ADDRESS = "0x0000000000000000000000000000000000000004";
 process.env.MM_FUTURES_MARKETS = "3";
 process.env.MM_HEALTH_URL = "https://mm.test/health/raw";
+process.env.BITCOIN_RPC_URL = "https://btc.test/v2/key";
 
 const venueAbi = parseAbi([
   "struct RiskView { int256 netPositionDelta; int256 unrealizedPnl; int256 pendingFunding; uint256 buyOrderDelta; uint256 sellOrderDelta; uint256 buyOrderFillLoss; uint256 sellOrderFillLoss; }",
@@ -37,6 +38,8 @@ const venueAbi = parseAbi([
   "function getOrderBookPrices(uint256 expirationAt, uint256 maxLevels) view returns (uint256[] bids, uint256[] asks)",
   "function getMarketPrice() view returns (uint256)",
   "function getExpirationDates() view returns (uint256[])",
+  "function liquidationFeeBps() view returns (uint16)",
+  "function liquidatorShareBps() view returns (uint16)",
 ]);
 const mmAbi = parseAbi([
   "function balanceOf(address user) view returns (uint256)",
@@ -113,6 +116,41 @@ const riskView = (unrealizedPnl: bigint, pendingFunding: bigint) => ({
   sellOrderFillLoss: 0n,
 });
 
+/**
+ * Price feeds, answered per block: the subgraph block now, block 0 as the
+ * past (the 1 h and 24 h look-backs both clamp to it at this test height).
+ */
+const HASHPRICE_FEED = "0x00000000000000000000000000000000000000f1";
+const BTC_FEED = "0x00000000000000000000000000000000000000f2";
+const feedAbi = parseAbi([
+  "function priceOracle() view returns (address)",
+  "function btcUsdOracle() view returns (address)",
+  "function decimals() view returns (uint8)",
+  "function latestRoundData() view returns (uint80, int256, uint256, uint256, uint80)",
+  "function mmSpotShock() view returns (uint256)",
+]);
+const FEEDS: Record<string, { now: bigint; past: bigint; ageSeconds: number }> = {
+  [HASHPRICE_FEED]: { now: 3_300_000_000n, past: 3_000_000_000n, ageSeconds: 120 },
+  [BTC_FEED]: { now: 8_000_000_000_000n, past: 7_600_000_000_000n, ageSeconds: 60 },
+};
+
+function feedCall(to: string, data: `0x${string}`, block: string): `0x${string}` {
+  const { functionName } = decodeFunctionData({ abi: feedAbi, data });
+  if (functionName === "btcUsdOracle")
+    return encodeFunctionResult({ abi: feedAbi, functionName, result: BTC_FEED });
+  if (functionName === "decimals")
+    return encodeFunctionResult({ abi: feedAbi, functionName, result: 8 });
+  assert.equal(functionName, "latestRoundData");
+  const feed = FEEDS[to];
+  const answer = block === toHex(BLOCK) ? feed.now : feed.past;
+  const updatedAt = BigInt(Math.floor(Date.now() / 1000) - feed.ageSeconds);
+  return encodeFunctionResult({
+    abi: feedAbi,
+    functionName,
+    result: [1n, answer, updatedAt, updatedAt, 1n],
+  });
+}
+
 function ethCall(to: string, data: `0x${string}`): `0x${string}` {
   const address = to.toLowerCase();
   if (address === process.env.VAULT_ADDRESS) {
@@ -125,6 +163,10 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
       result: BigInt(u(1_800)),
     });
   }
+  if (address === MARGIN_ENGINE && data.startsWith(toFunctionSelector("function mmSpotShock()")))
+    return encodeFunctionResult({ abi: feedAbi, functionName: "mmSpotShock", result: 10n ** 17n });
+  if (address === process.env.FUTURES_ADDRESS && data.startsWith(toFunctionSelector("function priceOracle()")))
+    return encodeFunctionResult({ abi: feedAbi, functionName: "priceOracle", result: HASHPRICE_FEED });
   if (address === MARGIN_ENGINE)
     return encodeFunctionResult({
       abi: mmAbi,
@@ -195,6 +237,19 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
           ? riskView(-15_000_000n, 0n)
           : riskView(4_000_000n, 1_000_000n),
       });
+    case "liquidationFeeBps":
+      // futures keeps 200 × 80% = 160 bps, perps 300 × 80% = 240 bps.
+      return encodeFunctionResult({
+        abi: venueAbi,
+        functionName,
+        result: isFutures ? 200 : 300,
+      });
+    case "liquidatorShareBps":
+      return encodeFunctionResult({
+        abi: venueAbi,
+        functionName,
+        result: 2_000,
+      });
     case "getActiveExpirationDates":
       return encodeFunctionResult({
         abi: venueAbi,
@@ -248,6 +303,11 @@ function rpc(request: { id: number; method: string; params: unknown[] }) {
         { to: string; data: `0x${string}` },
         string,
       ];
+      // Price history is read at past blocks; every other read is pinned.
+      if (call.to.toLowerCase() in FEEDS) {
+        result = feedCall(call.to.toLowerCase(), call.data, block);
+        break;
+      }
       assert.equal(
         block,
         toHex(BLOCK),
@@ -276,6 +336,23 @@ function graphql(url: string) {
   throw new Error(`unexpected url ${url}`);
 }
 
+/** Bitcoin tip 4,000 blocks before the 1,050,000 halving, 9.5-minute blocks over the last 2,016. */
+const BTC_TIP = 1_046_000;
+const BTC_TIP_TIME = 1_900_000_000;
+const BTC_BLOCK_SECONDS = 570;
+
+function bitcoinRpc(request: { id: number; method: string; params: unknown[] }) {
+  const { id, method, params } = request;
+  let result: unknown;
+  if (method === "getblockcount") result = BTC_TIP;
+  else if (method === "getblockhash") result = `hash-${params[0]}`;
+  else if (method === "getblockheader") {
+    const height = Number(String(params[0]).slice("hash-".length));
+    result = { height, time: BTC_TIP_TIME - (BTC_TIP - height) * BTC_BLOCK_SECONDS };
+  } else throw new Error(`unexpected bitcoin rpc ${method}`);
+  return { jsonrpc: "2.0", id, result, error: null };
+}
+
 const userAgents = new Set<string>();
 
 globalThis.fetch = (async (
@@ -287,6 +364,8 @@ globalThis.fetch = (async (
     return failHealth
       ? new Response("busy", { status: 503 })
       : Response.json(healthResponse());
+  if (url.startsWith("https://btc.test"))
+    return Response.json(bitcoinRpc(JSON.parse(String(init?.body))));
   userAgents.add(new Headers(init?.headers).get("user-agent") ?? "");
   const body = JSON.parse(String(init?.body));
   const payload = url.startsWith("https://rpc.test")
@@ -328,10 +407,10 @@ describe("collect", () => {
   });
 
   it("batches contract reads into two multicalls per check", () => {
-    // backstop 5 + 2 legs; market maker 8 + 2 reads for each of 3 expiries
+    // backstop 11 + 2 legs; market maker 8 + 2 reads for each of 3 expiries
     assert.deepEqual(
       [...multicallSizes].sort((a, b) => a - b),
-      [2, 5, 6, 8],
+      [2, 6, 8, 11],
     );
   });
 
@@ -369,6 +448,42 @@ describe("collect", () => {
     assert.equal(value("BackstopFuturesNetQuantity"), 2);
     assert.equal(value("BackstopFuturesNetQuantity", "100"), 2);
     assert.equal(value("BackstopPerpsNetQuantity"), -7_000_000);
+  });
+
+  it("reports backstop exposure at the mark in USDC", () => {
+    assert.equal(value("BackstopNotional", process.env.FUTURES_ADDRESS), 80); // 2 × $40
+    assert.equal(value("BackstopNotional", process.env.PERPS_ADDRESS), 280); // 7 × $40
+    assert.equal(value("BackstopNotional"), 360);
+  });
+
+  it("X3-R3A-2: flags an unwind band plus fee above the kept liquidation fee", () => {
+    assert.equal(
+      value("BackstopUnwindBudgetBps", process.env.FUTURES_ADDRESS),
+      160,
+    );
+    assert.equal(
+      value("BackstopUnwindBudgetBps", process.env.PERPS_ADDRESS),
+      240,
+    );
+    // band 200 + fee 25 against the tighter 160 bps budget
+    assert.equal(value("BackstopUnwindOverBudgetBps"), 65);
+  });
+
+  it("counts down to the next Bitcoin halving from the node's tip", () => {
+    assert.equal(value("BtcBlocksUntilHalving"), 4_000);
+    const days = value("BtcDaysUntilHalving") ?? 0;
+    assert.ok(Math.abs(days - (4_000 * BTC_BLOCK_SECONDS) / 86_400) < 1e-9, `days ${days}`);
+  });
+
+  it("reports hashprice and BTC prices, their moves, feed ages and the MM shock", () => {
+    assert.equal(value("HashpriceUsd"), 33);
+    assert.equal(value("BtcUsd"), 80_000);
+    assert.ok(Math.abs((value("HashpriceChange24hPct") ?? 0) - 10) < 1e-9);
+    assert.ok(Math.abs((value("HashpriceChange1hPct") ?? 0) - 10) < 1e-9);
+    assert.ok(Math.abs((value("BtcChange24hPct") ?? 0) - 400 / 76) < 1e-9);
+    assert.equal(value("MmSpotShockPct"), 10);
+    assert.ok(Math.abs((value("HashpriceFeedAgeSeconds") ?? 0) - 120) <= 5);
+    assert.ok(Math.abs((value("BtcUsdFeedAgeSeconds") ?? 0) - 60) <= 5);
   });
 
   it("tags per-venue bad debt with the venue address", () => {

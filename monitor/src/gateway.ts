@@ -151,6 +151,11 @@ export interface ChainState {
   pendingFunding: bigint;
   futuresLegs: { expirationAt: bigint; net: bigint }[];
   perpsNet: bigint;
+  /** Mark prices, collateral-token units: futures is per whole contract, perps per 1e6 units. */
+  futuresMark: bigint;
+  perpsMark: bigint;
+  /** Liquidation fee each venue keeps after the liquidator's share, in bps of notional. */
+  unwindBudgetBps: { venue: Address; bps: number }[];
 }
 
 export async function readChainState(
@@ -164,12 +169,26 @@ export async function readChainState(
     "function getActiveExpirationDates(address user) view returns (uint256[])",
     "function getUserPosition(address user, uint256 expirationAt) view returns (Position)",
     "function getUserPosition(address user) view returns (Position)",
+    "function liquidationFeeBps() view returns (uint16)",
+    "function liquidatorShareBps() view returns (uint16)",
+    "function getMarketPrice() view returns (uint256)",
   ]);
   const futures = { ...at, abi, address: FUTURES_ADDRESS };
   const perps = { ...at, abi, address: PERPS_ADDRESS };
 
-  const [usdcRaw, futuresRisk, expiries, perpsRisk, perpsPosition] =
-    await chain.multicall({
+  const [
+    usdcRaw,
+    futuresRisk,
+    expiries,
+    perpsRisk,
+    perpsPosition,
+    futuresLiquidationFee,
+    futuresLiquidatorShare,
+    perpsLiquidationFee,
+    perpsLiquidatorShare,
+    futuresMark,
+    perpsMark,
+  ] = await chain.multicall({
       ...at,
       multicallAddress: MULTICALL3,
       allowFailure: false,
@@ -200,6 +219,12 @@ export async function readChainState(
           functionName: "getUserPosition",
           args: [BACKSTOP],
         },
+        { ...futures, functionName: "liquidationFeeBps" },
+        { ...futures, functionName: "liquidatorShareBps" },
+        { ...perps, functionName: "liquidationFeeBps" },
+        { ...perps, functionName: "liquidatorShareBps" },
+        { ...futures, functionName: "getMarketPrice" },
+        { ...perps, functionName: "getMarketPrice" },
       ],
     });
 
@@ -212,7 +237,7 @@ export async function readChainState(
       functionName: "getUserPosition",
       args: [BACKSTOP, expirationAt],
     })),
-  })) as { netQuantity: bigint; netEntryValue: bigint }[];
+  })) as unknown as { netQuantity: bigint; netEntryValue: bigint }[];
   const futuresLegs = expiries.flatMap((expirationAt, index) => {
     const net = positions[index].netQuantity;
     return net === 0n ? [] : [{ expirationAt, net }];
@@ -224,7 +249,24 @@ export async function readChainState(
     pendingFunding: perpsRisk.pendingFunding,
     futuresLegs,
     perpsNet: perpsPosition.netQuantity,
+    futuresMark,
+    perpsMark,
+    unwindBudgetBps: [
+      {
+        venue: FUTURES_ADDRESS,
+        bps: keptBps(futuresLiquidationFee, futuresLiquidatorShare),
+      },
+      {
+        venue: PERPS_ADDRESS,
+        bps: keptBps(perpsLiquidationFee, perpsLiquidatorShare),
+      },
+    ],
   };
+}
+
+/** Same rounding as the venues: the liquidator's share rounds down, the venue keeps the rest. */
+function keptBps(feeBps: number, liquidatorShareBps: number): number {
+  return feeBps - Math.floor((feeBps * liquidatorShareBps) / 10_000);
 }
 
 /** One order book and the market maker's position in it. Prices are collateral-token units. */
@@ -428,4 +470,127 @@ export async function readPointsMeta(): Promise<{
     block: Number(_meta.block.number),
     hasIndexingErrors: Boolean(_meta.hasIndexingErrors),
   };
+}
+
+/** Blocks between Bitcoin difficulty retargets; the block-time average spans one. */
+export const DIFFICULTY_PERIOD = 2016;
+
+/** Bitcoin tip height and the header times at the tip and one retarget period back. */
+export interface BitcoinTip {
+  height: number;
+  time: number;
+  periodStartTime: number;
+}
+
+/**
+ * Terraform hands the Lambda BITCOIN_RPC_URL (Alchemy's bitcoin-mainnet); a
+ * local run composes it from ALCHEMY_API_KEY. Resolved per call so a missing
+ * URL fails only the halving countdown.
+ */
+function resolveBitcoinRpcUrl(): string {
+  const explicit = process.env.BITCOIN_RPC_URL;
+  if (explicit) return explicit;
+  const apiKey = process.env.ALCHEMY_API_KEY;
+  if (!apiKey) throw new Error("set BITCOIN_RPC_URL or ALCHEMY_API_KEY");
+  return `https://bitcoin-mainnet.g.alchemy.com/v2/${apiKey}`;
+}
+
+async function bitcoinRpc<T>(method: string, params: unknown[] = []): Promise<T> {
+  const response = await fetch(resolveBitcoinRpcUrl(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const body = await response.json();
+  if (body.error) throw new Error(`bitcoin ${method}: ${JSON.stringify(body.error)}`);
+  return body.result as T;
+}
+
+async function bitcoinHeaderTime(height: number): Promise<number> {
+  const hash = await bitcoinRpc<string>("getblockhash", [height]);
+  const header = await bitcoinRpc<{ time: number }>("getblockheader", [hash, true]);
+  return header.time;
+}
+
+export async function readBitcoinTip(): Promise<BitcoinTip> {
+  const height = await bitcoinRpc<number>("getblockcount");
+  const [time, periodStartTime] = await Promise.all([
+    bitcoinHeaderTime(height),
+    bitcoinHeaderTime(height - DIFFICULTY_PERIOD),
+  ]);
+  return { height, time, periodStartTime };
+}
+
+/** Base produces a block every 2 seconds; price look-backs are counted in blocks. */
+const BASE_BLOCK_SECONDS = 2n;
+const BLOCKS_1H = 3_600n / BASE_BLOCK_SECONDS;
+const BLOCKS_24H = 86_400n / BASE_BLOCK_SECONDS;
+
+const feedAbi = parseAbi([
+  "function priceOracle() view returns (address)",
+  "function btcUsdOracle() view returns (address)",
+  "function decimals() view returns (uint8)",
+  "function latestRoundData() view returns (uint80, int256, uint256, uint256, uint80)",
+  "function mmSpotShock() view returns (uint256)",
+]);
+
+/** A feed's answer now, 1 h and 24 h back, and when it last updated. Raw feed units. */
+export interface FeedHistory {
+  decimals: number;
+  now: bigint;
+  ago1h: bigint;
+  ago24h: bigint;
+  updatedAt: number;
+}
+
+async function readFeed(feed: Address, block: bigint): Promise<FeedHistory> {
+  const answerAt = async (blockNumber: bigint) =>
+    (
+      await chain.readContract({
+        address: feed,
+        abi: feedAbi,
+        functionName: "latestRoundData",
+        blockNumber: blockNumber < 0n ? 0n : blockNumber,
+      })
+    ) as readonly [bigint, bigint, bigint, bigint, bigint];
+  const [decimals, latest, hour, day] = await Promise.all([
+    chain.readContract({ address: feed, abi: feedAbi, functionName: "decimals", blockNumber: block }),
+    answerAt(block),
+    answerAt(block - BLOCKS_1H),
+    answerAt(block - BLOCKS_24H),
+  ]);
+  return {
+    decimals,
+    now: latest[1],
+    ago1h: hour[1],
+    ago24h: day[1],
+    updatedAt: Number(latest[3]),
+  };
+}
+
+/**
+ * Hashprice USD (the futures venue's oracle) and the BTC/USD feed it is built
+ * from, with look-backs at past blocks, plus the PME's MM spot shock that sizes
+ * the move alarms.
+ */
+export async function readPrices(
+  at: { blockNumber: bigint },
+  marginEngine: Address,
+): Promise<{ hashprice: FeedHistory; btcUsd: FeedHistory; mmSpotShock: bigint }> {
+  const hashpriceFeed = await chain.readContract({
+    address: FUTURES_ADDRESS,
+    abi: feedAbi,
+    functionName: "priceOracle",
+    ...at,
+  });
+  const [btcFeed, mmSpotShock] = await Promise.all([
+    chain.readContract({ address: hashpriceFeed, abi: feedAbi, functionName: "btcUsdOracle", ...at }),
+    chain.readContract({ address: marginEngine, abi: feedAbi, functionName: "mmSpotShock", ...at }),
+  ]);
+  const [hashprice, btcUsd] = await Promise.all([
+    readFeed(hashpriceFeed, at.blockNumber),
+    readFeed(btcFeed, at.blockNumber),
+  ]);
+  return { hashprice, btcUsd, mmSpotShock };
 }

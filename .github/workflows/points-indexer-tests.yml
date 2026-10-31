@@ -34,7 +34,8 @@ jobs:
     name: Points indexer tests
     needs: pre
     if: needs.pre.outputs.should_skip != 'true'
-    runs-on: ubuntu-latest
+    # matchstick ships no binary for Ubuntu 26, which ubuntu-latest became in 2026-10.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:

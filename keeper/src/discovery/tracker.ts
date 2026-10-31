@@ -8,35 +8,31 @@ import {
 import type pino from "pino";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
-import type {
-  ParticipantListener,
-  ParticipantSource,
-} from "./types.ts";
+import type { ParticipantListener, ParticipantSource } from "./types.ts";
 import { CollateralVaultAbi as collateralVaultAbi } from "collateral-margin-abi/CollateralVault.ts";
 import { HashPowerPerpsDEXAbi as perpsAbi } from "derivatives-marketplace-abi/HashPowerPerpsDEX.ts";
 import { isProtocolAccount } from "../protocolAccounts.ts";
 
 /**
- * Set of user addresses with collateral or open positions/orders that the
- * keeper needs to monitor. Maintained event-driven via:
+ * Set of perps participants the keeper needs to monitor, added on perps
+ * `OrderCreated` / `OrderMatched`. Futures discovery is expiry-scoped and
+ * owned by `FuturesExpiryIndex`.
  *
- *   - Vault Deposited / Withdrawn / Transfer  → adds users on first deposit
- *   - Perps OrderCreated / OrderMatched / PositionLiquidated
- * Futures discovery is expiry-scoped and owned by `FuturesExpiryIndex`.
+ * Vault `Deposited` / `Transfer` only fire the `changed` listeners. They never
+ * add a user: a balance alone cannot be liquidated, and `depositFor(any, 1)`
+ * costs only gas, so tracking every depositor lets spam slow every sweep
+ * (CF-183). A funded user enters the set on their first perps order.
  *
- * On startup, `backfill(fromBlock)` scans the same six events historically
- * via `getLogs` so the cold-start window doesn't miss participants who
- * funded or opened positions before the keeper booted. Steady state is
- * carried by the live `watchContractEvent` subscriptions started in
- * `start()`; backfill closes the gap from `fromBlock` up to the head of
- * the watcher.
+ * On startup, `backfill(fromBlock)` scans the perps events historically via
+ * `getLogs` so the cold-start window doesn't miss participants who traded
+ * before the keeper booted. Steady state is carried by the live
+ * `watchContractEvent` subscriptions started in `start()`; backfill closes
+ * the gap from `fromBlock` up to the head of the watcher.
  *
  * The tracker is a "set of users to consider" — it never decides whether a
- * user is liquidatable. That's the planner's job. Removing a user from the
- * tracker is intentionally rare: we only drop them when we observe a
- * `Withdrawn` that brings their vault balance back to zero AND they have no
- * positions/orders. The cost of an extra `readAccountHealthBatch` call per
- * dormant user is far smaller than the cost of missing a re-funding event.
+ * user is liquidatable. That's the planner's job. Users are not removed when
+ * they go flat: an extra `readAccountHealthBatch` read per dormant trader is
+ * far cheaper than missing one.
  */
 export type TrackerListener = ParticipantListener;
 
@@ -57,21 +53,9 @@ export class ParticipantTracker implements ParticipantSource {
     this.logger = logger.child({ component: "tracker" });
   }
 
-  /**
-   * Subscribes to the source-of-truth events on Vault, Perps and Futures.
-   * Discovery via RPC is enabled when `chain.discoveryMode` is `"events"` or
-   * `"both"`. The webhook path is owned by `WebhookIngester`, which feeds
-   * users in via `add()` directly.
-   */
+  /** Subscribes to the vault and perps events above. */
   async start(): Promise<void> {
-    if (this.config.chain.discoveryMode === "webhook") {
-      this.logger.info("discoveryMode=webhook — RPC subscriptions disabled");
-      return;
-    }
-    this.logger.info(
-      { mode: this.config.chain.discoveryMode },
-      "starting RPC event subscriptions",
-    );
+    this.logger.info("starting RPC event subscriptions");
 
     // Each `watchContractEvent` returns an unwatcher fn; we call them all on
     // stop(). Vault Transfer covers both `from` and `to` so we don't need to
@@ -117,7 +101,7 @@ export class ParticipantTracker implements ParticipantSource {
   }
 
   /**
-   * One-shot historical backfill. Scans the same four events `start()`
+   * One-shot historical backfill. Scans the perps events `start()`
    * subscribes to from `fromBlock` to the current head via `getLogs`, in
    * chunks of `chunkSize` blocks, and feeds each match through the same
    * handlers the live watcher uses. Run once at startup *after* `start()`
@@ -127,15 +111,8 @@ export class ParticipantTracker implements ParticipantSource {
    *
    * Futures history is deliberately excluded: its bounded per-expiry replay
    * lives in `FuturesExpiryIndex`.
-   *
-   * Webhook-only discovery mode skips backfill — Goldsky owns history in
-   * that configuration.
    */
   async backfill(fromBlock: bigint, chunkSize: bigint): Promise<void> {
-    if (this.config.chain.discoveryMode === "webhook") {
-      this.logger.info("discoveryMode=webhook — backfill skipped");
-      return;
-    }
     if (chunkSize <= 0n) {
       throw new Error(`backfill chunkSize must be positive, got ${chunkSize}`);
     }
@@ -165,36 +142,12 @@ export class ParticipantTracker implements ParticipantSource {
     // The `dispatch` for each source is the SAME function the live watcher
     // calls in `start()` — historical and live logs land in identical code
     // paths, so any future field renames touch exactly one place.
+    // Vault events are live-only: they add no users, and a `changed` signal
+    // for history is meaningless before anyone subscribes.
     const sources: Array<{
       label: string;
       run: (from: bigint, to: bigint) => Promise<void>;
     }> = [
-      {
-        label: "vault.Deposited",
-        run: async (from, to) => {
-          const logs = await this.chain.publicClient.getContractEvents({
-            address: this.config.vault.address,
-            abi: collateralVaultAbi,
-            eventName: "Deposited",
-            fromBlock: from,
-            toBlock: to,
-          });
-          this.onVaultDeposited(logs as unknown as readonly Log[]);
-        },
-      },
-      {
-        label: "vault.Transfer",
-        run: async (from, to) => {
-          const logs = await this.chain.publicClient.getContractEvents({
-            address: this.config.vault.address,
-            abi: collateralVaultAbi,
-            eventName: "Transfer",
-            fromBlock: from,
-            toBlock: to,
-          });
-          this.onVaultTransfer(logs as unknown as readonly Log[]);
-        },
-      },
       {
         label: "perps.OrderCreated",
         run: async (from, to) => {
@@ -259,13 +212,13 @@ export class ParticipantTracker implements ParticipantSource {
   }
 
   /**
-   * Manually add a user. Used by `WebhookIngester` and by external callers
-   * that need to inject a user (e.g. ad-hoc CLI commands).
+   * Manually add a user. Used by external callers that need to inject a
+   * user (e.g. ad-hoc CLI commands).
    */
   add(user: Address): boolean {
     const checksummed = getAddress(user);
-    // The insurance fund and the backstop appear in vault transfers and as the
-    // backstop's taker fills; neither is ever liquidatable.
+    // The backstop appears as a taker in its own fills; protocol accounts are
+    // never liquidatable.
     if (isProtocolAccount(checksummed)) return false;
     if (this.users.has(checksummed)) return false;
     this.users.add(checksummed);
@@ -374,15 +327,13 @@ export class ParticipantTracker implements ParticipantSource {
     type Args = { user?: Address; sender?: Address; amount?: bigint };
     for (const raw of logs) {
       const args = (raw as unknown as { args?: Args }).args;
-      if (args?.user !== undefined) this.touch(args.user);
+      if (args?.user !== undefined) this.notifyChanged(getAddress(args.user));
     }
   }
 
   /**
    * `Transfer(address indexed from, address indexed to, uint256 value)`.
-   * Track both sides — the destination becomes a candidate; the source we
-   * keep tracking even if its balance zeroes out (cheap to keep, expensive
-   * to miss on re-funding).
+   * A balance change on either side can move a tracked user's health.
    */
   private onVaultTransfer(logs: readonly Log[]): void {
     type Args = { from?: Address; to?: Address; value?: bigint };
@@ -390,8 +341,9 @@ export class ParticipantTracker implements ParticipantSource {
       const args = (raw as unknown as { args?: Args }).args;
       if (args === undefined) continue;
       if (args.from !== undefined && args.from !== zeroAddress)
-        this.touch(args.from);
-      if (args.to !== undefined && args.to !== zeroAddress) this.touch(args.to);
+        this.notifyChanged(getAddress(args.from));
+      if (args.to !== undefined && args.to !== zeroAddress)
+        this.notifyChanged(getAddress(args.to));
     }
   }
 
@@ -426,5 +378,4 @@ export class ParticipantTracker implements ParticipantSource {
       if (args.taker !== undefined) this.touch(args.taker);
     }
   }
-
 }

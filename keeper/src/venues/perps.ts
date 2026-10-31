@@ -5,7 +5,10 @@ import type { Config } from "../config.ts";
 import { HashPowerPerpsDEXAbi } from "derivatives-marketplace-abi/HashPowerPerpsDEX.ts";
 import { sendLiquidate } from "../tx/liquidate.ts";
 import { readAccountSnapshot, readMMParams } from "../predict/snapshot.ts";
-import { type MMParams, solvePerpCloseToTarget } from "@hashpower/portfolio-margin";
+import {
+  type MMParams,
+  solvePerpCloseToTarget,
+} from "@hashpower/portfolio-margin";
 import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
 import { PerpsPositionAbi } from "./perpsPositionAbi.ts";
 import type {
@@ -48,7 +51,6 @@ export class PerpsVenue implements Venue {
   private readonly config: Config;
   private readonly logger: pino.Logger;
   private readonly ethUsdFeed: EthUsdFeed | undefined;
-  private mmParams: MMParams | undefined;
 
   constructor(
     chain: Chain,
@@ -106,7 +108,9 @@ export class PerpsVenue implements Venue {
     const absQty = abs(position.netQuantity);
     const isLong = position.netQuantity > 0n;
     // PnL in token decimals: mark value minus the signed entry value.
-    const pnl = (marketPrice * position.netQuantity) / QUANTITY_SCALE - position.netEntryValue;
+    const pnl =
+      (marketPrice * position.netQuantity) / QUANTITY_SCALE -
+      position.netEntryValue;
     const unrealizedLoss = pnl < 0n ? -pnl : 0n;
     const notional = (marketPrice * absQty) / QUANTITY_SCALE;
 
@@ -175,9 +179,15 @@ export class PerpsVenue implements Venue {
   async reduceToTarget(user: Address): Promise<ReduceToTargetOutcome> {
     // Size the partial close off-chain against a fresh snapshot so the account
     // lands inside the [MM, IM] band (or a full close on a deep crash).
-    const [snapshot, params, marketPrice] = await Promise.all([
-      readAccountSnapshot(this.chain, this.config, user),
-      this.getMMParams(),
+    const params = await this.getMMParams();
+    const [snapshot, marketPrice] = await Promise.all([
+      readAccountSnapshot(
+        this.chain,
+        this.config,
+        user,
+        { params, logger: this.logger },
+        true,
+      ),
       this.chain.publicClient.readContract({
         address: this.config.perps.address,
         abi: HashPowerPerpsDEXAbi,
@@ -185,14 +195,15 @@ export class PerpsVenue implements Venue {
       }) as Promise<bigint>,
     ]);
 
-    // The contract's liquidation-fee payout is disabled, so the close realizes no
-    // fee — pass 0 to the solver so its balance projection matches on-chain reality.
+    // The liquidation fee (bps of the closed notional) is left out: it only lowers
+    // the post-close balance, so the account lands at or under IM, never over it.
     const closeQty = solvePerpCloseToTarget(snapshot, params, marketPrice, 0n);
     if (closeQty === 0n) {
       return { skipped: "nothingToClose" };
     }
 
-    const absNet = snapshot.perp.netQty < 0n ? -snapshot.perp.netQty : snapshot.perp.netQty;
+    const absNet =
+      snapshot.perp.netQty < 0n ? -snapshot.perp.netQty : snapshot.perp.netQty;
     this.logger.info(
       { user, closeQty, absNet, fullClose: closeQty >= absNet },
       "Perps reduceToTarget: partial close down to the IM buffer",
@@ -222,11 +233,9 @@ export class PerpsVenue implements Venue {
       : { feeEarned: result.feeEarned, positionsClosed: 1 };
   }
 
-  /** Read + cache the PME engine params (shocks / decimals). Immutable per epoch. */
+  /** Read the PME engine params (shocks / decimals) fresh for each liquidation, so a `setShocks` applies at once. */
   private async getMMParams(): Promise<MMParams> {
-    if (this.mmParams !== undefined) return this.mmParams;
-    this.mmParams = await readMMParams(this.chain, this.config);
-    return this.mmParams;
+    return readMMParams(this.chain, this.config);
   }
 }
 

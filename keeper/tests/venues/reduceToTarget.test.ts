@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
 import type { Address } from "viem";
 import { FuturesVenue } from "../../src/venues/futures.ts";
@@ -32,17 +32,29 @@ const EMPTY_RISK_VIEW = {
   sellOrderFillLoss: 0n,
 } as const;
 
+/** A venue's `RestingOrderAggregate` with no resting orders. */
+const EMPTY_AGGREGATE = {
+  buyQty: 0n,
+  sellQty: 0n,
+  buyPQ: 0n,
+  buyP2Q: 0n,
+  sellPQ: 0n,
+  sellP2Q: 0n,
+} as const;
+
 /**
- * The bulk read `readAccountSnapshot` issues, in order: balance, perp position,
- * perps risk/aggregate, futures risk, active position expiries, tradable window.
+ * The bulk read `readAccountSnapshot` issues, in order: balance, account debt,
+ * perp position, perps risk/aggregate, futures risk, active position expiries,
+ * tradable window.
  * Only the expiry lists vary between these cases.
  */
 function snapshotMulticall(balance: bigint, expiries: readonly bigint[]) {
   return [
     balance,
+    0n,
     { netQuantity: 0n, netEntryValue: 0n },
     EMPTY_RISK_VIEW,
-    [0n, 0n],
+    EMPTY_AGGREGATE,
     EMPTY_RISK_VIEW,
     expiries,
     expiries,
@@ -59,7 +71,11 @@ const silentLogger = {
 
 function makeConfigStub(dryRun: boolean, maxLots = 50): Config {
   return {
-    futures: { address: FUTURES, maxLotsPerLiquidationTx: maxLots },
+    futures: {
+      address: FUTURES,
+      maxLotsPerLiquidationTx: maxLots,
+      solverTimeoutMs: 10_000,
+    },
     vault: { address: "0x000000000000000000000000000000000000aa01" as Address },
     pme: { address: "0x000000000000000000000000000000000000aa02" as Address },
     perps: { address: "0x000000000000000000000000000000000000aa03" as Address },
@@ -75,11 +91,15 @@ function makeChainStub(opts: {
   netEntryValue: bigint;
   onSimulate: (call: ReadCall) => void;
   expiry?: bigint;
+  mmShock?: () => bigint;
 }): Chain {
   const expiry = opts.expiry ?? EXPIRY;
   return {
-    account: { address: "0x0000000000000000000000000000000000009999" as Address },
+    account: {
+      address: "0x0000000000000000000000000000000000009999" as Address,
+    },
     publicClient: {
+      getBlockNumber: async () => 1n,
       readContract: async (call: ReadCall) => {
         if (call.functionName === "getMarketPrice") return opts.marketPrice;
         if (call.functionName === "collateralToken") return USDC;
@@ -87,7 +107,9 @@ function makeChainStub(opts: {
       },
       multicall: async ({ contracts }: { contracts: readonly ReadCall[] }) => {
         const fns = contracts.map((c) => c.functionName);
-        if (fns[0] === "imSpotShock") return [IM_SHOCK, MM_SHOCK, 6, 6];
+        if (fns[0] === "imSpotShock") {
+          return [IM_SHOCK, opts.mmShock?.() ?? MM_SHOCK, 6, 6];
+        }
         if (fns[0] === "balanceOf") {
           return snapshotMulticall(opts.balance, [expiry]);
         }
@@ -96,9 +118,12 @@ function makeChainStub(opts: {
           return contracts.map((c) => {
             if (c.functionName === "settlementPrice") return 0n;
             if (c.functionName === "getOrderAggregateAtExpiration") {
-              return { buyQty: 0n, sellQty: 0n, buyValue: 0n, sellValue: 0n };
+              return EMPTY_AGGREGATE;
             }
-            return { netQuantity: opts.netQuantity, netEntryValue: opts.netEntryValue };
+            return {
+              netQuantity: opts.netQuantity,
+              netEntryValue: opts.netEntryValue,
+            };
           });
         }
         throw new Error(`unexpected multicall head: ${fns[0]}`);
@@ -112,6 +137,39 @@ function makeChainStub(opts: {
 }
 
 describe("futures venue: reduceToTarget", () => {
+  it("sizes with a setShocks MM change without a restart", async () => {
+    mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    try {
+      let mmShock = MM_SHOCK;
+      const closes: bigint[] = [];
+      const chain = makeChainStub({
+        balance: 136_000_000n,
+        marketPrice: 30_000_000n,
+        netQuantity: 12n,
+        netEntryValue: 12n * 40_000_000n,
+        mmShock: () => mmShock,
+        onSimulate: (call) => {
+          const [, , closeQtys] = call.args as [Address, bigint[], bigint[]];
+          closes.push(closeQtys.reduce((s, q) => s + q, 0n));
+        },
+      });
+      const venue = new FuturesVenue(chain, makeConfigStub(true), silentLogger);
+      await venue.reduceToTarget(USER);
+
+      mmShock = 10n ** 17n;
+      mock.timers.tick(61_000);
+      await venue.reduceToTarget(USER);
+
+      assert.equal(closes.length, 2);
+      assert.ok(
+        closes[1] > closes[0],
+        `MM 10% closes more than MM 5% (${closes[1]} vs ${closes[0]})`,
+      );
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
   it("sizes a closeQty and submits liquidatePositions(expirationAts, closeQtys)", async () => {
     let simulated: ReadCall | undefined;
     const chain = makeChainStub({
@@ -137,32 +195,48 @@ describe("futures venue: reduceToTarget", () => {
     assert.ok(expirationAts.length >= 1);
     assert.ok(expirationAts.every((e) => e === EXPIRY));
     const totalClose = closeQtys.reduce((s, q) => s + q, 0n);
-    assert.ok(totalClose > 0n && totalClose < 12n, "strict subset of contracts");
-    assert.ok("feeEarned" in outcome && outcome.positionsClosed === Number(totalClose));
+    assert.ok(
+      totalClose > 0n && totalClose < 12n,
+      "strict subset of contracts",
+    );
+    assert.ok(
+      "feeEarned" in outcome && outcome.positionsClosed === Number(totalClose),
+    );
   });
 
   it("caps the batch to maxLotsPerLiquidationTx (expiry-leg chunking)", async () => {
     const EXPIRY_B = EXPIRY + 86_400n;
     let simulated: ReadCall | undefined;
     const chain = {
-      account: { address: "0x0000000000000000000000000000000000009999" as Address },
+      account: {
+        address: "0x0000000000000000000000000000000000009999" as Address,
+      },
       publicClient: {
+        getBlockNumber: async () => 1n,
         readContract: async (call: ReadCall) => {
           if (call.functionName === "getMarketPrice") return 100_000n;
           if (call.functionName === "collateralToken") return USDC;
           throw new Error(`unexpected readContract: ${call.functionName}`);
         },
-        multicall: async ({ contracts }: { contracts: readonly ReadCall[] }) => {
+        multicall: async ({
+          contracts,
+        }: {
+          contracts: readonly ReadCall[];
+        }) => {
           const fns = contracts.map((c) => c.functionName);
           if (fns[0] === "imSpotShock") return [IM_SHOCK, MM_SHOCK, 6, 6];
           if (fns[0] === "balanceOf") {
-            return snapshotMulticall(1_000_000n, [EXPIRY, EXPIRY_B, EXPIRY + 172_800n]);
+            return snapshotMulticall(1_000_000n, [
+              EXPIRY,
+              EXPIRY_B,
+              EXPIRY + 172_800n,
+            ]);
           }
           if (fns[0] === "getUserPosition") {
             return contracts.map((c) => {
               if (c.functionName === "settlementPrice") return 0n;
               if (c.functionName === "getOrderAggregateAtExpiration") {
-                return { buyQty: 0n, sellQty: 0n, buyValue: 0n, sellValue: 0n };
+                return EMPTY_AGGREGATE;
               }
               const expirationAt = c.args?.[1] as bigint;
               return {
@@ -181,7 +255,11 @@ describe("futures venue: reduceToTarget", () => {
       },
     } as unknown as Chain;
 
-    const venue = new FuturesVenue(chain, makeConfigStub(true, 2), silentLogger);
+    const venue = new FuturesVenue(
+      chain,
+      makeConfigStub(true, 2),
+      silentLogger,
+    );
     const outcome = await venue.reduceToTarget(USER);
     assert.ok(simulated);
     const [, expirationAts] = simulated?.args as [Address, bigint[], bigint[]];
@@ -192,14 +270,21 @@ describe("futures venue: reduceToTarget", () => {
   it("drops matured legs from the batch and leaves them to settlement", async () => {
     let simulated: ReadCall | undefined;
     const chain = {
-      account: { address: "0x0000000000000000000000000000000000009999" as Address },
+      account: {
+        address: "0x0000000000000000000000000000000000009999" as Address,
+      },
       publicClient: {
+        getBlockNumber: async () => 1n,
         readContract: async (call: ReadCall) => {
           if (call.functionName === "getMarketPrice") return 100_000n;
           if (call.functionName === "collateralToken") return USDC;
           throw new Error(`unexpected readContract: ${call.functionName}`);
         },
-        multicall: async ({ contracts }: { contracts: readonly ReadCall[] }) => {
+        multicall: async ({
+          contracts,
+        }: {
+          contracts: readonly ReadCall[];
+        }) => {
           const fns = contracts.map((c) => c.functionName);
           if (fns[0] === "imSpotShock") return [IM_SHOCK, MM_SHOCK, 6, 6];
           if (fns[0] === "balanceOf") {
@@ -209,7 +294,7 @@ describe("futures venue: reduceToTarget", () => {
             return contracts.map((c) => {
               if (c.functionName === "settlementPrice") return 0n;
               if (c.functionName === "getOrderAggregateAtExpiration") {
-                return { buyQty: 0n, sellQty: 0n, buyValue: 0n, sellValue: 0n };
+                return EMPTY_AGGREGATE;
               }
               return { netQuantity: 4n, netEntryValue: 4n * 40_000_000n };
             });

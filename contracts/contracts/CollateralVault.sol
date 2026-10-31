@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.28;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -63,6 +63,10 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     /// @dev Fee shortfalls (receiver is not the insurance fund) are emitted here and do not
     ///      increase `traderBadDebtTotal`.
     event BadDebt(address indexed payer, address indexed receiver, uint256 amount, address indexed venue);
+    /// @notice A loss `account` could not pay the insurance fund was booked as its debt.
+    event AccountDebtAccrued(address indexed account, uint256 amount);
+    /// @notice An insurance-fund payout to `account` cancelled `amount` of its debt instead of paying it.
+    event AccountDebtRecovered(address indexed account, uint256 amount);
     event InsuranceDebtCapSet(uint256 oldCap, uint256 newCap);
     event VaultHalted(HaltReason reason, uint256 debt, uint256 effectiveCap);
     event VaultResumed(uint256 debt, uint256 effectiveCap);
@@ -84,7 +88,7 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     address public constant BACKSTOP_ADDR = 0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB;
     /// @dev Upper bound for each backstop parameter (25%).
     uint16 public constant MAX_BACKSTOP_PARAM_BPS = 2_500;
-    string public constant VERSION = "1.3.0";
+    string public constant VERSION = "1.4.2";
 
     IERC20 public collateralToken;
     mapping(address => bool) public authorizedCallers;
@@ -98,7 +102,8 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     uint256 public insuranceDebt;
     /// @notice Owner-configured borrow ceiling. Ignored while the margin engine is unset.
     uint256 public insuranceDebtCap;
-    /// @notice Sum of shortfalls where a trader owed the insurance fund and could not pay.
+    /// @notice Sum of shortfalls where a trader owed the insurance fund and could not pay,
+    ///         less what later payouts to the same account cancelled (`accountDebt`).
     /// @dev Fee shortfalls are not included. They are lost revenue, not a hole in the pool.
     uint256 public traderBadDebtTotal;
     /// @notice Protocol capital: `depositInsuranceFund` minus `withdrawInsuranceFund`,
@@ -110,6 +115,15 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     uint16 public backstopUnwindBandBps;
     /// @notice Fee (bps of filled notional at the mark) paid to whoever calls `unwindBackstop`.
     uint16 public backstopUnwindFeeBps;
+    /// @notice Loss an account owed the insurance fund and could not pay. Part of
+    ///         `traderBadDebtTotal`; the account's next insurance-fund payouts cancel it first.
+    /// @dev Venues realize each leg separately, so this keeps a loss realized before an
+    ///      offsetting gain from being forgiven while the gain is paid in full.
+    mapping(address => uint256) public accountDebt;
+
+    /// @dev A borrow in this transaction latched the CAP halt. Venues pay a fill's winner before
+    ///      its loser pays the fund, so a repayment later in the same transaction clears it.
+    bool private transient _capHaltInTx;
 
     // ── Modifiers ───────────────────────────────────────────────────────────
 
@@ -318,29 +332,45 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
 
     /// @notice Settle `amount` from `from` to `to`, recording a shortfall instead of reverting.
     /// @dev Trader payer: move `min(balance, amount)`. The unpaid remainder is `BadDebt`.
-    ///      It increases `traderBadDebtTotal` only when the receiver is the insurance fund.
-    ///      Insurance-fund payer: pay the fund balance, mint the rest to `to`, and add it to
-    ///      `insuranceDebt`. That mint is the borrow record. Borrowing is uncapped so the
-    ///      receiver is always paid in full.
+    ///      When the receiver is the insurance fund it increases `traderBadDebtTotal` and the
+    ///      payer's `accountDebt`.
+    ///      Insurance-fund payer: first cancel up to `amount` of the receiver's `accountDebt`,
+    ///      without moving or minting anything, then settle the rest. The protocol backstop
+    ///      receives only real fund balance; for any other receiver, mint any remainder to
+    ///      `to` and add it to `insuranceDebt`. That mint is the borrow record. Borrowing is
+    ///      uncapped so an external receiver is always paid in full.
     ///      A borrow that leaves `insuranceDebt` above the effective cap latches `halted`
     ///      after the payout. The transaction completes; a later withdrawal in the same
-    ///      transaction reverts and rolls the payout back.
-    /// @return moved Amount credited to `to`.
+    ///      transaction reverts and rolls the payout back. If a credit to the fund later in
+    ///      the same transaction brings the debt back to or under the cap, the halt clears.
+    /// @return moved Amount satisfied for `to`: cancelled debt plus the amount credited.
     function settleTransfer(address from, address to, uint256 amount) external onlyAuthorized returns (uint256 moved) {
         if (amount == 0) return 0;
         if (from == address(0) || to == address(0)) revert ZeroAddress();
 
         if (from == INSURANCE_FUND_ADDR) {
-            uint256 bal = balanceOf(from);
-            if (bal >= amount) {
-                _transfer(from, to, amount);
-                return amount;
+            uint256 debt = accountDebt[to];
+            uint256 cancelled = debt < amount ? debt : amount;
+            if (cancelled > 0) {
+                accountDebt[to] = debt - cancelled;
+                traderBadDebtTotal -= cancelled;
+                emit AccountDebtRecovered(to, cancelled);
             }
-            if (bal > 0) _transfer(from, to, bal);
-            uint256 shortfall = amount - bal;
+            uint256 owed = amount - cancelled;
+
+            uint256 bal = balanceOf(from);
+            uint256 paid = bal < owed ? bal : owed;
+            if (paid > 0) _transfer(from, to, paid);
+            if (paid == owed) return amount;
+            if (to == BACKSTOP_ADDR) return cancelled + paid;
+
+            uint256 shortfall = owed - paid;
             _mint(to, shortfall);
             insuranceDebt += shortfall;
-            if (insuranceDebt > effectiveInsuranceDebtCap()) _latchHalt(HaltReason.CAP);
+            if (!halted && insuranceDebt > effectiveInsuranceDebtCap()) {
+                _latchHalt(HaltReason.CAP);
+                _capHaltInTx = true;
+            }
             return amount;
         }
 
@@ -350,7 +380,11 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
         if (pay < amount) {
             uint256 shortfall = amount - pay;
             emit BadDebt(from, to, shortfall, _msgSender());
-            if (to == INSURANCE_FUND_ADDR) traderBadDebtTotal += shortfall;
+            if (to == INSURANCE_FUND_ADDR) {
+                traderBadDebtTotal += shortfall;
+                accountDebt[from] += shortfall;
+                emit AccountDebtAccrued(from, shortfall);
+            }
         }
         return pay;
     }
@@ -446,6 +480,14 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
         uint256 repaid = value < insuranceDebt ? value : insuranceDebt;
         super._update(INSURANCE_FUND_ADDR, address(0), repaid);
         insuranceDebt -= repaid;
+        if (_capHaltInTx) {
+            uint256 cap = effectiveInsuranceDebtCap();
+            if (insuranceDebt <= cap) {
+                _capHaltInTx = false;
+                halted = false;
+                emit VaultResumed(insuranceDebt, cap);
+            }
+        }
     }
 
     function _latchHalt(HaltReason reason) internal {

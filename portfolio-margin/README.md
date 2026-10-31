@@ -29,12 +29,21 @@ margin(P) = max( stress(netDelta + buyOrderDelta),
           + fillLoss(P)
           + unrealizedLoss(P)
           + fundingOwed
+          + accountDebt
 ```
 
-`margin(P)` is piecewise-linear in `P` with kinks at each break-even, so
-`balance - margin(P)` is a tent: an account can have a threshold below spot, above it,
-both, or neither. The solvers enumerate kinks and bisect within each monotone interval
-rather than solving a closed form.
+`fillLoss(P)` is each side's Scarf bound from the per-side quantity and price moments
+the venues store (`Σq`, `Σp·q`, `Σp²·q`): perps once, futures per expiry at that
+expiry's price. It never under-charges, so a deep order cannot hide a marketable one,
+and it is exact for a single price level.
+
+`accountDebt` is the account's unpaid realized loss to the insurance fund. It is
+constant in price and is included in both IM and MM until a later fund payout
+cancels it.
+
+Every term is convex in `P`, so `balance - margin(P)` is concave: an account can have a
+threshold below spot, above it, both, or neither, and at most one on each side. The
+solvers bisect between the unrealized-PnL kinks rather than solving a closed form.
 
 IM and MM are not the same function with a different shock. IM clamps unrealized PnL per
 market, ignoring gains entirely; MM clamps the portfolio-wide sum, letting a gain at one

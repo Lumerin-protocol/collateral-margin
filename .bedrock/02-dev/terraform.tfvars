@@ -58,6 +58,9 @@ vault_monitoring = {
   mm_perps_position_warn_usd   = 16000
   mm_futures_position_warn_usd = 16000
   book_drift_warn_bps          = 100
+  # Protocol backstop.
+  backstop_notional_warn_usd = 16000
+  backstop_loss_crit_usd     = 4000
 }
 
 ########################################

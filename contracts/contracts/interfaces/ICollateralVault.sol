@@ -19,6 +19,9 @@ interface ICollateralVault is IERC20 {
     /// @notice Constant vanity address that holds liquidation leftovers as explicit positions.
     function BACKSTOP_ADDR() external pure returns (address);
 
+    /// @notice Unpaid loss this account owes the insurance fund.
+    function accountDebt(address account) external view returns (uint256);
+
     /// @notice Unwind band (bps around the mark) and caller fee (bps of notional) for `unwindBackstop`.
     function backstopParams() external view returns (uint16 unwindBandBps, uint16 unwindFeeBps);
 
@@ -27,8 +30,9 @@ interface ICollateralVault is IERC20 {
 
     /// @notice Settle a transfer that may come up short. Authorized callers only.
     /// @dev A trader payer moves `min(balance, amount)` and the rest is bad debt.
-    ///      The insurance fund pays in full, borrowing any shortfall from the pool.
-    /// @return moved Amount credited to `to`.
+    ///      A fund payer first nets the receiver's account debt, then pays the rest
+    ///      in full, borrowing any shortfall from the pool.
+    /// @return moved Amount settled, including debt cancelled without a token transfer.
     function settleTransfer(address from, address to, uint256 amount) external returns (uint256 moved);
 
     /// @notice Transfer balance between two accounts, reverting if the sender breaches portfolio margin. Authorized callers only.

@@ -91,14 +91,14 @@ src/
     predictiveIndex.ts # Sorted threshold index (down ASC, up ASC) with O(log) crossings
     coordinator.ts     # PriceFeed + tracker → index → CoordinatorQueue + executor.kick
   discovery/
-    tracker.ts         # Vault/Perps participant set + one-shot startup backfill
+    tracker.ts         # Perps participant set + one-shot startup backfill
     futuresExpiryIndex.ts # Bounded participant/position cache per Futures expiry
     combined.ts        # Deduplicated union consumed by scheduler/predictor
-    webhook.ts         # Optional Goldsky webhook ingester (Bearer-token auth)
   venues/
     types.ts           # Venue interface (multi-market aware: perps, futures, options)
     perps.ts           # Perps adapter (HashPowerPerpsDEX)
     futures.ts         # Futures adapter (expirationAt → marketId)
+    futuresSolver.ts   # Futures close solver on a worker thread, with a time limit
   coordinator/
     queue.ts           # mmSurplus-ordered cross-account priority queue
     planner.ts         # Per-account orders → positions liquidation plan
@@ -157,18 +157,19 @@ See `src/config.ts` for the authoritative shape. The minimum-viable set:
 | `HASHPRICE_USDC_ADDRESS`       | yes      | HashpriceUSD aggregator (current spot) |
 | `BTC_USDC_FEED_ADDRESS`        | yes      | Chainlink BTC/USDC AggregatorProxy (event source) |
 | `PRICE_MOVE_TRIGGER_BPS`       | no       | Skip ticks below this fractional move (default `1`) |
-| `DISCOVERY_MODE`               | no       | `events` (default) \| `webhook` \| `both` |
-| `BACKFILL_FROM_BLOCK`          | no       | Block to start the one-shot Vault/Perps startup backfill. Futures independently replays the bounded lifetime of active and previous expiries. |
+| `BACKFILL_FROM_BLOCK`          | no       | Block to start the one-shot Perps startup backfill (vault events add no participants). Futures independently replays the bounded lifetime of active and previous expiries. |
 | `BACKFILL_CHUNK_SIZE`          | no       | Per-`getLogs` page size for backfill. Default `10000` (most public RPC limit). |
 | `DRY_RUN`                      | no       | `true` to skip on-chain broadcasts     |
 | `ALERT_WEBHOOK_URL`            | no       | Slack/Discord/PagerDuty endpoint       |
 | `ALERT_DEDUPE_MS`              | no       | Dedupe window per (severity, user, market). Default `300_000` |
 | `ALERT_IM_WARN_UTIL`           | no       | IM utilization triggering warn alert. Default `0.85`         |
 | `ALERT_IM_CRITICAL_UTIL`       | no       | IM utilization triggering critical alert. Default `0.95`     |
-| `WEBHOOK_PORT`                 | no       | Goldsky ingestion port. Default `3001` |
-| `WEBHOOK_SECRET`               | no       | `Authorization: Bearer <token>` shared secret |
 | `COORDINATOR_MAX_CONCURRENT`   | no       | Concurrent plans. Default `1` (safe)   |
 | `COORDINATOR_CONFIRMATION_BLOCKS` | no    | Block confirmations after each tx. Default `1` |
+| `COORDINATOR_RETRY_BACKOFF_BASE_MS` | no  | First retry delay for an account whose plan threw; doubles per failure. Default `1000` |
+| `COORDINATOR_RETRY_BACKOFF_MAX_MS` | no   | Ceiling on that retry delay. Default `300000` (5 min) |
+| `COORDINATOR_MAX_ORDERS_PER_TX` | no  | Order ids per `liquidateOrders` tx (each costs about 140k gas). Default `50` |
+| `FUTURES_SOLVER_TIMEOUT_MS`    | no       | Time limit for one futures close solve on its worker thread; past it the worker is restarted and the account backed off. Default `10000` |
 | `KEEPER_MIN_PROFIT_MARGIN`     | no       | Bail on plans that would net ≤ this in token decimals. Default `0` |
 | `SWEEP_INTERVAL_MS`            | no       | Periodic safety-net sweep cadence (predictor handles the hot path). Default `60_000` |
 | `HEALTH_PORT`                  | no       | `/health` and `/ready` port. Default `3000` |
@@ -199,7 +200,10 @@ protocol ledgers rather than users:
   fills as a taker inside the vault's `backstopUnwindBandBps` around the mark
   and pays the caller `backstopUnwindFeeBps` of the filled notional from the
   venue fee pot. No liquidity inside the band reverts `TimeInForceNotFilled`
-  and is retried next tick. `/health` exposes `backstopOpenLegs`,
+  and is retried next tick. Each leg and venue fails on its own: a futures
+  date unlisted by a window shrink (`ExpirationDateNotAvailable`) logs a
+  warning and waits for settlement, any other revert logs an error and the
+  sweep continues with the remaining legs. `/health` exposes `backstopOpenLegs`,
   `backstopUnwinds`, `backstopUnfilledAttempts` and `backstopFeeEarned`.
 
 ## Dry run
@@ -255,8 +259,7 @@ Suites cover:
 - `alert/notifier` — dedupe window, severity promotion, ordering, retry-on-failure
 - `discovery/tracker` — checksum dedupe, `onAdded` / `onChanged` listeners, startup backfill
 - `discovery/futuresExpiryIndex` — scoped replay, per-expiry partitioning, rollover retention
-- `discovery/combined` — deduplicated Vault/Perps + Futures participant union
-- `discovery/webhook` — payload extraction across `data` / `records` / array shapes
+- `discovery/combined` — deduplicated Perps + Futures participant union
 - `runtime/scheduler` — alert ladder thresholds, queue upsert + executor kick wiring
 - `oracle/priceFeed` — rebase to token decimals (oracle already quotes 1 PH/s·day), dispatch, no-op on unchanged answer
 - `predict/mm` — net delta, stress, perp/futures unrealized loss, mm/im surplus

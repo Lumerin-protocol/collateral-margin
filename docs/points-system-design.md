@@ -256,5 +256,6 @@ flowchart TD
 
 - **Same-chain deployment** of perps and futures with the single `PointsHook` is required for cross-venue minting (both venues call the same hook). The points subgraph itself only needs the points contracts, which deploy together.
 - Final weight values (`w_maker`, `w_taker`, keeper rate), the minimum-fee threshold (`minFee`), and the maker price-improvement multiplier (`maxMakerMult`, `maxSpread` — disabled by default) are parameters to be set on `PointsHook` at deploy / via the admin setters.
+- `minFee` is 0.01 USDC on dev and prd (`POINTS_MIN_FEE=10000` in `config/{dev,prd}.env`, applied with `contracts/scripts/set-points-min-fee.ts`): a $10 taker trade at 10 bps, so one contract at today's mark earns. It must stay above 0: the protocol backstop's unwind fills pay no fee, and `minFee = 0` would mint it points that nobody can redeem but that dilute the pro-rata snapshot (X3-R4-5-4). The UI reads `minFee` and shows 0 points for a fill below it.
 - The treasury GOV pool size and the decision to enable conversion at all remain discretionary.
 - Deferred features (referral, loyalty, per-account caps, sybil/cluster detection) are tracked in `points-system-improvements.md` for a future iteration.

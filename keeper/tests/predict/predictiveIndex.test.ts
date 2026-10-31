@@ -10,15 +10,25 @@ function userAt(idx: number): Address {
 describe("predict/predictiveIndex: upsert / invalidate / size", () => {
   it("ignores upserts where both thresholds are undefined", () => {
     const idx = new PredictiveIndex();
-    const tracked = idx.upsert({ user: userAt(0), liqDown: undefined, liqUp: undefined });
+    const tracked = idx.upsert({
+      user: userAt(0),
+      liqDown: undefined,
+      liqUp: undefined,
+    });
     assert.equal(tracked, false);
     assert.equal(idx.size(), 0);
   });
 
   it("stores users with at least one defined threshold", () => {
     const idx = new PredictiveIndex();
-    assert.equal(idx.upsert({ user: userAt(0), liqDown: 100n, liqUp: undefined }), true);
-    assert.equal(idx.upsert({ user: userAt(1), liqDown: undefined, liqUp: 200n }), true);
+    assert.equal(
+      idx.upsert({ user: userAt(0), liqDown: 100n, liqUp: undefined }),
+      true,
+    );
+    assert.equal(
+      idx.upsert({ user: userAt(1), liqDown: undefined, liqUp: 200n }),
+      true,
+    );
     assert.equal(idx.size(), 2);
   });
 
@@ -27,7 +37,11 @@ describe("predict/predictiveIndex: upsert / invalidate / size", () => {
     idx.upsert({ user: userAt(0), liqDown: 100n, liqUp: undefined });
     idx.upsert({ user: userAt(0), liqDown: 90n, liqUp: undefined });
     assert.equal(idx.size(), 1);
-    assert.deepEqual(idx.get(userAt(0)), { user: userAt(0), liqDown: 90n, liqUp: undefined });
+    assert.deepEqual(idx.get(userAt(0)), {
+      user: userAt(0),
+      liqDown: 90n,
+      liqUp: undefined,
+    });
   });
 
   it("invalidate removes the user from both sorted lists", () => {

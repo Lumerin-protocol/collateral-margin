@@ -23,24 +23,45 @@
     },
     {
       "function": "internalTransferWithMarginCheck(address,address,uint256)",
-      "gas": "147484",
+      "gas": "151592",
       "id": "1 per order and fill · CollateralVault.internalTransferWithMarginCheck(address,address,uint256)::portfolio margin checked",
       "kind": "transaction",
       "scenario": "portfolio margin checked"
     },
     {
       "function": "settleTransfer(address,address,uint256)",
-      "gas": "96475",
+      "gas": "35277",
+      "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::fund payout cancels account debt",
+      "kind": "transaction",
+      "scenario": "fund payout cancels account debt"
+    },
+    {
+      "function": "settleTransfer(address,address,uint256)",
+      "gas": "99247",
       "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::fund shortfall borrows insurance debt",
       "kind": "transaction",
       "scenario": "fund shortfall borrows insurance debt"
     },
     {
       "function": "settleTransfer(address,address,uint256)",
-      "gas": "42622",
+      "gas": "57437",
+      "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::fund shortfall pays backstop only real balance",
+      "kind": "transaction",
+      "scenario": "fund shortfall pays backstop only real balance"
+    },
+    {
+      "function": "settleTransfer(address,address,uint256)",
+      "gas": "45019",
       "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::insurance fund pays a winner",
       "kind": "transaction",
       "scenario": "insurance fund pays a winner"
+    },
+    {
+      "function": "settleTransfer(address,address,uint256)",
+      "gas": "80426",
+      "id": "1 per order and fill · CollateralVault.settleTransfer(address,address,uint256)::loser short to the fund, books account debt",
+      "kind": "transaction",
+      "scenario": "loser short to the fund, books account debt"
     },
     {
       "function": "settleTransfer(address,address,uint256)",
@@ -79,42 +100,42 @@
     },
     {
       "function": "canPlaceOrder(address,uint256)",
-      "gas": "133905",
+      "gas": "138078",
       "id": "1 per order and fill · PortfolioMarginEngine.canPlaceOrder(address,uint256)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "canPlaceOrder(address,uint256)",
-      "gas": "134203",
+      "gas": "138376",
       "id": "1 per order and fill · PortfolioMarginEngine.canPlaceOrder(address,uint256)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
     },
     {
       "function": "meetsTradeMargin(address,uint256,uint256)",
-      "gas": "134253",
+      "gas": "138431",
       "id": "1 per order and fill · PortfolioMarginEngine.meetsTradeMargin(address,uint256,uint256)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "meetsTradeMargin(address,uint256,uint256)",
-      "gas": "134600",
+      "gas": "138779",
       "id": "1 per order and fill · PortfolioMarginEngine.meetsTradeMargin(address,uint256,uint256)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
     },
     {
       "function": "reduceLimits(address)",
-      "gas": "134021",
+      "gas": "138200",
       "id": "1 per order and fill · PortfolioMarginEngine.reduceLimits(address)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "reduceLimits(address)",
-      "gas": "134320",
+      "gas": "138498",
       "id": "1 per order and fill · PortfolioMarginEngine.reduceLimits(address)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
@@ -142,14 +163,14 @@
     },
     {
       "function": "depositForPermit(address,uint256,uint256,uint8,bytes32,bytes32)",
-      "gas": "109005",
+      "gas": "108961",
       "id": "2 user · CollateralVault.depositForPermit(address,uint256,uint256,uint8,bytes32,bytes32)::permit then deposit",
       "kind": "transaction",
       "scenario": "permit then deposit"
     },
     {
       "function": "withdraw(uint256)",
-      "gas": "166293",
+      "gas": "170401",
       "id": "2 user · CollateralVault.withdraw(uint256)::partial, margin checked",
       "kind": "transaction",
       "scenario": "partial, margin checked"
@@ -184,42 +205,42 @@
     },
     {
       "function": "computePortfolioIM(address)",
-      "gas": "123071",
+      "gas": "134352",
       "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioIM(address)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "computePortfolioIM(address)",
-      "gas": "123370",
+      "gas": "134651",
       "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioIM(address)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
     },
     {
       "function": "computePortfolioMM(address)",
-      "gas": "123119",
+      "gas": "134400",
       "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioMM(address)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "computePortfolioMM(address)",
-      "gas": "123497",
+      "gas": "134835",
       "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioMM(address)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
     },
     {
       "function": "computePortfolioMargins(address)",
-      "gas": "135821",
+      "gas": "147297",
       "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioMargins(address)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "computePortfolioMargins(address)",
-      "gas": "136200",
+      "gas": "147731",
       "id": "3 risk and liquidation · PortfolioMarginEngine.computePortfolioMargins(address)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
@@ -240,42 +261,42 @@
     },
     {
       "function": "isHealthy(address)",
-      "gas": "133735",
+      "gas": "137908",
       "id": "3 risk and liquidation · PortfolioMarginEngine.isHealthy(address)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "isHealthy(address)",
-      "gas": "134114",
+      "gas": "138343",
       "id": "3 risk and liquidation · PortfolioMarginEngine.isHealthy(address)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
     },
     {
       "function": "isLiquidatable(address)",
-      "gas": "133667",
+      "gas": "137840",
       "id": "3 risk and liquidation · PortfolioMarginEngine.isLiquidatable(address)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "isLiquidatable(address)",
-      "gas": "134046",
+      "gas": "138275",
       "id": "3 risk and liquidation · PortfolioMarginEngine.isLiquidatable(address)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
     },
     {
       "function": "orderMarginOf(address)",
-      "gas": "82078",
+      "gas": "82146",
       "id": "3 risk and liquidation · PortfolioMarginEngine.orderMarginOf(address)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "orderMarginOf(address)",
-      "gas": "132205",
+      "gas": "133260",
       "id": "3 risk and liquidation · PortfolioMarginEngine.orderMarginOf(address)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
@@ -316,8 +337,15 @@
       "scenario": "representative"
     },
     {
+      "function": "accountDebt(address)",
+      "gas": "29005",
+      "id": "4 views · CollateralVault.accountDebt(address)::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
       "function": "authorizedCallers(address)",
-      "gas": "29017",
+      "gas": "29063",
       "id": "4 views · CollateralVault.authorizedCallers(address)::representative",
       "kind": "view",
       "scenario": "representative"
@@ -331,7 +359,7 @@
     },
     {
       "function": "backstopUnwindBandBps()",
-      "gas": "28358",
+      "gas": "28336",
       "id": "4 views · CollateralVault.backstopUnwindBandBps()::representative",
       "kind": "view",
       "scenario": "representative"
@@ -352,7 +380,7 @@
     },
     {
       "function": "decimals()",
-      "gas": "28302",
+      "gas": "28325",
       "id": "4 views · CollateralVault.decimals()::representative",
       "kind": "view",
       "scenario": "representative"
@@ -366,7 +394,7 @@
     },
     {
       "function": "insuranceCapital()",
-      "gas": "28329",
+      "gas": "28352",
       "id": "4 views · CollateralVault.insuranceCapital()::representative",
       "kind": "view",
       "scenario": "representative"
@@ -387,7 +415,7 @@
     },
     {
       "function": "insuranceFundBalance()",
-      "gas": "28623",
+      "gas": "28579",
       "id": "4 views · CollateralVault.insuranceFundBalance()::representative",
       "kind": "view",
       "scenario": "representative"
@@ -680,8 +708,15 @@
       "scenario": "representative"
     },
     {
+      "function": "MAX_SPOT_PRICE()",
+      "gas": "26622",
+      "id": "4 views · PortfolioMarginEngine.MAX_SPOT_PRICE()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
       "function": "UPGRADE_INTERFACE_VERSION()",
-      "gas": "26453",
+      "gas": "26431",
       "id": "4 views · PortfolioMarginEngine.UPGRADE_INTERFACE_VERSION()::representative",
       "kind": "view",
       "scenario": "representative"
@@ -702,14 +737,14 @@
     },
     {
       "function": "imSpotShock()",
-      "gas": "28285",
+      "gas": "28372",
       "id": "4 views · PortfolioMarginEngine.imSpotShock()::representative",
       "kind": "view",
       "scenario": "representative"
     },
     {
       "function": "imVolShock()",
-      "gas": "28329",
+      "gas": "28307",
       "id": "4 views · PortfolioMarginEngine.imVolShock()::representative",
       "kind": "view",
       "scenario": "representative"
@@ -730,21 +765,21 @@
     },
     {
       "function": "mmVolShock()",
-      "gas": "28284",
+      "gas": "28350",
       "id": "4 views · PortfolioMarginEngine.mmVolShock()::representative",
       "kind": "view",
       "scenario": "representative"
     },
     {
       "function": "optionsEngine()",
-      "gas": "28393",
+      "gas": "28371",
       "id": "4 views · PortfolioMarginEngine.optionsEngine()::representative",
       "kind": "view",
       "scenario": "representative"
     },
     {
       "function": "owner()",
-      "gas": "28342",
+      "gas": "28320",
       "id": "4 views · PortfolioMarginEngine.owner()::representative",
       "kind": "view",
       "scenario": "representative"
@@ -800,7 +835,7 @@
     },
     {
       "function": "setAuthorizedCaller(address,bool)",
-      "gas": "52857",
+      "gas": "52813",
       "id": "5 admin and lifecycle · CollateralVault.setAuthorizedCaller(address,bool)::authorize a venue",
       "kind": "transaction",
       "scenario": "authorize a venue"
@@ -821,7 +856,7 @@
     },
     {
       "function": "setMarginEngine(address)",
-      "gas": "43850",
+      "gas": "43937",
       "id": "5 admin and lifecycle · CollateralVault.setMarginEngine(address)::revalidate current engine",
       "kind": "transaction",
       "scenario": "revalidate current engine"
@@ -835,28 +870,28 @@
     },
     {
       "function": "upgradeToAndCall(address,bytes)",
-      "gas": "37665",
+      "gas": "37709",
       "id": "5 admin and lifecycle · CollateralVault.upgradeToAndCall(address,bytes)::new compatible implementation",
       "kind": "transaction",
       "scenario": "new compatible implementation"
     },
     {
       "function": "withdrawBackstop(address,uint256)",
-      "gas": "165306",
+      "gas": "169414",
       "id": "5 admin and lifecycle · CollateralVault.withdrawBackstop(address,uint256)::sweep gains",
       "kind": "transaction",
       "scenario": "sweep gains"
     },
     {
       "function": "withdrawInsuranceFund(address,uint256)",
-      "gas": "175223",
+      "gas": "179354",
       "id": "5 admin and lifecycle · CollateralVault.withdrawInsuranceFund(address,uint256)::partial",
       "kind": "transaction",
       "scenario": "partial"
     },
     {
       "function": "withdrawTo(address,uint256)",
-      "gas": "163814",
+      "gas": "167922",
       "id": "5 admin and lifecycle · CollateralVault.withdrawTo(address,uint256)::venue sweeps its balance",
       "kind": "transaction",
       "scenario": "venue sweeps its balance"
@@ -975,14 +1010,14 @@
     },
     {
       "function": "initializeV2()",
-      "gas": "37034",
+      "gas": "37035",
       "id": "5 admin and lifecycle · PortfolioMarginEngine.initializeV2()::fresh proxy",
       "kind": "transaction",
       "scenario": "fresh proxy"
     },
     {
       "function": "removeLinearMarket(address)",
-      "gas": "36629",
+      "gas": "36612",
       "id": "5 admin and lifecycle · PortfolioMarginEngine.removeLinearMarket(address)::registered venue",
       "kind": "transaction",
       "scenario": "registered venue"
@@ -996,14 +1031,14 @@
     },
     {
       "function": "setOptions(address)",
-      "gas": "48273",
+      "gas": "48261",
       "id": "5 admin and lifecycle · PortfolioMarginEngine.setOptions(address)::revalidate current engine",
       "kind": "transaction",
       "scenario": "revalidate current engine"
     },
     {
       "function": "setOracle(address)",
-      "gas": "46136",
+      "gas": "47038",
       "id": "5 admin and lifecycle · PortfolioMarginEngine.setOracle(address)::replace live feed",
       "kind": "transaction",
       "scenario": "replace live feed"

@@ -5,8 +5,9 @@ import type { Config } from "../config.ts";
 import { HashPowerFuturesAbi } from "../abi/HashPowerFutures.ts";
 import { sendLiquidate } from "../tx/liquidate.ts";
 import { readAccountSnapshot, readMMParams } from "../predict/snapshot.ts";
-import { type MMParams, solveFuturesClosesToTarget } from "@hashpower/portfolio-margin";
+import type { MMParams } from "@hashpower/portfolio-margin";
 import type { EthUsdFeed } from "../oracle/ethUsdFeed.ts";
+import { FuturesCloseSolver } from "./futuresSolver.ts";
 import type {
   LiquidateOrdersOutcome,
   MarketId,
@@ -59,7 +60,7 @@ export class FuturesVenue implements Venue {
   private readonly config: Config;
   private readonly logger: pino.Logger;
   private readonly ethUsdFeed: EthUsdFeed | undefined;
-  private mmParams: MMParams | undefined;
+  private readonly solver: FuturesCloseSolver;
 
   constructor(
     chain: Chain,
@@ -71,11 +72,14 @@ export class FuturesVenue implements Venue {
     this.config = config;
     this.logger = logger.child({ venue: "futures" });
     this.ethUsdFeed = ethUsdFeed;
+    this.solver = new FuturesCloseSolver(config.futures.solverTimeoutMs);
   }
 
   marketLabel(marketId: MarketId): string {
     const expirationAt = marketIdToExpirationAt(marketId);
-    const iso = new Date(Number(expirationAt) * 1000).toISOString().slice(0, 10);
+    const iso = new Date(Number(expirationAt) * 1000)
+      .toISOString()
+      .slice(0, 10);
     return `futures ${iso}`;
   }
 
@@ -127,10 +131,9 @@ export class FuturesVenue implements Venue {
     });
 
     const out: VenuePosition[] = [];
-    for (let i = 0; i < expirationAts.length; i++) {
-      const expirationAt = expirationAts[i]!;
-      const pos = positions[i]!;
-      if (pos.netQuantity === 0n) continue;
+    for (const [i, expirationAt] of expirationAts.entries()) {
+      const pos = positions[i];
+      if (pos === undefined || pos.netQuantity === 0n) continue;
 
       const absQty = pos.netQuantity < 0n ? -pos.netQuantity : pos.netQuantity;
       const pnl = marketPrice * pos.netQuantity - pos.netEntryValue;
@@ -178,9 +181,12 @@ export class FuturesVenue implements Venue {
   }
 
   async reduceToTarget(user: Address): Promise<ReduceToTargetOutcome> {
-    const [snapshot, params, marketPrice] = await Promise.all([
-      readAccountSnapshot(this.chain, this.config, user),
-      this.getMMParams(),
+    const params = await this.getMMParams();
+    const [snapshot, marketPrice] = await Promise.all([
+      readAccountSnapshot(this.chain, this.config, user, {
+        params,
+        logger: this.logger,
+      }),
       this.chain.publicClient.readContract({
         address: this.config.futures.address,
         abi: HashPowerFuturesAbi,
@@ -189,30 +195,22 @@ export class FuturesVenue implements Venue {
     ]);
 
     // Liquidation-fee payout is disabled on-chain — pass 0 so the projection matches.
-    const allCloses = solveFuturesClosesToTarget(snapshot, params, marketPrice, 0n);
-    // A matured leg is worth its settlement price, not the live mark: the venue
-    // refuses to liquidate it (`PositionMatured` / skipped in the batch) and the
-    // delivery coordinator settles it instead. Sending it would only waste a slot.
-    const nowSec = BigInt(Math.floor(Date.now() / 1000));
-    const closes = allCloses.filter((c) => c.expirationAt > nowSec);
-    if (closes.length < allCloses.length) {
-      this.logger.info(
-        {
-          user,
-          maturedLegs: allCloses
-            .filter((c) => c.expirationAt <= nowSec)
-            .map((c) => c.expirationAt.toString()),
-        },
-        "Futures reduceToTarget: skipping matured legs (settlement, not liquidation)",
-      );
-    }
+    // Matured legs are left to the delivery coordinator: the venue skips them.
+    const closes = await this.solver.solve({
+      snapshot,
+      params,
+      currentPrice: marketPrice,
+      liquidationFee: 0n,
+      now: BigInt(Math.floor(Date.now() / 1000)),
+    });
     if (closes.length === 0) {
       return { skipped: "nothingToClose" };
     }
 
     // Gas-bounded chunking: send at most `maxLotsPerLiquidationTx` expiry legs.
     const cap = this.config.futures.maxLotsPerLiquidationTx;
-    const chunk = cap > 0 && closes.length > cap ? closes.slice(0, cap) : closes;
+    const chunk =
+      cap > 0 && closes.length > cap ? closes.slice(0, cap) : closes;
     const expirationAts = chunk.map((c) => c.expirationAt);
     const closeQtys = chunk.map((c) => c.closeQty);
     const contractsClosed = closeQtys.reduce((s, q) => s + q, 0n);
@@ -247,7 +245,10 @@ export class FuturesVenue implements Venue {
 
     return "skipped" in result
       ? { skipped: result.skipped }
-      : { feeEarned: result.feeEarned, positionsClosed: Number(contractsClosed) };
+      : {
+          feeEarned: result.feeEarned,
+          positionsClosed: Number(contractsClosed),
+        };
   }
 
   /**
@@ -281,9 +282,7 @@ export class FuturesVenue implements Venue {
   }
 
   private async getMMParams(): Promise<MMParams> {
-    if (this.mmParams !== undefined) return this.mmParams;
-    this.mmParams = await readMMParams(this.chain, this.config);
-    return this.mmParams;
+    return readMMParams(this.chain, this.config);
   }
 }
 

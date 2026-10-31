@@ -8,7 +8,11 @@ function userAt(idx: number): Address {
   return `0x${(idx + 1).toString(16).padStart(40, "0")}` as Address;
 }
 
-function health(opts: { user?: Address; mmSurplus: bigint; imUtil?: number }): AccountHealth {
+function health(opts: {
+  user?: Address;
+  mmSurplus: bigint;
+  imUtil?: number;
+}): AccountHealth {
   return {
     user: opts.user ?? userAt(0),
     balance: 1000n,
@@ -21,8 +25,12 @@ function health(opts: { user?: Address; mmSurplus: bigint; imUtil?: number }): A
 
 describe("coordinator queue: ordering policy (compare)", () => {
   it("ranks lower mmSurplus first (most-underwater wins)", () => {
-    assert.ok(compare(health({ mmSurplus: -100n }), health({ mmSurplus: -10n })) < 0);
-    assert.ok(compare(health({ mmSurplus: -10n }), health({ mmSurplus: -100n })) > 0);
+    assert.ok(
+      compare(health({ mmSurplus: -100n }), health({ mmSurplus: -10n })) < 0,
+    );
+    assert.ok(
+      compare(health({ mmSurplus: -10n }), health({ mmSurplus: -100n })) > 0,
+    );
   });
 
   it("returns 0 for equal mmSurplus regardless of imUtilization", () => {
@@ -44,7 +52,11 @@ describe("coordinator queue: gating on mmSurplus", () => {
   it("rejects healthy snapshots (mmSurplus >= 0) and reports false from upsert", () => {
     const q = new CoordinatorQueue();
     assert.equal(q.upsert(health({ user: userAt(0), mmSurplus: 50n })), false);
-    assert.equal(q.upsert(health({ user: userAt(1), mmSurplus: 0n })), false, "mmSurplus=0 is the boundary; not yet liquidatable");
+    assert.equal(
+      q.upsert(health({ user: userAt(1), mmSurplus: 0n })),
+      false,
+      "mmSurplus=0 is the boundary; not yet liquidatable",
+    );
     assert.equal(q.size(), 0);
   });
 

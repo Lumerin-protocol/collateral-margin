@@ -20,16 +20,12 @@ import type {
   MMParams,
   RestingOrders,
 } from "../src/types.ts";
+import { book, futuresBook } from "./books.ts";
 
 const USER = "0x1111111111111111111111111111111111111111" as Address;
 
-/** An empty book on one venue. */
-const NO_ORDERS: RestingOrders = {
-  buyDelta: 0n,
-  sellDelta: 0n,
-  buyValue: 0n,
-  sellValue: 0n,
-};
+/** An empty perps book. */
+const NO_ORDERS: RestingOrders = book();
 
 const PARAMS: MMParams = {
   imSpotShock: 10n ** 17n,
@@ -67,8 +63,9 @@ function futuresSnapshot(
   return {
     user: USER,
     balance: 0n,
+    accountDebt: 0n,
     perp: { netQty: 0n, entryPrice: 0n, orders: NO_ORDERS, fundingOwed: 0n },
-    futures: { positions: [], orders: NO_ORDERS },
+    futures: { positions: [], orders: [] },
     ...overrides,
   };
 }
@@ -77,7 +74,7 @@ function futuresSnapshot(
 function twelveLong(): AccountSnapshot {
   return futuresSnapshot({
     balance: BALANCE,
-    futures: { positions: [futuresAgg(12n, ENTRY)], orders: NO_ORDERS },
+    futures: { positions: [futuresAgg(12n, ENTRY)], orders: [] },
   });
 }
 
@@ -89,7 +86,7 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
   it("returns an empty set when the account is already healthy", () => {
     const snap = futuresSnapshot({
       balance: 1_000_000_000n,
-      futures: { positions: [futuresAgg(1n, ENTRY)], orders: NO_ORDERS },
+      futures: { positions: [futuresAgg(1n, ENTRY)], orders: [] },
     });
     const closes = solveFuturesClosesToTarget(snap, PARAMS, P_MODERATE, FEE);
     assert.equal(closes.length, 0);
@@ -153,7 +150,7 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
           futuresAgg(6n, ENTRY, EXPIRY_A),
           futuresAgg(6n, ENTRY, EXPIRY_B),
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     const P = P_MODERATE;
@@ -206,7 +203,7 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
             settlementPrice: 0n,
           },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     const P = P_MODERATE;
@@ -226,6 +223,63 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
     assert.ok(imSurplus(after, PARAMS, P) <= 0n, "post-close: at/under IM");
   });
 
+  it("stays balanced when the venue stops at the first healthy leg", () => {
+    const snap = futuresSnapshot({
+      balance: BALANCE,
+      futures: {
+        positions: [
+          futuresAgg(600n, ENTRY, EXPIRY_A),
+          futuresAgg(600n, ENTRY, EXPIRY_B),
+        ],
+        orders: [],
+      },
+    });
+    snap.balance = (BALANCE * 600n) / 6n;
+    const P = P_MODERATE;
+    assert.ok(mmSurplus(snap, PARAMS, P) < 0n, "fixture must start underwater");
+
+    const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE);
+    let state = snap;
+    for (const leg of closes) {
+      if (mmSurplus(state, PARAMS, P) >= 0n) break;
+      state = simulateFuturesClose(state, [leg], P, FEE);
+      assert.ok(imSurplus(state, PARAMS, P) <= 0n, "never above IM");
+    }
+    assert.ok(mmSurplus(state, PARAMS, P) >= 0n, "healthy after the batch");
+    const [a, b] = state.futures.positions.map((p) => 600n - p.netQuantity);
+    assert.ok(a !== undefined && b !== undefined && a > 0n && b > 0n);
+    assert.ok(
+      a - b <= 1n && b - a <= 1n,
+      `balanced within one (A=${a}, B=${b})`,
+    );
+  });
+
+  it("never closes an expiry that has matured by `now`", () => {
+    const snap = futuresSnapshot({
+      balance: BALANCE,
+      futures: {
+        positions: [
+          futuresAgg(6n, ENTRY, EXPIRY_A),
+          futuresAgg(6n, ENTRY, EXPIRY_B),
+        ],
+        orders: [],
+      },
+    });
+    const closes = solveFuturesClosesToTarget(
+      snap,
+      PARAMS,
+      P_MODERATE,
+      FEE,
+      EXPIRY_A,
+    );
+    assert.ok(closes.length > 0, "the live expiry is still closable");
+    assert.ok(closes.every((c) => c.expirationAt === EXPIRY_B));
+    assert.deepEqual(
+      solveFuturesClosesToTarget(snap, PARAMS, P_MODERATE, FEE, EXPIRY_B),
+      [],
+    );
+  });
+
   it("balances proportionally when expiries differ in size", () => {
     const snap = futuresSnapshot({
       balance: BALANCE,
@@ -234,7 +288,7 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
           futuresAgg(8n, ENTRY, EXPIRY_A),
           futuresAgg(4n, ENTRY, EXPIRY_B),
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     const P = P_MODERATE;
@@ -300,6 +354,7 @@ describe("predict/solve: solvePerpCloseToTarget (smoke)", () => {
     const snap: AccountSnapshot = {
       user: USER,
       balance: 107_000_000n,
+      accountDebt: 0n,
       perp: {
         netQty: 10_000_000n,
         entryPrice: ENTRY,
@@ -308,12 +363,7 @@ describe("predict/solve: solvePerpCloseToTarget (smoke)", () => {
       },
       futures: {
         positions: [],
-        orders: {
-          buyDelta: 0n,
-          sellDelta: 6_000_000n,
-          buyValue: 0n,
-          sellValue: 180_000_000n,
-        },
+        orders: [futuresBook(EXPIRY_A, [], [[P_MODERATE, 6n]])],
       },
     };
     assert.ok(
@@ -363,6 +413,7 @@ describe("predict/solve: solvePerpCloseToTarget (smoke)", () => {
     const snap: AccountSnapshot = {
       user: USER,
       balance: 63_000_000n,
+      accountDebt: 0n,
       perp: {
         netQty: 10_000_000n,
         entryPrice: 45_000_000n,
@@ -384,7 +435,7 @@ describe("predict/solve: solvePerpCloseToTarget (smoke)", () => {
             settlementPrice: 0n,
           },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     };
     const P = P_MODERATE;

@@ -1,16 +1,18 @@
 # Insurance fund debt
 
-Trading works with an empty insurance fund. When a winner closes before the matching loser, the vault borrows the winner's profit from the shared pool. That borrow is timing debt. It is repaid when the loser closes, is liquidated, or settles. The exchange is only out of pocket when a loser cannot cover. That remainder is trader bad debt, and it is never repaid.
+Trading works with an empty insurance fund. When a winner closes before the matching loser, the vault borrows the winner's profit from the shared pool. That borrow is timing debt. It is repaid when the loser closes, is liquidated, or settles. The exchange is only out of pocket when a loser cannot cover. That remainder is trader bad debt. It is recovered only from that account's later insurance-fund payouts.
 
-Winners are paid in full. The debt cap is a circuit breaker, not a haircut.
+External winners are paid in full, less any account debt they owe. The protocol backstop is paid
+only from real insurance-fund balance; it never borrow-mints. The debt cap is a circuit breaker,
+not a haircut for external accounts.
 
 ## How a shortfall is settled
 
 Venues call `settleTransfer(from, to, amount)` on the vault.
 
-- Trader payer (a loss, funding owed, or a fee): the vault moves `min(balance, amount)` and emits `BadDebt` for the rest. `traderBadDebtTotal` increases only when the receiver is the insurance fund. A fee shortfall is lost revenue, not a reserve loss.
-- Backstop payer (`BACKSTOP_ADDR`, the ledger that inherits liquidated positions): same path as a trader. The ledger is unfunded, so a loss it realizes is almost always `BadDebt` in full. It counts in `traderBadDebtTotal` and is split out as `backstopBadDebtTotal` on the dashboard. See [protocol-liquidation-exposure.md](./protocol-liquidation-exposure.md).
-- Insurance-fund payer (a winner's profit, or funding the fund owes): the vault pays the fund balance first, mints the rest to the winner, and adds it to `insuranceDebt`. There is no borrow limit, so the winner is always paid.
+- Trader payer (a loss, funding owed, or a fee): the vault moves `min(balance, amount)` and emits `BadDebt` for the rest. `traderBadDebtTotal` increases only when the receiver is the insurance fund; the same amount is added to the payer's `accountDebt` and `AccountDebtAccrued` is emitted. A fee shortfall is lost revenue, not a reserve loss, and books no account debt.
+- Backstop payer (`BACKSTOP_ADDR`, the ledger that inherits liquidated positions): same path as a trader. The ledger is unfunded, so a loss it realizes is almost always `BadDebt` in full. It counts in `traderBadDebtTotal` and is split out as `backstopBadDebtTotal` on the dashboard. It also books account debt, which the backstop's later gains cancel. See [protocol-liquidation-exposure.md](./protocol-liquidation-exposure.md).
+- Insurance-fund payer (a winner's profit, or funding the fund owes): the vault first cancels `min(amount, accountDebt[winner])` on the ledger, lowers `traderBadDebtTotal` by the same amount, and emits `AccountDebtRecovered`. No tokens move for that part. If the receiver is `BACKSTOP_ADDR`, the vault pays only the remaining real fund balance and returns the amount actually satisfied; it never mints or halts for that internal ledger. For any other receiver it pays the fund balance first, mints the remainder, and adds it to `insuranceDebt`. There is no borrow limit, so an external winner is always paid. This stops a hedged account from writing off a losing leg and then collecting the offsetting gain in full (CF-665) without letting backstop gains latch the halt (X3-R3A-1).
 
 Any inflow to the insurance fund repays debt first. The repaid amount is burned. While `insuranceDebt > 0`, the fund balance is 0, so `withdrawInsuranceFund` cannot move money.
 
@@ -36,11 +38,11 @@ Worked example, empty fund and no capital:
 
 The halt latches in three ways:
 
-- A borrow takes `insuranceDebt` above the effective cap. The crossing transaction completes and pays the winner, then latches the halt. A withdrawal later in that same transaction reverts the whole transaction, including the borrow.
+- A borrow takes `insuranceDebt` above the effective cap. The crossing transaction completes and pays the winner, then latches the halt. A withdrawal later in that same transaction reverts the whole transaction, including the borrow. If a credit to the fund later in the same transaction (usually the loser of the same fill or settlement batch) brings the debt back to or under the cap, the halt clears and `VaultResumed` follows `VaultHalted` in that transaction (CF-022). Venues pay a fill's winner before its loser, so without this a zero-sum trade could halt the vault.
 - The owner calls `halt()`.
 - `setMarginEngine(address(0))` while debt is outstanding. The effective cap is 0 while the margin engine is unset.
 
-Lowering the cap below the current debt does not halt by itself. The next borrow does. The halt does not lift itself when debt falls back under the cap. `resume()` reverts unless `insuranceDebt` is at or under the effective cap.
+Lowering the cap below the current debt does not halt by itself. The next borrow does. Once a transaction ends with the debt above the cap, the halt does not lift itself when debt later falls back under it. For futures expiries the keeper settles losers before winners for the same reason; a winner who settles their own position first can still halt the vault until the keeper settles the losers and the owner resumes. `resume()` reverts unless `insuranceDebt` is at or under the effective cap.
 
 While halted:
 
@@ -82,7 +84,10 @@ Fee balances (`FuturesFeeBalance`, `PerpsFeeBalance` on the dashboard) are the v
 
 A top-up against timing debt is not lost. As losers pay in, the fund balance grows again and can be taken back with `withdrawInsuranceFund`.
 
-The backstop ledger's own balance (`BackstopBalance`) is profit from inherited positions that closed in the money. `withdrawBackstop(recipient, amount)` moves it out; deposit it into the fund with `depositInsuranceFund`. It reverts while halted, like every withdrawal.
+The backstop ledger's own balance (`BackstopBalance`) is the funded part of profit from inherited
+positions that closed in the money. An underfunded gain stays unpaid rather than becoming
+`insuranceDebt`. `withdrawBackstop(recipient, amount)` moves the funded balance out; deposit it
+into the fund with `depositInsuranceFund`. It reverts while halted, like every withdrawal.
 
 ## Resume
 
@@ -115,6 +120,7 @@ By cause:
 - Losses not recorded yet (late keeper, price gap). This is not necessarily a bug. Keep the halt on, restart the keeper, and let liquidations and settlement reduce exposure and record any bad debt. Liquidated quantity lands on the backstop; its loss is recorded when it unwinds or settles, so watch `BackstopEquity` too. Top up the final uncovered loss, then raise the cap if needed and resume.
 - Residual exposure that no ledger holds (positions liquidated before the backstop existed, or a venue bug that broke conservation). While halted, the owner calls `forceClosePositions` on the venue to close the listed positions at the mark against the fund, then tops up `insuranceDebt`, then resumes. This is the migration path for the backstop upgrade and a last resort afterwards.
 - Venue profit-and-loss bug. Fix and upgrade the venue, reverse the overpayments, then resume.
+- Colluding accounts (CF-006): a loser who could not pay and a winner whose gain was minted past the cap, often in the same transaction or between accounts funded from the same source. Do not top up or raise the cap, since either lets the winner withdraw. Burn the winner's receipts above the cap with a one-off vault upgrade (see Correct balances), then resume. Within-cap borrowing is the accepted loss.
 - Bug in liquidation, settlement, or funding. Revoke the affected venue immediately. Fix and upgrade it, correct affected transfers, then re-authorize and resume.
 - Wrong but fresh oracle price. Halt, revoke every venue using that oracle so liquidations and settlement stop, fix the oracle, reverse fake payouts, and compensate wrongly liquidated accounts before re-authorizing and resuming.
 - Backing gap. The accounting itself is wrong. Revoke both venues and investigate before doing anything else.

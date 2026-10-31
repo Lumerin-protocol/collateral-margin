@@ -54,7 +54,11 @@ export class Notifier {
       this.lastSentAt.has(warnKey(alert)) &&
       !this.lastSentAt.has(criticalKey(alert));
 
-    if (!isPromotion && last !== undefined && this.now() - last < this.config.alerts.dedupeMs) {
+    if (
+      !isPromotion &&
+      last !== undefined &&
+      this.now() - last < this.config.alerts.dedupeMs
+    ) {
       this.logger.debug({ user: alert.user, key }, "alert deduped");
       return;
     }
@@ -89,7 +93,11 @@ export class Notifier {
         await this.poster(this.config.alerts.webhookUrl, formatPayload(alert));
         this.lastSentAt.set(dedupKey(alert), this.now());
         this.logger.info(
-          { user: alert.user, severity: alert.severity, market: alert.market?.marketLabel },
+          {
+            user: alert.user,
+            severity: alert.severity,
+            market: alert.market?.marketLabel,
+          },
           "alert sent",
         );
       } catch (err) {
@@ -129,7 +137,8 @@ function criticalKey(alert: Alert): string {
  * downstream channel can reformat as needed.
  */
 function formatPayload(alert: Alert) {
-  const market = alert.market !== undefined ? ` (${alert.market.marketLabel})` : "";
+  const market =
+    alert.market !== undefined ? ` (${alert.market.marketLabel})` : "";
   return {
     text: `[${alert.severity.toUpperCase()}] ${alert.user}${market}: ${alert.reason}`,
     severity: alert.severity,
@@ -177,7 +186,9 @@ const defaultWebhookPoster: WebhookPoster = async (url, payload) => {
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
-    throw new Error(`alert webhook ${url} returned ${res.status} ${res.statusText}`);
+    throw new Error(
+      `alert webhook ${url} returned ${res.status} ${res.statusText}`,
+    );
   }
 };
 

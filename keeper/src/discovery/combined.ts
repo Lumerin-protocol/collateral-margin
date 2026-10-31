@@ -1,8 +1,5 @@
 import { getAddress, type Address } from "viem";
-import type {
-  ParticipantListener,
-  ParticipantSource,
-} from "./types.ts";
+import type { ParticipantListener, ParticipantSource } from "./types.ts";
 
 /** Deduplicated live union of independent participant discovery sources. */
 export class CombinedParticipantSource implements ParticipantSource {
@@ -32,7 +29,9 @@ export class CombinedParticipantSource implements ParticipantSource {
   }
 
   onAdded(listener: ParticipantListener): () => void {
-    return combineDisposers(this.sources.map((source) => source.onAdded(listener)));
+    return combineDisposers(
+      this.sources.map((source) => source.onAdded(listener)),
+    );
   }
 
   onChanged(listener: ParticipantListener): () => void {

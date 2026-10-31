@@ -258,9 +258,7 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
   estimateOrderMargin(intent: OrderIntent): bigint {
     // Ensure the venue has a cached spot shock; if not, fall back to the
     // no-op estimate. The first canPlace call is allowed through optimistically.
-    // The cached value is fetched lazily by `account.imSpotShock()` and cached.
-    const cached = (this.venue as unknown as { imSpotShockCache?: bigint })
-      .imSpotShockCache;
+    const cached = this.venue.cachedImSpotShock();
     if (!cached) return 0n;
     const mark = this.venue.cachedMarketPrice();
     if (mark === null) return 0n;
