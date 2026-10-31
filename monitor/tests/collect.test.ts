@@ -121,38 +121,71 @@ const riskView = (unrealizedPnl: bigint, pendingFunding: bigint) => ({
   sellOrderFillLoss: 0n,
 });
 
+/** Bitcoin tip 4,000 blocks before the 1,050,000 halving, 9.5-minute blocks over the last 2,016. */
+const BTC_TIP = 1_046_000;
+const BTC_TIP_TIME = 1_900_000_000;
+const BTC_BLOCK_SECONDS = 570;
+
 /**
  * Price feeds, answered per block: the subgraph block now, block 0 as the
  * past (the 1 h and 24 h look-backs both clamp to it at this test height).
  */
 const HASHPRICE_FEED = "0x00000000000000000000000000000000000000f1";
 const BTC_FEED = "0x00000000000000000000000000000000000000f2";
+/** The SPV oracle behind HashpriceUSD; its round id is the last relayed Bitcoin height. */
+const SPV_FEED = "0x00000000000000000000000000000000000000f3";
+/** Chainlink proxy round ids carry the aggregator phase in their top 16 bits. */
+const PHASE = 3n << 64n;
 const feedAbi = parseAbi([
   "function priceOracle() view returns (address)",
   "function btcUsdOracle() view returns (address)",
+  "function hashpriceOracle() view returns (address)",
   "function decimals() view returns (uint8)",
   "function latestRoundData() view returns (uint80, int256, uint256, uint256, uint80)",
   "function mmSpotShock() view returns (uint256)",
 ]);
-const FEEDS: Record<string, { now: bigint; past: bigint; ageSeconds: number }> = {
-  [HASHPRICE_FEED]: { now: 3_300_000_000n, past: 3_000_000_000n, ageSeconds: 120 },
-  [BTC_FEED]: { now: 8_000_000_000_000n, past: 7_600_000_000_000n, ageSeconds: 60 },
+const FEEDS: Record<
+  string,
+  { now: bigint; past: bigint; ageSeconds: number; round: { now: bigint; past: bigint } }
+> = {
+  [HASHPRICE_FEED]: {
+    now: 3_300_000_000n,
+    past: 3_000_000_000n,
+    ageSeconds: 120,
+    round: { now: 1n, past: 1n },
+  },
+  [BTC_FEED]: {
+    now: 8_000_000_000_000n,
+    past: 7_600_000_000_000n,
+    ageSeconds: 60,
+    round: { now: PHASE + 18_005n, past: PHASE + 18_000n },
+  },
+  [SPV_FEED]: {
+    now: 41_250_000n,
+    past: 41_250_000n,
+    ageSeconds: 300,
+    round: { now: BigInt(BTC_TIP - 1), past: BigInt(BTC_TIP - 7) },
+  },
 };
 
 function feedCall(to: string, data: `0x${string}`, block: string): `0x${string}` {
   const { functionName } = decodeFunctionData({ abi: feedAbi, data });
   if (functionName === "btcUsdOracle")
     return encodeFunctionResult({ abi: feedAbi, functionName, result: BTC_FEED });
+  if (functionName === "hashpriceOracle")
+    return encodeFunctionResult({ abi: feedAbi, functionName, result: SPV_FEED });
   if (functionName === "decimals")
     return encodeFunctionResult({ abi: feedAbi, functionName, result: 8 });
   assert.equal(functionName, "latestRoundData");
   const feed = FEEDS[to];
-  const answer = block === toHex(BLOCK) ? feed.now : feed.past;
+  const latest = block === toHex(BLOCK);
+  const answer = latest ? feed.now : feed.past;
+  const round = latest ? feed.round.now : feed.round.past;
   const updatedAt = BigInt(Math.floor(Date.now() / 1000) - feed.ageSeconds);
   return encodeFunctionResult({
     abi: feedAbi,
     functionName,
-    result: [1n, answer, updatedAt, updatedAt, 1n],
+    result: [round, answer, updatedAt, updatedAt, round],
   });
 }
 
@@ -349,11 +382,6 @@ function graphql(url: string) {
   throw new Error(`unexpected url ${url}`);
 }
 
-/** Bitcoin tip 4,000 blocks before the 1,050,000 halving, 9.5-minute blocks over the last 2,016. */
-const BTC_TIP = 1_046_000;
-const BTC_TIP_TIME = 1_900_000_000;
-const BTC_BLOCK_SECONDS = 570;
-
 function bitcoinRpc(request: { id: number; method: string; params: unknown[] }) {
   const { id, method, params } = request;
   let result: unknown;
@@ -509,6 +537,12 @@ describe("collect", () => {
     assert.equal(value("MmSpotShockPct"), 10);
     assert.ok(Math.abs((value("HashpriceFeedAgeSeconds") ?? 0) - 120) <= 5);
     assert.ok(Math.abs((value("BtcUsdFeedAgeSeconds") ?? 0) - 60) <= 5);
+  });
+
+  it("reports the SPV relay delay and how often Chainlink BTC/USD updates", () => {
+    assert.equal(value("SpvBlocksBehind"), 1);
+    assert.ok(Math.abs((value("SpvFeedAgeSeconds") ?? 0) - 300) <= 5);
+    assert.equal(value("BtcUsdUpdates1h"), 5);
   });
 
   it("names markets perp and fut-<mon>-<dd> by the expiry's UTC date", () => {

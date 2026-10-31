@@ -559,6 +559,7 @@ const BLOCKS_24H = 86_400n / BASE_BLOCK_SECONDS;
 const feedAbi = parseAbi([
   "function priceOracle() view returns (address)",
   "function btcUsdOracle() view returns (address)",
+  "function hashpriceOracle() view returns (address)",
   "function decimals() view returns (uint8)",
   "function latestRoundData() view returns (uint80, int256, uint256, uint256, uint80)",
   "function mmSpotShock() view returns (uint256)",
@@ -571,6 +572,8 @@ export interface FeedHistory {
   ago1h: bigint;
   ago24h: bigint;
   updatedAt: number;
+  roundId: bigint;
+  roundId1h: bigint;
 }
 
 async function readFeed(feed: Address, block: bigint): Promise<FeedHistory> {
@@ -595,31 +598,47 @@ async function readFeed(feed: Address, block: bigint): Promise<FeedHistory> {
     ago1h: hour[1],
     ago24h: day[1],
     updatedAt: Number(latest[3]),
+    roundId: latest[0],
+    roundId1h: hour[0],
   };
 }
 
+/** The SPV oracle's last relayed Bitcoin height (its round id) and when it was submitted. */
+export interface SpvState {
+  height: number;
+  updatedAt: number;
+}
+
 /**
- * Hashprice USD (the futures venue's oracle) and the BTC/USD feed it is built
- * from, with look-backs at past blocks, plus the PME's MM spot shock that sizes
- * the move alarms.
+ * Hashprice USD (the futures venue's oracle) and the two feeds it is built
+ * from: BTC/USD with look-backs at past blocks, and the SPV oracle's relay
+ * state. Plus the PME's MM spot shock that sizes the move alarms.
  */
 export async function readPrices(
   at: { blockNumber: bigint },
   marginEngine: Address,
-): Promise<{ hashprice: FeedHistory; btcUsd: FeedHistory; mmSpotShock: bigint }> {
+): Promise<{
+  hashprice: FeedHistory;
+  btcUsd: FeedHistory;
+  spv: SpvState;
+  mmSpotShock: bigint;
+}> {
   const hashpriceFeed = await chain.readContract({
     address: FUTURES_ADDRESS,
     abi: feedAbi,
     functionName: "priceOracle",
     ...at,
   });
-  const [btcFeed, mmSpotShock] = await Promise.all([
+  const [btcFeed, spvFeed, mmSpotShock] = await Promise.all([
     chain.readContract({ address: hashpriceFeed, abi: feedAbi, functionName: "btcUsdOracle", ...at }),
+    chain.readContract({ address: hashpriceFeed, abi: feedAbi, functionName: "hashpriceOracle", ...at }),
     chain.readContract({ address: marginEngine, abi: feedAbi, functionName: "mmSpotShock", ...at }),
   ]);
-  const [hashprice, btcUsd] = await Promise.all([
+  const [hashprice, btcUsd, spvRound] = await Promise.all([
     readFeed(hashpriceFeed, at.blockNumber),
     readFeed(btcFeed, at.blockNumber),
+    chain.readContract({ address: spvFeed, abi: feedAbi, functionName: "latestRoundData", ...at }),
   ]);
-  return { hashprice, btcUsd, mmSpotShock };
+  const spv = { height: Number(spvRound[0]), updatedAt: Number(spvRound[3]) };
+  return { hashprice, btcUsd, spv, mmSpotShock };
 }

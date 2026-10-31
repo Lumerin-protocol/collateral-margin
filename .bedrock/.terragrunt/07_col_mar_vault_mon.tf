@@ -15,9 +15,12 @@
 ################################################################################
 
 locals {
-  vault_mon_env            = substr(var.account_shortname, 8, 3)
-  vault_mon_ns             = "ColMarVault"
-  vault_mon_name           = "${local.shortname}-vault-mon-${local.vault_mon_env}"
+  vault_mon_env  = substr(var.account_shortname, 8, 3)
+  vault_mon_ns   = "ColMarVault"
+  vault_mon_name = "${local.shortname}-vault-mon-${local.vault_mon_env}"
+  # The hashprice-oracle SPV keeper and its composite alarm, deployed by that repo in this account.
+  oracle_keeper_function   = "futures-oracle-update-v2"
+  oracle_alarm_arn         = "arn:aws:cloudwatch:${var.default_region}:${var.account_number}:alarm:hpo-oracle-${local.vault_mon_env}"
   vault_slack_topic_arn    = "arn:aws:sns:${var.default_region}:${var.account_number}:${var.vault_monitoring.dev_alerts_topic_name}"
   vault_page_topic_arn     = "arn:aws:sns:${var.default_region}:${var.account_number}:${var.vault_monitoring.devops_alerts_topic_name}"
   vault_critical_topic_arn = var.account_lifecycle == "prd" ? local.vault_page_topic_arn : local.vault_slack_topic_arn
@@ -1188,6 +1191,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
   provider       = aws.use1
   dashboard_name = "${local.shortname}-vault-${local.vault_mon_env}"
 
+  # Sections in order of importance: price feed, vault, market maker, indexers, monitoring.
   dashboard_body = jsonencode({
     widgets = concat(
       [
@@ -1198,8 +1202,10 @@ resource "aws_cloudwatch_dashboard" "vault" {
           width  = 24
           height = 4
           properties = {
-            title = "Alarm Status"
+            title  = "Alarm Status"
+            sortBy = "stateUpdatedTimestamp"
             alarms = concat(
+              [local.oracle_alarm_arn],
               aws_cloudwatch_metric_alarm.vault_uncovered_loss[*].arn,
               aws_cloudwatch_metric_alarm.vault_backstop_equity[*].arn,
               aws_cloudwatch_metric_alarm.vault_backstop_loss[*].arn,
@@ -1257,13 +1263,186 @@ resource "aws_cloudwatch_dashboard" "vault" {
           y          = 4
           width      = 24
           height     = 4
-          properties = { markdown = "## Solvency: insurance fund and vault backing\n- **Debt**: what the insurance fund owes after covering traders' losses. *Uncovered loss* above 0 is a loss nothing covers: top it up with depositInsuranceFund.\n- **Utilization**: debt as a share of the cap (warns, then pages; a breach halts the vault). **Halted**: 1 while the vault is halted or the margin engine is unset.\n- **Balances available for a top-up**: insurance fund and venue fee balances. **Backing gap**: supply minus debt minus USDC held; above 0 the vault is short." }
+          properties = { markdown = "## Price feed: nothing trades without it\n- Hashprice USD = hashprice BTC from our SPV oracle (Bitcoin headers relayed by the SPV keeper) × Chainlink BTC/USD. Margin, marks, liquidations and the market maker all read it.\n- **SPV relay delay**: Bitcoin blocks the oracle trails the tip, and minutes since the keeper's last header. **Chainlink BTC/USD**: minutes since its last update (each drop to 0 is an update) and updates per hour. On dev BTC/USD is a mock the SPV keeper updates.\n- **Price feed age**: the hashprice feed reports the older of its two inputs, so it rises when either stalls. **Moves vs MM spot shock**: a 24 h hashprice move of half the shock warns, the full shock pages." }
         },
         {
           type   = "metric"
           x      = 0
           y      = 8
           width  = 12
+          height = 6
+          properties = {
+            title  = "Hashprice and BTC (USD)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "HashpriceUsd", { label = "Hashprice (USD/PH/day)" }],
+              [local.vault_mon_ns, "BtcUsd", { label = "BTC (right)", yAxis = "right" }],
+            ]
+          }
+        },
+        {
+          type   = "metric"
+          x      = 12
+          y      = 8
+          width  = 12
+          height = 6
+          properties = {
+            title  = "SPV relay delay"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "SpvBlocksBehind", { label = "Blocks behind the Bitcoin tip", stat = "Maximum" }],
+              [{ expression = "spv / 60", id = "spvmin", label = "Minutes since the last header (right)", yAxis = "right" }],
+              [local.vault_mon_ns, "SpvFeedAgeSeconds", { id = "spv", stat = "Maximum", visible = false }],
+            ]
+            yAxis = { left = { min = 0 }, right = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 0
+          y      = 14
+          width  = 8
+          height = 6
+          properties = {
+            title  = "Chainlink BTC/USD updates"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [{ expression = "btc / 60", id = "btcmin", label = "Minutes since the last update" }],
+              [local.vault_mon_ns, "BtcUsdFeedAgeSeconds", { id = "btc", stat = "Maximum", visible = false }],
+              [local.vault_mon_ns, "BtcUsdUpdates1h", { label = "Updates in the last hour (right)", stat = "Maximum", yAxis = "right" }],
+            ]
+            yAxis = { left = { min = 0 }, right = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 8
+          y      = 14
+          width  = 8
+          height = 6
+          properties = {
+            title  = "SPV keeper (header relayer)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              ["AWS/Lambda", "Invocations", "FunctionName", local.oracle_keeper_function, { label = "Runs", stat = "Sum" }],
+              [var.vault_monitoring.oracle_metric_namespace, "oracle_job_completions", { label = "Completed", stat = "Sum" }],
+              ["AWS/Lambda", "Errors", "FunctionName", local.oracle_keeper_function, { label = "Lambda errors", stat = "Sum", color = "#d62728" }],
+              [var.vault_monitoring.oracle_metric_namespace, "oracle_lambda_errors", { label = "Logged errors", stat = "Sum", color = "#ff7f0e" }],
+              ["AWS/Lambda", "Throttles", "FunctionName", local.oracle_keeper_function, { label = "Throttles", stat = "Sum" }],
+              ["AWS/Lambda", "Duration", "FunctionName", local.oracle_keeper_function, { label = "Max duration ms (right)", stat = "Maximum", yAxis = "right" }],
+            ]
+            yAxis = { left = { min = 0 }, right = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 16
+          y      = 14
+          width  = 8
+          height = 6
+          properties = {
+            title  = "Price feed age (minutes)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [{ expression = "hp / 60", id = "hpmin", label = "Hashprice feed" }],
+              [{ expression = "btcage / 60", id = "btcagemin", label = "BTC/USD feed" }],
+              [local.vault_mon_ns, "HashpriceFeedAgeSeconds", { id = "hp", stat = "Maximum", visible = false }],
+              [local.vault_mon_ns, "BtcUsdFeedAgeSeconds", { id = "btcage", stat = "Maximum", visible = false }],
+              [var.vault_monitoring.oracle_metric_namespace, "oracle_data_age_minutes", "Environment", local.vault_mon_env, { label = "Hashprice oracle data" }],
+            ]
+            yAxis = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 0
+          y      = 20
+          width  = 12
+          height = 6
+          properties = {
+            title  = "Price moves vs MM spot shock (%)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "HashpriceChange24hPct", { label = "Hashprice 24 h" }],
+              [local.vault_mon_ns, "HashpriceChange1hPct", { label = "Hashprice 1 h" }],
+              [local.vault_mon_ns, "BtcChange24hPct", { label = "BTC 24 h" }],
+              [local.vault_mon_ns, "BtcChange1hPct", { label = "BTC 1 h" }],
+              [local.vault_mon_ns, "MmSpotShockPct", { label = "MM shock", stat = "Maximum", color = "#d62728" }],
+            ]
+          }
+        },
+        {
+          type   = "metric"
+          x      = 12
+          y      = 20
+          width  = 12
+          height = 6
+          properties = {
+            title  = "Days until the Bitcoin halving"
+            region = var.default_region
+            period = 3600
+            view   = "singleValue"
+            metrics = [
+              [local.vault_mon_ns, "BtcDaysUntilHalving", { label = "Days", stat = "Minimum" }],
+              [local.vault_mon_ns, "BtcBlocksUntilHalving", { label = "Blocks", stat = "Minimum" }],
+            ]
+          }
+        },
+        {
+          type   = "log"
+          x      = 0
+          y      = 26
+          width  = 24
+          height = 6
+          properties = {
+            title  = "SPV keeper recent errors and warnings"
+            region = var.default_region
+            view   = "table"
+            query  = "SOURCE '/aws/lambda/${local.oracle_keeper_function}' | fields @timestamp, msg, component, coalesce(err.message, message, '') as detail | filter level >= 40 | sort @timestamp desc | limit 50"
+          }
+        },
+        {
+          type       = "text"
+          x          = 0
+          y          = 32
+          width      = 24
+          height     = 4
+          properties = { markdown = "## Vault: solvency, liquidations and backstop\n- **Halted**: 1 while the vault is halted or the margin engine is unset. **Debt**: what the insurance fund owes after covering traders' losses; *uncovered loss* above 0 is a loss nothing covers (top up with depositInsuranceFund). **Utilization**: debt as a share of the cap; a breach halts the vault.\n- **Backing gap**: supply minus debt minus USDC held; above 0 the vault is short. **Balances available for a top-up**: insurance fund and venue fees. **Keeper**: liquidation sweeps; if they stop, nobody liquidates.\n- **Protocol backstop**: positions taken over from liquidations; equity below 0 is a loss forming. **Offload**: what an unwind may give away (band + fee); above the kept liquidation fee, unwinds cost the vault." }
+        },
+        {
+          type   = "metric"
+          x      = 0
+          y      = 36
+          width  = 6
+          height = 6
+          properties = {
+            title  = "Halted"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "Halted", { label = "Halted", stat = "Maximum" }],
+              [local.vault_mon_ns, "MarginEngineUnset", { label = "Engine unset", stat = "Maximum" }],
+            ]
+          }
+        },
+        {
+          type   = "metric"
+          x      = 6
+          y      = 36
+          width  = 9
           height = 6
           properties = {
             title  = "Debt (USDC)"
@@ -1281,9 +1460,9 @@ resource "aws_cloudwatch_dashboard" "vault" {
         },
         {
           type   = "metric"
-          x      = 12
-          y      = 8
-          width  = 6
+          x      = 15
+          y      = 36
+          width  = 9
           height = 6
           properties = {
             title  = "Utilization %"
@@ -1304,25 +1483,26 @@ resource "aws_cloudwatch_dashboard" "vault" {
         },
         {
           type   = "metric"
-          x      = 18
-          y      = 8
-          width  = 6
+          x      = 0
+          y      = 42
+          width  = 12
           height = 6
           properties = {
-            title  = "Halted"
+            title  = "Backing gap (USDC)"
             region = var.default_region
             period = 300
             view   = "timeSeries"
             metrics = [
-              [local.vault_mon_ns, "Halted", { label = "Halted", stat = "Maximum" }],
-              [local.vault_mon_ns, "MarginEngineUnset", { label = "Engine unset", stat = "Maximum" }],
+              [local.vault_mon_ns, "BackingGap", { label = "Supply - debt - USDC", color = "#d62728" }],
+              [local.vault_mon_ns, "TraderBadDebtTotal", { label = "Trader bad debt" }],
+              [local.vault_mon_ns, "BackstopBadDebtTotal", { label = "of which backstop" }],
             ]
           }
         },
         {
           type   = "metric"
-          x      = 0
-          y      = 14
+          x      = 12
+          y      = 42
           width  = 12
           height = 6
           properties = {
@@ -1340,101 +1520,9 @@ resource "aws_cloudwatch_dashboard" "vault" {
         },
         {
           type   = "metric"
-          x      = 12
-          y      = 14
-          width  = 12
-          height = 6
-          properties = {
-            title  = "Backing gap (USDC)"
-            region = var.default_region
-            period = 300
-            view   = "timeSeries"
-            metrics = [
-              [local.vault_mon_ns, "BackingGap", { label = "Supply - debt - USDC", color = "#d62728" }],
-              [local.vault_mon_ns, "TraderBadDebtTotal", { label = "Trader bad debt" }],
-              [local.vault_mon_ns, "BackstopBadDebtTotal", { label = "of which backstop" }],
-            ]
-          }
-        },
-        {
-          type       = "text"
-          x          = 0
-          y          = 20
-          width      = 24
-          height     = 4
-          properties = { markdown = "## Prices and margin\n- **Hashprice and BTC**: the index (USD per PH/day) and the BTC/USD feed inside it.\n- **Price moves vs MM spot shock**: signed 1 h and 24 h moves. A 24 h hashprice move of half the MM shock warns, the full shock pages: the most levered accounts reach liquidation.\n- **Price feed age**: minutes since each feed updated. Hashprice over 2 h or BTC/USD over 1 h warns that the price looks frozen." }
-        },
-        {
-          type   = "metric"
-          x      = 0
-          y      = 24
-          width  = 8
-          height = 6
-          properties = {
-            title  = "Hashprice and BTC (USD)"
-            region = var.default_region
-            period = 300
-            view   = "timeSeries"
-            metrics = [
-              [local.vault_mon_ns, "HashpriceUsd", { label = "Hashprice (USD/PH/day)" }],
-              [local.vault_mon_ns, "BtcUsd", { label = "BTC", yAxis = "right" }],
-            ]
-          }
-        },
-        {
-          type   = "metric"
           x      = 8
-          y      = 24
+          y      = 48
           width  = 8
-          height = 6
-          properties = {
-            title  = "Price moves vs MM spot shock (%)"
-            region = var.default_region
-            period = 300
-            view   = "timeSeries"
-            metrics = [
-              [local.vault_mon_ns, "HashpriceChange24hPct", { label = "Hashprice 24 h" }],
-              [local.vault_mon_ns, "HashpriceChange1hPct", { label = "Hashprice 1 h" }],
-              [local.vault_mon_ns, "BtcChange24hPct", { label = "BTC 24 h" }],
-              [local.vault_mon_ns, "BtcChange1hPct", { label = "BTC 1 h" }],
-              [local.vault_mon_ns, "MmSpotShockPct", { label = "MM shock", stat = "Maximum", color = "#d62728" }],
-            ]
-          }
-        },
-        {
-          type   = "metric"
-          x      = 16
-          y      = 24
-          width  = 8
-          height = 6
-          properties = {
-            title  = "Price feed age (minutes)"
-            region = var.default_region
-            period = 300
-            view   = "timeSeries"
-            metrics = [
-              [{ expression = "hp / 60", id = "hpmin", label = "Hashprice feed" }],
-              [{ expression = "btc / 60", id = "btcmin", label = "BTC/USD feed" }],
-              [local.vault_mon_ns, "HashpriceFeedAgeSeconds", { id = "hp", stat = "Maximum", visible = false }],
-              [local.vault_mon_ns, "BtcUsdFeedAgeSeconds", { id = "btc", stat = "Maximum", visible = false }],
-              [var.vault_monitoring.oracle_metric_namespace, "oracle_data_age_minutes", "Environment", local.vault_mon_env, { label = "Hashprice oracle data" }],
-            ]
-            yAxis = { left = { min = 0 } }
-          }
-        },
-        {
-          type       = "text"
-          x          = 0
-          y          = 30
-          width      = 24
-          height     = 3
-          properties = { markdown = "## Protocol backstop\n- Positions the protocol took over from liquidations and force-closes. **Equity at mark** below 0 is a loss forming before bad debt records it.\n- **Exposure**: notional at the mark (total and per venue) and raw net contracts. **Unwind band + fee**: what an unwind may give away; above the kept liquidation fee (budget), liquidate-and-unwind loops profit." }
-        },
-        {
-          type   = "metric"
-          x      = 0
-          y      = 33
-          width  = 12
           height = 6
           properties = {
             title  = "Protocol backstop (USDC)"
@@ -1452,9 +1540,9 @@ resource "aws_cloudwatch_dashboard" "vault" {
         },
         {
           type   = "metric"
-          x      = 12
-          y      = 33
-          width  = 12
+          x      = 16
+          y      = 48
+          width  = 8
           height = 6
           properties = {
             title  = "Protocol backstop exposure at the mark (USDC)"
@@ -1472,7 +1560,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
         {
           type   = "metric"
           x      = 0
-          y      = 39
+          y      = 54
           width  = 12
           height = 6
           properties = {
@@ -1482,6 +1570,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
             view   = "timeSeries"
             metrics = [
               [local.vault_mon_ns, "BackstopFuturesNetQuantity", { label = "Futures net contracts" }],
+              [{ expression = "REMOVE_EMPTY(SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BackstopFuturesNetQuantity\"', 'Average', 300))", id = "legs", label = "$${PROP('Dim.Market')}" }],
               [local.vault_mon_ns, "BackstopPerpsNetQuantity", { label = "Perps net (1e6)" }],
               [local.vault_mon_ns, "BackstopOpenLegs", { label = "Open legs", stat = "Maximum" }],
             ]
@@ -1490,11 +1579,11 @@ resource "aws_cloudwatch_dashboard" "vault" {
         {
           type   = "metric"
           x      = 12
-          y      = 39
+          y      = 54
           width  = 12
           height = 6
           properties = {
-            title  = "Backstop unwind band + fee vs kept liquidation fee (bps)"
+            title  = "Backstop offload: unwind band + fee vs kept liquidation fee (bps)"
             region = var.default_region
             period = 300
             view   = "timeSeries"
@@ -1510,16 +1599,16 @@ resource "aws_cloudwatch_dashboard" "vault" {
         {
           type       = "text"
           x          = 0
-          y          = 45
+          y          = 66
           width      = 24
           height     = 4
-          properties = { markdown = "## Order book and market maker\n- One market maker quotes both venues (futures and perps). **Book levels**: price levels per side; 0 on a side means a one-sided book. **Spread** and **mid drift** from the mark show stale quotes.\n- **Position, collateral, utilization, ETH**: the market maker's inventory against its caps, its IM against its vault balance, and gas money.\n- **State** and **own orders** come from its /health; **loop**, **execution**, **warnings** and **recent errors** from its logs." }
+          properties = { markdown = "## Market maker: one MM quoting futures and perps\n- **State** and **own orders** come from its /health: running, quarantined or paused markets, seconds since its last loop. **Book levels**: price levels per side of every live book; 0 on a side means a one-sided book.\n- **Spread** and **mid drift** from the mark show stale quotes. **Position, collateral, utilization, ETH**: inventory against its caps, IM against its vault balance, and gas money.\n- **Loop**, **execution**, **warnings** and **recent errors** come from its logs." }
         },
         {
           type   = "metric"
-          x      = 0
-          y      = 49
-          width  = 12
+          x      = 8
+          y      = 70
+          width  = 8
           height = 6
           properties = {
             title  = "Book levels by market (bids / asks)"
@@ -1537,9 +1626,44 @@ resource "aws_cloudwatch_dashboard" "vault" {
         },
         {
           type   = "metric"
-          x      = 12
-          y      = 49
-          width  = 12
+          x      = 0
+          y      = 76
+          width  = 8
+          height = 6
+          properties = {
+            title  = "Top-of-book spread (bps)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [{ expression = "REMOVE_EMPTY(SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BookSpreadBps\"', 'Maximum', 300))", id = "spread", label = "$${PROP('Dim.Market')}" }],
+            ]
+            yAxis = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 8
+          y      = 76
+          width  = 8
+          height = 6
+          properties = {
+            title  = "Book mid drift from mark (bps)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [{ expression = "REMOVE_EMPTY(SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BookMidDriftBps\"', 'Maximum', 300))", id = "drift", label = "$${PROP('Dim.Market')}" }],
+            ]
+            annotations = { horizontal = [{ label = "stale", value = var.vault_monitoring.book_drift_warn_bps }] }
+            yAxis       = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 16
+          y      = 76
+          width  = 8
           height = 6
           properties = {
             title  = "Market-maker position notional (USDC)"
@@ -1561,42 +1685,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
         {
           type   = "metric"
           x      = 0
-          y      = 55
-          width  = 12
-          height = 6
-          properties = {
-            title  = "Top-of-book spread (bps)"
-            region = var.default_region
-            period = 300
-            view   = "timeSeries"
-            metrics = [
-              [{ expression = "REMOVE_EMPTY(SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BookSpreadBps\"', 'Maximum', 300))", id = "spread", label = "$${PROP('Dim.Market')}" }],
-            ]
-            yAxis = { left = { min = 0 } }
-          }
-        },
-        {
-          type   = "metric"
-          x      = 12
-          y      = 55
-          width  = 12
-          height = 6
-          properties = {
-            title  = "Book mid drift from mark (bps)"
-            region = var.default_region
-            period = 300
-            view   = "timeSeries"
-            metrics = [
-              [{ expression = "REMOVE_EMPTY(SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BookMidDriftBps\"', 'Maximum', 300))", id = "drift", label = "$${PROP('Dim.Market')}" }],
-            ]
-            annotations = { horizontal = [{ label = "stale", value = var.vault_monitoring.book_drift_warn_bps }] }
-            yAxis       = { left = { min = 0 } }
-          }
-        },
-        {
-          type   = "metric"
-          x      = 0
-          y      = 61
+          y      = 82
           width  = 8
           height = 6
           properties = {
@@ -1614,7 +1703,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
         {
           type   = "metric"
           x      = 8
-          y      = 61
+          y      = 82
           width  = 8
           height = 6
           properties = {
@@ -1632,7 +1721,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
         {
           type   = "metric"
           x      = 16
-          y      = 61
+          y      = 82
           width  = 8
           height = 6
           properties = {
@@ -1650,38 +1739,16 @@ resource "aws_cloudwatch_dashboard" "vault" {
         {
           type       = "text"
           x          = 0
-          y          = 85
+          y          = 100
           width      = 24
-          height     = 3
-          properties = { markdown = "## Monitoring, keeper and indexers\n- **Monitor health**: 1 when the last check succeeded; failed partial checks and Lambda errors say which reads are blind. **Subgraphs**: blocks behind the chain head and indexing-error flags per subgraph.\n- **Keeper**: healthy hosts, liquidation sweeps and errors, plus its recent error log. **Halving**: days and blocks to the next Bitcoin halving." }
+          height     = 2
+          properties = { markdown = "## Indexers\n- Goldsky subgraphs: blocks behind the chain head and indexing-error flags. The UI reads positions and orders from futures and derivatives; the market maker backfills volatility from the oracle subgraph." }
         },
         {
           type   = "metric"
           x      = 0
-          y      = 88
-          width  = 8
-          height = 6
-          properties = {
-            title  = "Monitor health"
-            region = var.default_region
-            period = 300
-            view   = "timeSeries"
-            metrics = [
-              [local.vault_mon_ns, "CheckSuccess", { label = "Check success", stat = "Minimum" }],
-              [local.vault_mon_ns, "MarketCheckSuccess", { label = "Market check success", stat = "Minimum" }],
-              [local.vault_mon_ns, "MmHealthCheckSuccess", { label = "MM health success", stat = "Minimum" }],
-              [local.vault_mon_ns, "PartialCheckFailures", { label = "Failed partial checks", stat = "Maximum", color = "#d62728" }],
-              ["AWS/Lambda", "Errors", "FunctionName", local.vault_mon_name, { label = "Lambda errors", stat = "Sum" }],
-              ["AWS/Lambda", "Throttles", "FunctionName", local.vault_mon_name, { label = "Lambda throttles", stat = "Sum" }],
-            ]
-            yAxis = { left = { min = 0 } }
-          }
-        },
-        {
-          type   = "metric"
-          x      = 8
-          y      = 88
-          width  = 8
+          y      = 102
+          width  = 12
           height = 6
           properties = {
             title  = "Subgraph blocks behind the chain head"
@@ -1697,9 +1764,9 @@ resource "aws_cloudwatch_dashboard" "vault" {
         },
         {
           type   = "metric"
-          x      = 16
-          y      = 88
-          width  = 8
+          x      = 12
+          y      = 102
+          width  = 12
           height = 6
           properties = {
             title  = "Subgraph indexing errors and vault data age"
@@ -1715,20 +1782,36 @@ resource "aws_cloudwatch_dashboard" "vault" {
           }
         },
         {
+          type       = "text"
+          x          = 0
+          y          = 108
+          width      = 24
+          height     = 2
+          properties = { markdown = "## Monitoring\n- Everything here is 0 while the monitor is healthy. *Run failed or missing* at 1 means the last 5 minutes have no fresh data, so every chart above is stale; the other lines say which reads failed." }
+        },
+        {
           type   = "metric"
-          x      = 16
-          y      = 94
-          width  = 8
+          x      = 0
+          y      = 110
+          width  = 24
           height = 6
           properties = {
-            title  = "Days until the Bitcoin halving"
+            title  = "Monitor failures (0 = healthy)"
             region = var.default_region
-            period = 3600
-            view   = "singleValue"
+            period = 300
+            view   = "timeSeries"
             metrics = [
-              [local.vault_mon_ns, "BtcDaysUntilHalving", { label = "Days", stat = "Minimum" }],
-              [local.vault_mon_ns, "BtcBlocksUntilHalving", { label = "Blocks", stat = "Minimum" }],
+              [{ expression = "1 - FILL(ok, 0)", id = "runfail", label = "Run failed or missing", color = "#d62728" }],
+              [{ expression = "1 - market", id = "marketfail", label = "Market check failed" }],
+              [{ expression = "1 - health", id = "healthfail", label = "MM /health failed" }],
+              [local.vault_mon_ns, "CheckSuccess", { id = "ok", stat = "Minimum", visible = false }],
+              [local.vault_mon_ns, "MarketCheckSuccess", { id = "market", stat = "Minimum", visible = false }],
+              [local.vault_mon_ns, "MmHealthCheckSuccess", { id = "health", stat = "Minimum", visible = false }],
+              [local.vault_mon_ns, "PartialCheckFailures", { label = "Failed partial checks", stat = "Maximum", color = "#d62728" }],
+              ["AWS/Lambda", "Errors", "FunctionName", local.vault_mon_name, { label = "Lambda errors", stat = "Sum" }],
+              ["AWS/Lambda", "Throttles", "FunctionName", local.vault_mon_name, { label = "Lambda throttles", stat = "Sum" }],
             ]
+            yAxis = { left = { min = 0 } }
           }
         },
       ],
@@ -1736,8 +1819,8 @@ resource "aws_cloudwatch_dashboard" "vault" {
         {
           type   = "metric"
           x      = 0
-          y      = 94
-          width  = 16
+          y      = 48
+          width  = 8
           height = 6
           properties = {
             title  = "Keeper"
@@ -1754,7 +1837,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
         {
           type   = "log"
           x      = 0
-          y      = 100
+          y      = 60
           width  = 24
           height = 6
           properties = {
@@ -1770,8 +1853,8 @@ resource "aws_cloudwatch_dashboard" "vault" {
         {
           type   = "metric"
           x      = 0
-          y      = 73
-          width  = 12
+          y      = 88
+          width  = 8
           height = 6
           properties = {
             title  = "Market-maker loop (5m)"
@@ -1789,9 +1872,9 @@ resource "aws_cloudwatch_dashboard" "vault" {
         },
         {
           type   = "metric"
-          x      = 12
-          y      = 73
-          width  = 12
+          x      = 8
+          y      = 88
+          width  = 8
           height = 6
           properties = {
             title  = "Market-maker execution (5m)"
@@ -1810,8 +1893,8 @@ resource "aws_cloudwatch_dashboard" "vault" {
         },
         {
           type   = "metric"
-          x      = 0
-          y      = 79
+          x      = 16
+          y      = 88
           width  = 8
           height = 6
           properties = {
@@ -1830,9 +1913,9 @@ resource "aws_cloudwatch_dashboard" "vault" {
         },
         {
           type   = "log"
-          x      = 8
-          y      = 79
-          width  = 16
+          x      = 0
+          y      = 94
+          width  = 24
           height = 6
           properties = {
             title  = "Market-maker recent errors and warnings"
@@ -1846,8 +1929,8 @@ resource "aws_cloudwatch_dashboard" "vault" {
         {
           type   = "metric"
           x      = 0
-          y      = 67
-          width  = 12
+          y      = 70
+          width  = 8
           height = 6
           properties = {
             title  = "Market-maker state (/health)"
@@ -1867,9 +1950,9 @@ resource "aws_cloudwatch_dashboard" "vault" {
         },
         {
           type   = "metric"
-          x      = 12
-          y      = 67
-          width  = 12
+          x      = 16
+          y      = 70
+          width  = 8
           height = 6
           properties = {
             title  = "Market-maker own orders by market"

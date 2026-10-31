@@ -309,7 +309,16 @@ export async function collect(): Promise<{
       ...feedMetrics("Btc", "BtcUsdFeedAgeSeconds", prices.btcUsd),
       // WAD → percent, the unit the move alarms compare against.
       metric("MmSpotShockPct", Number(prices.mmSpotShock) / 1e16),
+      metric("SpvFeedAgeSeconds", secondsSince(prices.spv.updatedAt), "Seconds"),
     );
+    // Proxy round ids are phase << 64 | round; across a phase change the difference is meaningless.
+    const { roundId, roundId1h } = prices.btcUsd;
+    if (roundId >> 64n === roundId1h >> 64n)
+      points.push(metric("BtcUsdUpdates1h", Number(roundId - roundId1h), "Count"));
+    if (bitcoinTip)
+      points.push(
+        metric("SpvBlocksBehind", Math.max(0, bitcoinTip.height - prices.spv.height), "Count"),
+      );
   }
 
   const book = maker ? marketMakerMetrics(maker, decimals) : null;
@@ -344,8 +353,12 @@ function feedMetrics(prefix: string, ageMetric: string, feed: FeedHistory): Metr
     metric(`${prefix}Usd`, toUnits(feed.now, feed.decimals)),
     metric(`${prefix}Change1hPct`, change(feed.ago1h)),
     metric(`${prefix}Change24hPct`, change(feed.ago24h)),
-    metric(ageMetric, Math.max(0, Math.floor(Date.now() / 1000) - feed.updatedAt), "Seconds"),
+    metric(ageMetric, secondsSince(feed.updatedAt), "Seconds"),
   ];
+}
+
+function secondsSince(timestamp: number): number {
+  return Math.max(0, Math.floor(Date.now() / 1000) - timestamp);
 }
 
 /**

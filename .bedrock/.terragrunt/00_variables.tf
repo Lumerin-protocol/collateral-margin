@@ -150,7 +150,7 @@ variable "alchemy_api_key" {
 }
 
 variable "bitcoin_rpc_url" {
-  description = "Bitcoin JSON-RPC URL for the vault monitor's halving countdown (Alchemy bitcoin-mainnet). Empty composes it from alchemy_api_key"
+  description = "Bitcoin JSON-RPC URL for the vault monitor's halving countdown and SPV relay delay (Alchemy bitcoin-mainnet). Empty composes it from alchemy_api_key"
   type        = string
   sensitive   = true
   default     = ""
