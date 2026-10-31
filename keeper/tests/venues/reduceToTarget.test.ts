@@ -1,4 +1,4 @@
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
 import type { Address } from "viem";
 import { FuturesVenue } from "../../src/venues/futures.ts";
@@ -91,6 +91,7 @@ function makeChainStub(opts: {
   netEntryValue: bigint;
   onSimulate: (call: ReadCall) => void;
   expiry?: bigint;
+  mmShock?: () => bigint;
 }): Chain {
   const expiry = opts.expiry ?? EXPIRY;
   return {
@@ -106,7 +107,9 @@ function makeChainStub(opts: {
       },
       multicall: async ({ contracts }: { contracts: readonly ReadCall[] }) => {
         const fns = contracts.map((c) => c.functionName);
-        if (fns[0] === "imSpotShock") return [IM_SHOCK, MM_SHOCK, 6, 6];
+        if (fns[0] === "imSpotShock") {
+          return [IM_SHOCK, opts.mmShock?.() ?? MM_SHOCK, 6, 6];
+        }
         if (fns[0] === "balanceOf") {
           return snapshotMulticall(opts.balance, [expiry]);
         }
@@ -134,6 +137,39 @@ function makeChainStub(opts: {
 }
 
 describe("futures venue: reduceToTarget", () => {
+  it("sizes with a setShocks MM change without a restart", async () => {
+    mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    try {
+      let mmShock = MM_SHOCK;
+      const closes: bigint[] = [];
+      const chain = makeChainStub({
+        balance: 136_000_000n,
+        marketPrice: 30_000_000n,
+        netQuantity: 12n,
+        netEntryValue: 12n * 40_000_000n,
+        mmShock: () => mmShock,
+        onSimulate: (call) => {
+          const [, , closeQtys] = call.args as [Address, bigint[], bigint[]];
+          closes.push(closeQtys.reduce((s, q) => s + q, 0n));
+        },
+      });
+      const venue = new FuturesVenue(chain, makeConfigStub(true), silentLogger);
+      await venue.reduceToTarget(USER);
+
+      mmShock = 10n ** 17n;
+      mock.timers.tick(61_000);
+      await venue.reduceToTarget(USER);
+
+      assert.equal(closes.length, 2);
+      assert.ok(
+        closes[1] > closes[0],
+        `MM 10% closes more than MM 5% (${closes[1]} vs ${closes[0]})`,
+      );
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
   it("sizes a closeQty and submits liquidatePositions(expirationAts, closeQtys)", async () => {
     let simulated: ReadCall | undefined;
     const chain = makeChainStub({

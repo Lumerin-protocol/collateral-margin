@@ -1,8 +1,9 @@
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
 import pino from "pino";
 import type { Address } from "viem";
 import { PredictiveCoordinator } from "../../src/predict/coordinator.ts";
+import { MM_PARAMS_REFRESH_MS } from "../../src/predict/snapshot.ts";
 import { CoordinatorQueue } from "../../src/coordinator/queue.ts";
 import { PriceFeed } from "../../src/oracle/priceFeed.ts";
 import type { Chain } from "../../src/chain.ts";
@@ -50,6 +51,7 @@ interface Wired {
   executor: { instance: CoordinatorExecutor; kicks: number };
   priceFeed: PriceFeed;
   setOracleAnswer: (answer: bigint) => void;
+  setMmSpotShock: (shock: bigint) => void;
   fireAnswerUpdated: () => Promise<void>;
 }
 
@@ -84,6 +86,7 @@ function buildHarness({
   // also uses it to decide what `computePortfolioMM` returns (above logic).
   // Default $100 at 8 decimals → token-decimal (6) price = 100_000_000.
   let oracleAnswer = 10_000_000_000n;
+  let mmSpotShock = 5n * 10n ** 16n;
   let onLogs: (() => void) | undefined;
 
   const chain = {
@@ -99,7 +102,15 @@ function buildHarness({
         }
         throw new Error(`unexpected readContract: ${functionName}`);
       },
-      watchContractEvent: ({ onLogs: cb }: { onLogs: () => void }) => {
+      watchContractEvent: ({
+        eventName,
+        onLogs: cb,
+      }: {
+        eventName?: string;
+        onLogs: () => void;
+      }) => {
+        // Only the price feed's watcher is driven here; the PME's is a no-op.
+        if (eventName === "ShocksUpdated") return () => {};
         onLogs = cb;
         return () => {
           onLogs = undefined;
@@ -121,7 +132,7 @@ function buildHarness({
             case "imSpotShock":
               return 10n ** 17n;
             case "mmSpotShock":
-              return 5n * 10n ** 16n;
+              return mmSpotShock;
             case "decimals":
               return 6;
             case "QUANTITY_DECIMALS":
@@ -213,6 +224,7 @@ function buildHarness({
         return () => {};
       },
       size: () => 1,
+      list: () => [USER],
     } as unknown as ParticipantTracker,
     fireAdded: (user: Address) => addedListeners.forEach((l) => void l(user)),
     fireChanged: (user: Address) =>
@@ -230,6 +242,9 @@ function buildHarness({
     priceFeed,
     setOracleAnswer: (answer) => {
       oracleAnswer = answer;
+    },
+    setMmSpotShock: (shock) => {
+      mmSpotShock = shock;
     },
     fireAnswerUpdated: async () => {
       if (onLogs === undefined) throw new Error("watcher not registered");
@@ -359,5 +374,49 @@ describe("predict/coordinator: end-to-end", () => {
 
     predictor.stop();
     harness.priceFeed.stop();
+  });
+
+  it("picks up a setShocks MM change without a restart and predicts with it", async () => {
+    // Long 1 @ $100 with $20: liquidation at ≈ $84.21 under MM 5%, ≈ $88.89 under
+    // MM 10%. A drop to $87 crosses only the 10% threshold.
+    mock.timers.enable({ apis: ["setInterval"] });
+    const harness = buildHarness({
+      balance: 20_000_000n,
+      perpNetQty: 1n * 10n ** 6n,
+      perpEntry: 100_000_000n,
+      underwaterAtPrice: 89_000_000n,
+    });
+    await harness.priceFeed.start();
+    const predictor = new PredictiveCoordinator(
+      harness.chain,
+      harness.config,
+      harness.tracker.instance,
+      harness.queue,
+      harness.executor.instance,
+      harness.priceFeed,
+      silentLogger,
+    );
+    try {
+      await predictor.start();
+      harness.tracker.fireAdded(USER);
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+
+      harness.setMmSpotShock(10n ** 17n);
+      mock.timers.tick(MM_PARAMS_REFRESH_MS);
+      for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+
+      harness.setOracleAnswer(8_700_000_000n);
+      await harness.fireAnswerUpdated();
+      assert.equal(
+        harness.queue.size(),
+        1,
+        "the $87 tick crosses the MM 10% threshold after the re-read",
+      );
+    } finally {
+      predictor.stop();
+      harness.priceFeed.stop();
+      mock.timers.reset();
+    }
   });
 });

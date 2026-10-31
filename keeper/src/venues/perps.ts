@@ -51,7 +51,6 @@ export class PerpsVenue implements Venue {
   private readonly config: Config;
   private readonly logger: pino.Logger;
   private readonly ethUsdFeed: EthUsdFeed | undefined;
-  private mmParams: MMParams | undefined;
 
   constructor(
     chain: Chain,
@@ -234,11 +233,9 @@ export class PerpsVenue implements Venue {
       : { feeEarned: result.feeEarned, positionsClosed: 1 };
   }
 
-  /** Read + cache the PME engine params (shocks / decimals). Immutable per epoch. */
+  /** Read the PME engine params (shocks / decimals) fresh for each liquidation, so a `setShocks` applies at once. */
   private async getMMParams(): Promise<MMParams> {
-    if (this.mmParams !== undefined) return this.mmParams;
-    this.mmParams = await readMMParams(this.chain, this.config);
-    return this.mmParams;
+    return readMMParams(this.chain, this.config);
   }
 }
 

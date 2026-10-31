@@ -82,7 +82,15 @@ function buildHarness({
         }
         throw new Error(`unexpected readContract: ${functionName}`);
       },
-      watchContractEvent: ({ onLogs: cb }: { onLogs: () => void }) => {
+      watchContractEvent: ({
+        eventName,
+        onLogs: cb,
+      }: {
+        eventName?: string;
+        onLogs: () => void;
+      }) => {
+        // Only the price feed's watcher is driven here; the PME's is a no-op.
+        if (eventName === "ShocksUpdated") return () => {};
         onLogs = cb;
         return () => {
           onLogs = undefined;

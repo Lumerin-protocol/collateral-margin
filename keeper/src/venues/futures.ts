@@ -61,7 +61,6 @@ export class FuturesVenue implements Venue {
   private readonly logger: pino.Logger;
   private readonly ethUsdFeed: EthUsdFeed | undefined;
   private readonly solver: FuturesCloseSolver;
-  private mmParams: MMParams | undefined;
 
   constructor(
     chain: Chain,
@@ -283,9 +282,7 @@ export class FuturesVenue implements Venue {
   }
 
   private async getMMParams(): Promise<MMParams> {
-    if (this.mmParams !== undefined) return this.mmParams;
-    this.mmParams = await readMMParams(this.chain, this.config);
-    return this.mmParams;
+    return readMMParams(this.chain, this.config);
   }
 }
 

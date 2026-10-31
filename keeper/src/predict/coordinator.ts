@@ -8,13 +8,18 @@ import type { ParticipantSource } from "../discovery/types.ts";
 import type { PriceFeed, PriceUpdate } from "../oracle/priceFeed.ts";
 import type { Notifier } from "../alert/notifier.ts";
 import { readAccountHealthBatch } from "../pme/health.ts";
-import { readAccountSnapshot, readMMParams } from "./snapshot.ts";
+import {
+  MM_PARAMS_REFRESH_MS,
+  readAccountSnapshot,
+  readMMParams,
+} from "./snapshot.ts";
 import {
   type MMParams,
   solveAlertThresholds,
   solveLiquidationThresholds,
 } from "@hashpower/portfolio-margin";
 import { PredictiveIndex } from "./predictiveIndex.ts";
+import { PortfolioMarginEngineAbi } from "collateral-margin-abi/PortfolioMarginEngine.ts";
 
 /**
  * Wires the predictive layer into the existing keeper:
@@ -37,7 +42,9 @@ import { PredictiveIndex } from "./predictiveIndex.ts";
  *
  * Lifecycle:
  *   - `start()`: load shared `MMParams`, hook tracker.onChanged, hook
- *     priceFeed.onUpdate. Returns immediately.
+ *     priceFeed.onUpdate, and re-read `MMParams` on the PME's `ShocksUpdated`
+ *     (plus every `MM_PARAMS_REFRESH_MS` in case a log is missed); a change
+ *     rebuilds every tracked user. Returns immediately.
  *   - `stop()`: detach hooks. In-flight `rebuild` calls finish; nothing
  *     gracefully cancellable in the snapshot reader.
  *   - `rebuild(user)`: read fresh snapshot + solve + index.upsert. Public
@@ -107,6 +114,51 @@ export class PredictiveCoordinator {
     this.disposers.push(
       this.priceFeed.onUpdate((user) => this.handlePriceUpdate(user)),
     );
+    const refresh = setInterval(
+      () => void this.refreshParams(),
+      MM_PARAMS_REFRESH_MS,
+    );
+    refresh.unref?.();
+    this.disposers.push(() => clearInterval(refresh));
+    this.disposers.push(
+      this.chain.publicClient.watchContractEvent({
+        address: this.config.pme.address,
+        abi: PortfolioMarginEngineAbi,
+        eventName: "ShocksUpdated",
+        onLogs: () => void this.refreshParams(),
+      }),
+    );
+  }
+
+  /** Re-read `MMParams`; on a `setShocks` change, re-solve every tracked user. */
+  private async refreshParams(): Promise<void> {
+    let next: MMParams;
+    try {
+      next = await readMMParams(this.chain, this.config);
+    } catch (err) {
+      this.logger.warn({ err }, "MM params re-read failed — keeping cached");
+      return;
+    }
+    const prev = this.params;
+    if (
+      prev !== undefined &&
+      prev.imSpotShock === next.imSpotShock &&
+      prev.mmSpotShock === next.mmSpotShock &&
+      prev.tokenDecimals === next.tokenDecimals &&
+      prev.perpQuantityDecimals === next.perpQuantityDecimals
+    ) {
+      return;
+    }
+    this.params = next;
+    this.logger.info(
+      {
+        imSpotShock: next.imSpotShock,
+        mmSpotShock: next.mmSpotShock,
+        users: this.tracker.size(),
+      },
+      "PredictiveCoordinator: MM params changed — rebuilding thresholds",
+    );
+    for (const user of this.tracker.list()) void this.rebuild(user);
   }
 
   stop(): void {

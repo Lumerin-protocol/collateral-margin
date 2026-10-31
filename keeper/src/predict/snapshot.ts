@@ -15,11 +15,12 @@ import {
 import { PerpsPositionAbi } from "../venues/perpsPositionAbi.ts";
 
 /**
- * Read the engine-wide constants once. They only change on PME admin
- * transactions (`setShocks`), so the predictor caches them for the lifetime
- * of the process — there's no periodic re-read; an admin `setShocks` requires
- * a keeper restart to pick up.
+ * Safety-net re-read interval for the predictor's cached `readMMParams`. A PME
+ * `setShocks` is picked up at once from `ShocksUpdated`; this covers a missed log.
  */
+export const MM_PARAMS_REFRESH_MS = 600_000;
+
+/** Read the engine-wide constants (shocks only change on PME admin `setShocks`). */
 export async function readMMParams(
   chain: Chain,
   config: Config,
