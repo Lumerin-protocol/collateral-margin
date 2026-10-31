@@ -78,6 +78,8 @@ export async function collect(): Promise<{
 
   // Chain reads, all pinned to the subgraph block.
   const at = { blockNumber: BigInt(block) };
+  // Best-effort reads that failed; PartialCheckFailures alarms on the count.
+  const failed: string[] = [];
   const [
     { usdcRaw, ...backstop },
     timestamp,
@@ -96,27 +98,32 @@ export async function collect(): Promise<{
       readBlockNumber(),
       readPointsMeta().catch((error) => {
         // Best-effort: a points failure must not fail the vault debt check.
+        failed.push("points");
         log(`points drift failed: ${error}`);
         return null;
       }),
       // Best-effort for the same reason; MarketCheckSuccess=0 flags it.
       readMarketMaker(at, vault.marginEngine).catch((error) => {
+        failed.push("market_maker");
         log(`market maker check failed: ${error?.shortMessage ?? error}`);
         return null;
       }),
       MM_HEALTH_URL
         ? readMarketMakerHealth(MM_HEALTH_URL).catch((error) => {
+            failed.push("mm_health");
             log(`market maker health failed: ${error}`);
             return null;
           })
         : undefined,
       // Best-effort: the halving countdown must not fail the vault debt check.
       readBitcoinTip().catch((error) => {
+        failed.push("halving");
         log(`halving check failed: ${error}`);
         return null;
       }),
       // Best-effort for the same reason.
       readPrices(at, vault.marginEngine).catch((error) => {
+        failed.push("prices");
         log(`price check failed: ${error?.shortMessage ?? error}`);
         return null;
       }),
@@ -282,7 +289,9 @@ export async function collect(): Promise<{
 
   const summary =
     `block=${block} head=${head} behind=${behind} age=${age}s debt=${vault.insuranceDebt} gap_raw=${gapRaw} ` +
-    `halted=${vault.halted} backstop_equity=${equity} ${book?.summary ?? "mm=failed"}${healthSummary}`;
+    `halted=${vault.halted} backstop_equity=${equity} ${book?.summary ?? "mm=failed"}${healthSummary}` +
+    (failed.length ? ` failed=${failed.sort().join(",")}` : "");
+  points.push(metric("PartialCheckFailures", failed.length, "Count"));
   return { points, summary };
 }
 

@@ -617,6 +617,51 @@ resource "aws_cloudwatch_metric_alarm" "vault_check_success" {
   })
 }
 
+resource "aws_cloudwatch_metric_alarm" "vault_partial_check" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-partial-check-${local.vault_mon_env}"
+  alarm_description   = "A best-effort read in the vault monitor (points subgraph, market maker, /health, Bitcoin node, price feeds) failed on every run for 15 minutes, so its metrics and alarms are blind. The failed checks are listed as failed= in the Lambda's ok line. Warning only."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "PartialCheckFailures"
+  namespace           = local.vault_mon_ns
+  period              = 900
+  statistic           = "Minimum"
+  threshold           = 1
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Partial Check"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "vault_mon_lambda" {
+  for_each            = var.vault_monitoring.create ? toset(["Errors", "Throttles"]) : toset([])
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-mon-lambda-${lower(each.key)}-${local.vault_mon_env}"
+  alarm_description   = "The vault monitor Lambda reported ${each.key} (a crash, timeout or out-of-memory, or a throttled invocation). A failed check alone does not count here: the handler catches it and CheckSuccess reports it. Read /aws/lambda/${local.vault_mon_name}. Warning only; CheckSuccess pages if runs stop succeeding."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = each.key
+  namespace           = "AWS/Lambda"
+  dimensions          = { FunctionName = local.vault_mon_name }
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Monitor Lambda ${each.key}"
+    Capability = "Monitoring"
+  })
+}
+
 resource "aws_cloudwatch_metric_alarm" "vault_subgraph_age" {
   count               = var.vault_monitoring.create ? 1 : 0
   provider            = aws.use1
@@ -1113,6 +1158,8 @@ resource "aws_cloudwatch_dashboard" "vault" {
               aws_cloudwatch_metric_alarm.vault_backing_gap[*].arn,
               aws_cloudwatch_metric_alarm.vault_margin_engine_unset[*].arn,
               aws_cloudwatch_metric_alarm.vault_check_success[*].arn,
+              aws_cloudwatch_metric_alarm.vault_partial_check[*].arn,
+              [for alarm in aws_cloudwatch_metric_alarm.vault_mon_lambda : alarm.arn],
               aws_cloudwatch_metric_alarm.vault_subgraph_age[*].arn,
               aws_cloudwatch_metric_alarm.vault_subgraph_behind[*].arn,
               aws_cloudwatch_metric_alarm.points_subgraph_behind[*].arn,

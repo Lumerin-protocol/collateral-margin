@@ -586,4 +586,23 @@ describe("collect", () => {
       failHealth = false;
     }
   });
+
+  it("counts best-effort reads that failed and names them in the summary", async () => {
+    assert.equal(value("PartialCheckFailures"), 0);
+    assert.doesNotMatch(summary, /failed=/);
+    failHealth = true;
+    failMarketMaker = true;
+    try {
+      const { collect } = await import("../src/index.ts");
+      const result = await collect();
+      const failures = result.points.find(
+        (p) => p.MetricName === "PartialCheckFailures",
+      );
+      assert.equal(failures?.Value, 2);
+      assert.match(result.summary, /failed=market_maker,mm_health/);
+    } finally {
+      failHealth = false;
+      failMarketMaker = false;
+    }
+  });
 });
