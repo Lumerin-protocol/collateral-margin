@@ -74,7 +74,7 @@ Amounts below are USDC on the `col-mar-vault-{env}` dashboard. Alarm text matche
 | Subgraph older than 15 minutes, or indexing errors | critical | Read the contract views directly until the indexer is redeployed or resynced. |
 | Oracle data age | dashboard only | Hashprice-oracle's own alarms own the response. A stale price makes margin checks revert, which is safe for the debt. |
 
-Scheduled hashprice steps (difficulty retarget, about every two weeks, and the halving) are a calendar item, not an alarm. A step larger than maintenance margin takes accounts near liquidation below zero before the keeper can act. Before a large expected step, raise the margin shocks. Consider lowering the cap for that window so the vault halts sooner if losses build up.
+Scheduled hashprice steps (difficulty retarget, about every two weeks, and the halving) are a calendar item, not an alarm. A step larger than maintenance margin takes accounts near liquidation below zero before the keeper can act. Before a large expected step, raise the margin shocks; for the halving, follow [halving-margin-ramp.md](./halving-margin-ramp.md). Consider lowering the cap for that window so the vault halts sooner if losses build up.
 
 ### Where a top-up comes from
 
