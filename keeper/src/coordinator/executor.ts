@@ -201,6 +201,7 @@ export class CoordinatorExecutor {
     switch (outcome.kind) {
       case "healthy":
       case "liquidated":
+      case "standingDebt":
         log.info({ user, outcome }, "Plan complete");
         return;
       case "stalled":

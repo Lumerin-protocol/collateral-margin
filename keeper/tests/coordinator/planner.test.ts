@@ -469,8 +469,8 @@ describe("Planner.run: position-leg ranking and execution", () => {
     assert.equal(venue.reduceCalls, 1, "parked after one nothingToClose");
   });
 
-  it("returns `badDebt` when no positions remain but mmSurplus stays negative", async () => {
-    // After orders-leg there's nothing left to close — pure bad debt.
+  it("returns `standingDebt` when it has no positions to close but mmSurplus stays negative", async () => {
+    // Flat on entry: only account debt from an earlier close keeps it under MM.
     const chain = makeChainStub([
       { balance: 100n, im: 200n, mm: 500n }, // entry under
       { balance: 100n, im: 200n, mm: 500n }, // still under after empty orders-leg
@@ -482,6 +482,28 @@ describe("Planner.run: position-leg ranking and execution", () => {
     });
     const planner = new Planner(chain, makeConfigStub(), [venue], silentLogger);
     const outcome = await planner.run(USER);
+    assert.equal(outcome.kind, "standingDebt");
+    assert.equal(venue.reduceCalls, 0);
+  });
+
+  it("returns `badDebt` when its own close leaves no positions but mmSurplus negative", async () => {
+    const chain = makeChainStub([
+      { balance: 100n, im: 800n, mm: 700n }, // entry under
+      { balance: 100n, im: 800n, mm: 700n }, // still under after empty orders-leg
+      { balance: 0n, im: 500n, mm: 500n }, // the close left account debt
+    ]);
+    const id: Hex = `0x${"66".repeat(32)}` as Hex;
+    const venue = makeFakeVenue("perps", {
+      marketId: MARKET_PERPS,
+      ordersByCall: [[]],
+      positionsByCall: [
+        [{ id, marketId: MARKET_PERPS, unrealizedLoss: 600n, notional: 2000n }],
+        [],
+      ],
+    });
+    const planner = new Planner(chain, makeConfigStub(), [venue], silentLogger);
+    const outcome = await planner.run(USER);
     assert.equal(outcome.kind, "badDebt");
+    assert.equal(venue.reduceCalls, 1);
   });
 });

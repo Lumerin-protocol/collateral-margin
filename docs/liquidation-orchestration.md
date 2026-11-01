@@ -66,7 +66,8 @@ run(user):
   # 2. Position leg — loop, worst-venue-first.
   for iter in 0..MAX_POSITION_ITERATIONS:
      ranked = rankVenuesByLoss(user)         # sum(unrealizedLoss) desc, notional tiebreak
-     if ranked empty: return badDebt         # nothing left to close, still < MM
+     if ranked empty and none closed: return standingDebt  # only account debt from an earlier close; info log
+     if ranked empty: return badDebt         # this run's closes left it < MM; error log
      worst = first actionable venue
      result = worst.reduceToTarget(user)     # ONE gas-bounded batched tx
      if result == ordersStillOpen: replay orders leg

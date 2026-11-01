@@ -17,6 +17,7 @@ export type PlanOutcome =
       ordersClosed: number;
     }
   | { kind: "badDebt"; mmSurplus: bigint; feeEarned: bigint }
+  | { kind: "standingDebt"; mmSurplus: bigint; feeEarned: bigint }
   | { kind: "stalled"; reason: string; mmSurplus: bigint };
 
 /** Internal step result — captured for telemetry / tests. */
@@ -53,9 +54,13 @@ interface StepReport {
  *      on-chain `OrdersStillOpen` revert is treated as a recoverable race —
  *      re-run step 3 then retry. Re-snapshot health.
  *   5. Repeat step 4 until healthy OR no venue can close any more (all
- *      positions gone, or every venue reports `nothingToClose`). If positions
- *      are gone and the account is still unhealthy, emit a `BadDebt` log and a
- *      critical alert (the insurance fund must absorb the residual).
+ *      positions gone, or every venue reports `nothingToClose`). If this run
+ *      closed the last positions and the account is still unhealthy, emit a
+ *      `BadDebt` error (the insurance fund must absorb the residual). An
+ *      account that had no positions to close is only carrying account debt
+ *      from an earlier close, which keeps it under MM until repaid: that is
+ *      `standingDebt`, logged at info so it does not hold the keeper's error
+ *      alarm in ALARM.
  *
  * The planner is purely orchestration — venues encapsulate calldata,
  * Multicall3 batching, gas estimation, and the unprofitable / not-liquidatable
@@ -154,6 +159,17 @@ export class Planner {
         (v) => !exhausted.has(v.venue.name),
       );
 
+      if (rankedVenues.length === 0 && positionsClosed === 0) {
+        log.info(
+          { mmSurplus: health.mmSurplus, totalFee, ordersClosed },
+          "Standing debt: no positions to close, account debt keeps it under MM",
+        );
+        return {
+          kind: "standingDebt",
+          mmSurplus: health.mmSurplus,
+          feeEarned: totalFee,
+        };
+      }
       if (rankedVenues.length === 0) {
         // No positions left to close anywhere but still unhealthy → bad debt.
         log.error(
