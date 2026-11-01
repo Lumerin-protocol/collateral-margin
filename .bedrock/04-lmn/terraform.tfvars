@@ -48,8 +48,8 @@ vault_monitoring = {
   debt_util_crit_pct       = 80
   max_subgraph_age_minutes = 15
   oracle_metric_namespace  = "HashpriceOracle-LMN"
-  dev_alerts_topic_name    = "titanio-lmn-dev-alerts"    # Slack
-  devops_alerts_topic_name = "titanio-lmn-devops-alerts" # Phone
+  dev_alerts_topic_name    = "titanio-lmn-hpdx-alerts"    # Slack
+  devops_alerts_topic_name = "titanio-lmn-hpdx-page" # Phone
   # Market maker. Position thresholds are 80% of portfolio.prd.yml caps.
   mm_futures_markets           = 3
   mm_min_eth                   = 0.1
