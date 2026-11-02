@@ -317,10 +317,21 @@ function findClosestCrossings(
 // revert `OverLiquidation` when a partial leaves balance above IM with a real
 // IM buffer (`im > mm`). These solvers pick, off-chain, the deepest close that
 // keeps the account inside the `[MM, IM]` band (healthy but not
-// over-liquidated). If no in-band partial exists (deep crash / bad debt) they
-// fall back to a full close, which the contract lets through (the guard is
-// skipped once no positions remain).
+// over-liquidated). If no in-band partial exists (deep crash / bad debt) the
+// perps solver falls back to a full close, which the guard lets through once IM
+// equals MM (no portfolio risk left). The futures solver replays every candidate
+// against the venue's leg loop (`venueAccepts`) before returning it.
 // ───────────────────────────────────────────────────────────────────────────
+
+/** The venues' `OverLiquidation` guard: balance above IM while IM > MM. */
+function overLiquidated(
+  snap: AccountSnapshot,
+  params: MMParams,
+  currentPrice: bigint,
+): boolean {
+  const im = imRequired(snap, params, currentPrice);
+  return im > mmRequired(snap, params, currentPrice) && snap.balance > im;
+}
 
 /**
  * Off-chain replica of the futures batch close: reduce each aggregate toward
@@ -414,22 +425,32 @@ export function simulatePerpClose(
 }
 
 /**
- * Pick per-expiry `closeQty` legs so the account lands inside the `[MM, IM]`
- * band. Closes follow a round-robin path: one contract from each expiry per
- * round, expiries ranked by their effect on the requirement (see
- * `rankExpiriesForClose`), so a prefix does not drain one book before touching
- * another. With a real IM buffer the target is the deepest in-band prefix of that
- * path, otherwise the shallowest healthy one.
+ * Pick per-expiry `closeQty` legs that one `liquidatePositions` call accepts and
+ * that land the account inside the `[MM, IM]` band. Closes follow a round-robin
+ * path: one contract from each expiry per round, expiries ranked by their effect
+ * on the requirement (see `rankExpiriesForClose`), so a prefix does not drain one
+ * book before touching another. With a real IM buffer the target is the deepest
+ * in-band prefix of that path, otherwise the shallowest healthy one.
  *
- * The cost does not depend on the number of contracts: the path is never
- * expanded unit by unit (see `searchClosePath`), and the legs carry many
- * contracts each (see `stagedLegs`), so one `liquidatePositions` call can close
- * the whole amount.
+ * The venue runs the legs in order, stops once the account is healthy, and
+ * reverts `OverLiquidation` if that close leaves the balance above IM while
+ * IM > MM. So every candidate is replayed against that loop (`venueAccepts`), and
+ * the first that passes is returned:
+ *   1. the target on the round-robin path, then on each expiry's own path (a
+ *      contract of the first-ranked expiry can step clean over the band);
+ *   2. the shallowest healthy prefix the guard lets through, on the same paths,
+ *      which also finds closes that leave IM equal to MM (a delta-neutral book);
+ *   3. two legs on two expiries in any proportion (`pairCloses`);
+ *   4. a full close of every closable aggregate (deep crash / bad debt).
+ *
+ * Up to the third candidate the cost does not depend on the number of contracts:
+ * the paths are never expanded unit by unit (see `searchClosePath`), and the legs
+ * carry many contracts each (see `stagedLegs`), so one `liquidatePositions` call
+ * can close the whole amount.
  *
  * Aggregates expiring at or before `now` (unix seconds) are left alone, as the
  * venue skips matured legs; they still count toward the requirement. Returns `[]`
- * if already healthy or nothing is closable, or a full close of every closable
- * aggregate when no in-band partial exists (deep crash / bad debt).
+ * if already healthy, if nothing is closable, or if no candidate passes.
  */
 export function solveFuturesClosesToTarget(
   snap: AccountSnapshot,
@@ -450,29 +471,135 @@ export function solveFuturesClosesToTarget(
   );
   if (ordered.length === 0) return [];
 
-  const path = closePath(ordered);
-  const stateAt = (k: bigint) =>
-    simulateFuturesClose(
-      snap,
-      path.legsBetween(0n, k),
-      currentPrice,
-      liquidationFee,
-    );
   const hasBuffer = params.imSpotShock > params.mmSpotShock;
-  const target = searchClosePath(
-    path,
-    stateAt,
-    params,
-    currentPrice,
-    hasBuffer,
-  );
-  if (target === undefined) {
-    return ordered.map((p) => ({
-      expirationAt: p.expirationAt,
-      closeQty: abs(p.netQuantity),
-    }));
+  const accepted = (legs: readonly FuturesCloseLeg[]) =>
+    venueAccepts(snap, legs, params, currentPrice, liquidationFee);
+  const stageTo = (path: ClosePath, target: bigint) =>
+    stagedLegs(snap, path, target, params, currentPrice, liquidationFee);
+
+  const guardedTargets: { path: ClosePath; target: bigint }[] = [];
+  const paths =
+    ordered.length > 1 ? [ordered, ...ordered.map((p) => [p])] : [ordered];
+  for (const aggregates of paths) {
+    const path = closePath(aggregates);
+    const stateAt = (k: bigint) =>
+      simulateFuturesClose(
+        snap,
+        path.legsBetween(0n, k),
+        currentPrice,
+        liquidationFee,
+      );
+    const { target, guarded } = searchClosePath(
+      path,
+      stateAt,
+      params,
+      currentPrice,
+      hasBuffer,
+    );
+    if (target !== undefined) {
+      const legs = stageTo(path, target);
+      if (accepted(legs)) return legs;
+    }
+    if (guarded !== undefined) guardedTargets.push({ path, target: guarded });
   }
-  return stagedLegs(snap, path, target, params, currentPrice, liquidationFee);
+  for (const { path, target } of guardedTargets) {
+    const legs = stageTo(path, target);
+    if (accepted(legs)) return legs;
+  }
+
+  const pair = pairCloses(snap, ordered, params, currentPrice, liquidationFee);
+  if (pair !== undefined && accepted(pair)) return pair;
+
+  const full = ordered.map((p) => ({
+    expirationAt: p.expirationAt,
+    closeQty: abs(p.netQuantity),
+  }));
+  return accepted(full) ? full : [];
+}
+
+/**
+ * Whether `liquidatePositions` accepts `legs`: it runs them in order, stops
+ * before a leg once the account is healthy, and reverts `OverLiquidation` when a
+ * close trips the guard, or `NotLiquidatable` when nothing closed.
+ */
+function venueAccepts(
+  snap: AccountSnapshot,
+  legs: readonly FuturesCloseLeg[],
+  params: MMParams,
+  currentPrice: bigint,
+  liquidationFee: bigint,
+): boolean {
+  let state = snap;
+  let closed = false;
+  for (const leg of legs) {
+    if (mmSurplus(state, params, currentPrice) >= 0n) break;
+    state = simulateFuturesClose(state, [leg], currentPrice, liquidationFee);
+    closed = true;
+    if (overLiquidated(state, params, currentPrice)) return false;
+  }
+  return closed;
+}
+
+const MAX_PAIR_LEADS = 20_000;
+
+/**
+ * Two legs on two expiries: `x` contracts of the first, leaving the account
+ * underwater, then the target on the second's own path from there. The staged
+ * paths keep the expiries in step, so they miss a close that needs a few contracts
+ * of one book and a different number of another, typically futures hedging a
+ * perp. Every `x` of every ordered pair is tried, so the cost grows with the
+ * contracts held; it runs only when no staged candidate passes, and stops after
+ * `MAX_PAIR_LEADS` first legs, so a book nothing restores (deep bad debt) still
+ * reaches its full close well inside the keeper's solver timeout.
+ */
+function pairCloses(
+  snap: AccountSnapshot,
+  ordered: readonly FuturesAggregate[],
+  params: MMParams,
+  currentPrice: bigint,
+  liquidationFee: bigint,
+): FuturesCloseLeg[] | undefined {
+  const hasBuffer = params.imSpotShock > params.mmSpotShock;
+  let leads = MAX_PAIR_LEADS;
+  for (const first of ordered) {
+    for (const second of ordered) {
+      if (second === first) continue;
+      for (let x = 1n; x <= abs(first.netQuantity); x++) {
+        if (leads-- === 0) return undefined;
+        const lead = { expirationAt: first.expirationAt, closeQty: x };
+        const start = simulateFuturesClose(
+          snap,
+          [lead],
+          currentPrice,
+          liquidationFee,
+        );
+        if (mmSurplus(start, params, currentPrice) >= 0n) continue;
+        const path = closePath([second]);
+        const stateAt = (k: bigint) =>
+          simulateFuturesClose(
+            start,
+            path.legsBetween(0n, k),
+            currentPrice,
+            liquidationFee,
+          );
+        const { target, guarded } = searchClosePath(
+          path,
+          stateAt,
+          params,
+          currentPrice,
+          hasBuffer,
+        );
+        for (const k of [target, guarded]) {
+          if (k === undefined) continue;
+          const end = stateAt(k);
+          if (overLiquidated(end, params, currentPrice)) continue;
+          if (mmSurplus(end, params, currentPrice) < 0n) continue;
+          return [lead, ...path.legsBetween(0n, k)];
+        }
+      }
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -541,7 +668,10 @@ function closePath(ordered: readonly FuturesAggregate[]): ClosePath {
 
 /**
  * The target prefix of the close path: the deepest in-band one with a real IM
- * buffer, the shallowest healthy one without, `undefined` if there is none.
+ * buffer, the shallowest healthy one without, `undefined` if there is none. Also
+ * `guarded`, the shallowest healthy prefix the venue's guard lets through among
+ * the interval bounds and the first healthy prefix of each interval. It can sit
+ * above IM where IM equals MM, at a net-delta kink.
  *
  * The surplus along the path is not monotone. The engine stresses
  * `netDelta − sellOrderDelta` as well, and that leg grows as a long closes toward
@@ -560,10 +690,16 @@ function searchClosePath(
   params: MMParams,
   currentPrice: bigint,
   hasBuffer: boolean,
-): bigint | undefined {
+): { target: bigint | undefined; guarded: bigint | undefined } {
   const mmS = (s: AccountSnapshot) => mmSurplus(s, params, currentPrice);
   const imS = (s: AccountSnapshot) => imSurplus(s, params, currentPrice);
   let deepest: bigint | undefined;
+  let guarded: bigint | undefined;
+  const noteGuarded = (k: bigint) => {
+    if (k === 0n || (guarded !== undefined && k >= guarded)) return;
+    const s = stateAt(k);
+    if (mmS(s) >= 0n && !overLiquidated(s, params, currentPrice)) guarded = k;
+  };
   for (const seg of path.segments) {
     let shallowest: bigint | undefined;
     for (let j = 0n; j < seg.width; j++) {
@@ -571,11 +707,13 @@ function searchClosePath(
       const at = (u: bigint) => stateAt(kOf(u));
       const last = j === 0n ? seg.rounds : seg.rounds - 1n;
       const bounds = closePathKinks(at, last, params, currentPrice);
+      for (const u of bounds) noteGuarded(kOf(u));
       for (let i = 0; i + 1 < bounds.length; i++) {
         const healthy = nonNegativeRange(bounds[i], bounds[i + 1], (u) =>
           mmS(at(u)),
         );
         if (healthy === undefined) continue;
+        noteGuarded(kOf(healthy.lo));
         if (!hasBuffer) {
           const k = kOf(healthy.lo);
           if (shallowest === undefined || k < shallowest) shallowest = k;
@@ -597,9 +735,9 @@ function searchClosePath(
           deepest = k;
       }
     }
-    if (shallowest !== undefined) return shallowest;
+    if (shallowest !== undefined) return { target: shallowest, guarded };
   }
-  return deepest;
+  return { target: deepest, guarded };
 }
 
 /**
@@ -614,7 +752,9 @@ function searchClosePath(
  *     clamp where the futures venue's does (the perp is not touched).
  *
  * The remaining entry value is truncated per close, so the PnL lines are exact
- * only to a token unit; each root is emitted with its neighbours.
+ * only to a token unit; each root is emitted with its neighbours. A single-point
+ * range (`last = 0`, an offset past the last full round) is the one interval
+ * `[0, 0]`, so its prefix is still evaluated.
  */
 function closePathKinks(
   at: (u: bigint) => AccountSnapshot,
@@ -622,6 +762,7 @@ function closePathKinks(
   params: MMParams,
   currentPrice: bigint,
 ): bigint[] {
+  if (last === 0n) return [0n, 0n];
   const bounds = new Set<bigint>([0n, last]);
   if (last > 1n) {
     bounds.add(1n);
@@ -672,6 +813,7 @@ const MAX_STAGE_SPLITS = 64;
  * untouched, draining one book before the others. So the venue stops on a stage
  * boundary, which is a round-robin prefix, or inside a single-contract stage. At
  * worst the splits reach single contracts, which is the round-robin path itself.
+ * Within a stage the legs run in `stageLegs` order.
  */
 function stagedLegs(
   snap: AccountSnapshot,
@@ -686,7 +828,16 @@ function stagedLegs(
     const legs: FuturesCloseLeg[] = [];
     const stageOf: number[] = [];
     for (let s = 0; s + 1 < cuts.length; s++) {
-      for (const leg of path.legsBetween(cuts[s] ?? 0n, cuts[s + 1] ?? 0n)) {
+      const stage = stageLegs(
+        snap,
+        path,
+        cuts[s] ?? 0n,
+        cuts[s + 1] ?? 0n,
+        params,
+        currentPrice,
+        liquidationFee,
+      );
+      for (const leg of stage) {
         legs.push(leg);
         stageOf.push(s);
       }
@@ -708,6 +859,42 @@ function stagedLegs(
 }
 
 /**
+ * The legs taking prefix `from` to `to`, lowest effect on the MM surplus first,
+ * each measured alone from `from`. A close that sets the account back (a losing
+ * leg, or one that adds net delta) then runs before one that restores it, so the
+ * venue does not stop or trip the guard partway to `to`. Ties keep rank order.
+ */
+function stageLegs(
+  snap: AccountSnapshot,
+  path: ClosePath,
+  from: bigint,
+  to: bigint,
+  params: MMParams,
+  currentPrice: bigint,
+  liquidationFee: bigint,
+): FuturesCloseLeg[] {
+  const legs = path.legsBetween(from, to);
+  if (legs.length < 2) return legs;
+  const start = simulateFuturesClose(
+    snap,
+    path.legsBetween(0n, from),
+    currentPrice,
+    liquidationFee,
+  );
+  return legs
+    .map((leg) => ({
+      leg,
+      effect: mmSurplus(
+        simulateFuturesClose(start, [leg], currentPrice, liquidationFee),
+        params,
+        currentPrice,
+      ),
+    }))
+    .sort((a, b) => (a.effect < b.effect ? -1 : a.effect > b.effect ? 1 : 0))
+    .map(({ leg }) => leg);
+}
+
+/**
  * Replays `liquidatePositions` over `legs` and returns the stage that must be split:
  * the one holding a leg that reverts `OverLiquidation`, or the one the venue stops
  * inside because the account turned healthy before its last leg.
@@ -726,10 +913,7 @@ function stageToSplit(
       return i > 0 && stageOf[i - 1] === stageOf[i] ? stageOf[i] : undefined;
     }
     state = simulateFuturesClose(state, [leg], currentPrice, liquidationFee);
-    const im = imRequired(state, params, currentPrice);
-    if (im > mmRequired(state, params, currentPrice) && state.balance > im) {
-      return stageOf[i];
-    }
+    if (overLiquidated(state, params, currentPrice)) return stageOf[i];
   }
   return undefined;
 }

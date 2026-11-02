@@ -178,10 +178,16 @@ Mitigations (contract already supports these):
 ## Contract invariants relied upon
 
 - `liquidatePositions` / `liquidatePosition(user, closeQty)` do **not** recompute
-  margin per unit closed. They close the keeper-supplied amount and enforce a
-  **single** end-of-tx `OverLiquidation` guard: with exposure remaining and a
-  real buffer (`IM > MM`), leftover balance must be ≤ IM. A full close skips the
-  guard (the buffer is undefined once the position is gone — bad-debt path).
+  margin per unit closed. They close the keeper-supplied amount, and
+  `liquidatePositions` stops before a leg once the account is healthy. After each
+  close the `OverLiquidation` guard reverts if the balance is above IM while
+  `IM > MM`, so it decides at the first close that restores MM. It is vacuous only
+  once IM equals MM: no portfolio risk left (the bad-debt path) or a delta-neutral
+  book. Fully closing one expiry while others stay open is still checked, so a
+  full close of a profitable book can revert. The futures solver replays its legs
+  against this loop, falls back to two legs on a pair of expiries in any
+  proportion, and returns nothing when no candidate passes, which the venue reports
+  as `nothingToClose`.
 - Sizing the close so the account lands in `[MM, IM]` is the keeper's off-chain
   responsibility; the guard is only a backstop against over-liquidation, not a
   planner.
