@@ -160,7 +160,7 @@ See `src/config.ts` for the authoritative shape. The minimum-viable set:
 | `BACKFILL_FROM_BLOCK`          | no       | Block to start the one-shot Perps startup backfill (vault events add no participants). Futures independently replays the bounded lifetime of active and previous expiries. |
 | `BACKFILL_CHUNK_SIZE`          | no       | Per-`getLogs` page size for backfill. Default `10000` (most public RPC limit). |
 | `DRY_RUN`                      | no       | `true` to skip on-chain broadcasts     |
-| `ALERT_WEBHOOK_URL`            | no       | Slack/Discord/PagerDuty endpoint       |
+| `ALERT_WEBHOOK_URL`            | no       | Slack/Discord/PagerDuty endpoint for IM utilization alerts. Unset (all environments today): alerts are off |
 | `ALERT_DEDUPE_MS`              | no       | Dedupe window per (severity, user, market). Default `300_000` |
 | `ALERT_IM_WARN_UTIL`           | no       | IM utilization triggering warn alert. Default `0.85`         |
 | `ALERT_IM_CRITICAL_UTIL`       | no       | IM utilization triggering critical alert. Default `0.95`     |
@@ -256,7 +256,7 @@ Suites cover:
 - `venues/futures` — buyer/seller PnL (one contract = 1 PH/s·day, duration-free), `expirationAt` → marketId
 - `coordinator/queue` — BigInt-safe ordering, `upsert` re-ranking, snapshot semantics
 - `coordinator/planner` — orders-leg, position ranking, `OrdersStillOpen`-replay, bad-debt
-- `alert/notifier` — dedupe window, severity promotion, ordering, retry-on-failure
+- `alert/notifier` — dedupe window, severity promotion, ordering, off without a URL, failed sends dropped
 - `discovery/tracker` — checksum dedupe, `onAdded` / `onChanged` listeners, startup backfill
 - `discovery/futuresExpiryIndex` — scoped replay, per-expiry partitioning, rollover retention
 - `discovery/combined` — deduplicated Perps + Futures participant union

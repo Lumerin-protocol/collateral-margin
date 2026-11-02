@@ -219,7 +219,7 @@ describe("Notifier: drain ordering", () => {
 });
 
 describe("Notifier: webhook handling", () => {
-  it("drops the buffer when no webhookUrl is configured (and warns)", async () => {
+  it("queues nothing when no webhookUrl is configured", async () => {
     const { poster, sent } = makeRecordingPoster();
     const n = new Notifier(
       makeConfig({ webhookUrl: undefined }),
@@ -227,13 +227,12 @@ describe("Notifier: webhook handling", () => {
       { poster },
     );
     n.enqueue(makeAlert({ user: USER_A, severity: "warn", mmSurplus: -10n }));
-    assert.equal(n.pendingCount(), 1);
+    assert.equal(n.pendingCount(), 0, "alerts are off");
     await n.drain();
     assert.equal(sent.length, 0, "no posts attempted");
-    assert.equal(n.pendingCount(), 0, "buffer cleared so memory doesn't grow");
   });
 
-  it("re-buffers the failed alert at the head of the queue on POST failure", async () => {
+  it("drops a failed alert, and the next enqueue sends it again", async () => {
     let attempts = 0;
     const poster: WebhookPoster = async () => {
       attempts++;
@@ -244,12 +243,17 @@ describe("Notifier: webhook handling", () => {
       silentLogger,
       { poster },
     );
-    n.enqueue(makeAlert({ user: USER_A, severity: "warn", mmSurplus: -10n }));
+    const alert = makeAlert({
+      user: USER_A,
+      severity: "warn",
+      mmSurplus: -10n,
+    });
+    n.enqueue(alert);
     await n.drain();
-    assert.equal(n.pendingCount(), 1, "failed alert re-queued");
+    assert.equal(n.pendingCount(), 0, "failed alert not re-queued");
+    n.enqueue(alert);
     await n.drain();
-    assert.equal(n.pendingCount(), 0, "second drain succeeds");
-    assert.equal(attempts, 2);
+    assert.equal(attempts, 2, "a failed send does not start the dedupe window");
   });
 
   it("serialises bigints in the payload as decimal strings (JSON-safe)", async () => {

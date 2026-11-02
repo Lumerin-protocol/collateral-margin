@@ -19,6 +19,8 @@ import type { MarketId } from "../venues/types.ts";
  * The notifier is intentionally non-blocking on the planner's hot path:
  * `enqueue` is sync and fast; `drain` runs on the runtime scheduler and
  * sequentially POSTs everything that's pending.
+ *
+ * Without `alerts.webhookUrl` the notifier is off and `enqueue` keeps nothing.
  */
 export class Notifier {
   /** dedupKey → unix-ms of last successful send. */
@@ -39,14 +41,21 @@ export class Notifier {
     this.logger = logger;
     this.poster = options.poster ?? defaultWebhookPoster;
     this.now = options.now ?? (() => Date.now());
+    if (!config.alerts.webhookUrl) {
+      this.logger.info(
+        "ALERT_WEBHOOK_URL is unset: IM utilization alerts are off",
+      );
+    }
   }
 
   /**
-   * Push an alert. May be dropped immediately if a same-severity-same-target
-   * alert was sent within `alerts.dedupeMs`. Severity *promotions* (warn →
-   * critical) always pass through — getting worse should always page.
+   * Push an alert. Ignored while no webhook is configured. May be dropped
+   * immediately if a same-severity-same-target alert was sent within
+   * `alerts.dedupeMs`. Severity *promotions* (warn → critical) always pass
+   * through — getting worse should always page.
    */
   enqueue(alert: Alert): void {
+    if (!this.config.alerts.webhookUrl) return;
     const key = dedupKey(alert);
     const last = this.lastSentAt.get(key);
     const isPromotion =
@@ -69,28 +78,19 @@ export class Notifier {
    * Drains the pending queue in insertion order. The scheduler walks tracked
    * users in a stable order, so insertion order is "roughly worst-first
    * across the sweep" with no extra work. Records `lastSentAt` only on
-   * success — failed sends stay eligible for retry on the next drain.
+   * success, so a failed alert is dropped rather than re-queued: the next
+   * sweep raises it again while the account stays above the threshold.
    */
   async drain(): Promise<void> {
-    if (!this.config.alerts.webhookUrl) {
-      // Webhook disabled — clear the buffer so it can't grow unbounded.
-      if (this.pending.length > 0) {
-        this.logger.warn(
-          { count: this.pending.length },
-          "alerts pending but ALERT_WEBHOOK_URL is unset — dropping",
-        );
-        this.pending = [];
-      }
-      return;
-    }
-    if (this.pending.length === 0) return;
+    const url = this.config.alerts.webhookUrl;
+    if (!url || this.pending.length === 0) return;
 
     const batch = this.pending;
     this.pending = [];
 
     for (const alert of batch) {
       try {
-        await this.poster(this.config.alerts.webhookUrl, formatPayload(alert));
+        await this.poster(url, formatPayload(alert));
         this.lastSentAt.set(dedupKey(alert), this.now());
         this.logger.info(
           {
@@ -103,11 +103,8 @@ export class Notifier {
       } catch (err) {
         this.logger.error(
           { user: alert.user, severity: alert.severity, err },
-          "alert send failed — will retry on next drain",
+          "alert send failed",
         );
-        // Re-buffer the failed alert so we don't lose it. Place at the head
-        // so it's still considered urgent next drain.
-        this.pending.unshift(alert);
       }
     }
   }
@@ -186,9 +183,8 @@ const defaultWebhookPoster: WebhookPoster = async (url, payload) => {
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
-    throw new Error(
-      `alert webhook ${url} returned ${res.status} ${res.statusText}`,
-    );
+    // Slack and Discord webhook URLs carry their token, so the URL stays out of logs.
+    throw new Error(`alert webhook returned ${res.status} ${res.statusText}`);
   }
 };
 
