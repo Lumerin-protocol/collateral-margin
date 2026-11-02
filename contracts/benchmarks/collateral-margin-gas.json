@@ -814,7 +814,7 @@
     },
     {
       "function": "halt()",
-      "gas": "58686",
+      "gas": "58905",
       "id": "5 admin and lifecycle · CollateralVault.halt()::live vault",
       "kind": "transaction",
       "scenario": "live vault"

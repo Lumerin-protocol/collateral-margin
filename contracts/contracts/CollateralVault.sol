@@ -88,7 +88,7 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     address public constant BACKSTOP_ADDR = 0xbBbBBBBbbBBBbbbBbbBbbbbBBbBbbbbBbBbbBBbB;
     /// @dev Upper bound for each backstop parameter (25%).
     uint16 public constant MAX_BACKSTOP_PARAM_BPS = 2_500;
-    string public constant VERSION = "1.4.2";
+    string public constant VERSION = "1.4.3";
 
     IERC20 public collateralToken;
     mapping(address => bool) public authorizedCallers;
@@ -213,7 +213,10 @@ contract CollateralVault is ICollateralVault, UUPSUpgradeable, OwnableUpgradeabl
     }
 
     /// @notice Stop new orders and withdrawals without waiting for the debt cap.
+    /// @dev Also holds a cap halt latched earlier in this transaction, which a later repayment
+    ///      would otherwise clear.
     function halt() external onlyOwner {
+        _capHaltInTx = false;
         _latchHalt(HaltReason.OWNER);
     }
 
