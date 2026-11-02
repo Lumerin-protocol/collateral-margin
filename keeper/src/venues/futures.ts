@@ -182,7 +182,7 @@ export class FuturesVenue implements Venue {
 
   async reduceToTarget(user: Address): Promise<ReduceToTargetOutcome> {
     const params = await this.getMMParams();
-    const [snapshot, marketPrice] = await Promise.all([
+    const [snapshot, marketPrice, liquidationFeeBps] = await Promise.all([
       readAccountSnapshot(this.chain, this.config, user, {
         params,
         logger: this.logger,
@@ -192,15 +192,19 @@ export class FuturesVenue implements Venue {
         abi: HashPowerFuturesAbi,
         functionName: "getMarketPrice",
       }) as Promise<bigint>,
+      this.chain.publicClient.readContract({
+        address: this.config.futures.address,
+        abi: HashPowerFuturesAbi,
+        functionName: "liquidationFeeBps",
+      }) as Promise<number>,
     ]);
 
-    // Liquidation-fee payout is disabled on-chain — pass 0 so the projection matches.
     // Matured legs are left to the delivery coordinator: the venue skips them.
     const closes = await this.solver.solve({
       snapshot,
       params,
       currentPrice: marketPrice,
-      liquidationFee: 0n,
+      liquidationFeeBps: BigInt(liquidationFeeBps),
       now: BigInt(Math.floor(Date.now() / 1000)),
     });
     if (closes.length === 0) {

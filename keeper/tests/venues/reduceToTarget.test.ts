@@ -102,6 +102,7 @@ function makeChainStub(opts: {
       getBlockNumber: async () => 1n,
       readContract: async (call: ReadCall) => {
         if (call.functionName === "getMarketPrice") return opts.marketPrice;
+        if (call.functionName === "liquidationFeeBps") return 0;
         if (call.functionName === "collateralToken") return USDC;
         throw new Error(`unexpected readContract: ${call.functionName}`);
       },
@@ -215,6 +216,7 @@ describe("futures venue: reduceToTarget", () => {
         getBlockNumber: async () => 1n,
         readContract: async (call: ReadCall) => {
           if (call.functionName === "getMarketPrice") return 100_000n;
+          if (call.functionName === "liquidationFeeBps") return 0;
           if (call.functionName === "collateralToken") return USDC;
           throw new Error(`unexpected readContract: ${call.functionName}`);
         },
@@ -277,6 +279,7 @@ describe("futures venue: reduceToTarget", () => {
         getBlockNumber: async () => 1n,
         readContract: async (call: ReadCall) => {
           if (call.functionName === "getMarketPrice") return 100_000n;
+          if (call.functionName === "liquidationFeeBps") return 0;
           if (call.functionName === "collateralToken") return USDC;
           throw new Error(`unexpected readContract: ${call.functionName}`);
         },

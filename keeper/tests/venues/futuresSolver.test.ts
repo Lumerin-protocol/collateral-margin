@@ -44,7 +44,7 @@ const REQUEST = {
   snapshot: SNAPSHOT,
   params: PARAMS,
   currentPrice: MARK,
-  liquidationFee: 0n,
+  liquidationFeeBps: 0n,
   now: 0n,
 };
 

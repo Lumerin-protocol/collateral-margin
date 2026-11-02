@@ -12,7 +12,7 @@ parentPort?.on("message", (req: FuturesSolveRequest) => {
       req.snapshot,
       req.params,
       req.currentPrice,
-      req.liquidationFee,
+      req.liquidationFeeBps,
       req.now,
     );
     res = { id: req.id, legs };

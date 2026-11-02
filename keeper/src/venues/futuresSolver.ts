@@ -10,7 +10,7 @@ export interface FuturesSolveRequest {
   snapshot: AccountSnapshot;
   params: MMParams;
   currentPrice: bigint;
-  liquidationFee: bigint;
+  liquidationFeeBps: bigint;
   now: bigint;
 }
 

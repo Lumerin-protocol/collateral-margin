@@ -119,7 +119,7 @@ risk.
 > notional at the mark (200 bps on prd), capped at the account's balance, and pay
 > `liquidatorShareBps` of it to the caller (20% on prd). Futures takes the fee
 > before its `OverLiquidation` guard, so the keeper reads `liquidationFeeBps` and
-> its futures solver charges it on every leg (N17). The perps solver models no
+> its futures solver charges it on every leg. The perps solver models no
 > fee: it picks the deepest close under IM, and the fee only lowers the balance
 > further. The flat-fee design below predates the bps fee.
 
