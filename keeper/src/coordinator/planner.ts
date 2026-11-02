@@ -189,8 +189,11 @@ export class Planner {
       }
       if (actionable.length === 0) {
         // Every venue with positions reported `nothingToClose` — the account
-        // is under MM on-chain but no venue's off-chain sizing found a close
-        // (a snapshot/price race). Re-queue rather than force a full close.
+        // is under MM on-chain but no venue's off-chain sizing found a close:
+        // a snapshot/price race, or a futures book on which every close that
+        // restores MM trips the venue's per-leg `OverLiquidation` guard (one
+        // contract jumps from below MM to above IM). Re-queue rather than
+        // force a full close.
         log.warn(
           {
             mmSurplus: health.mmSurplus,

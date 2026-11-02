@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@hashpower/portfolio-margin':
-        specifier: github:Lumerin-protocol/collateral-margin#1a0641f76f9d98ea2da09247eee4b9d7fc45debe&path:/portfolio-margin
-        version: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/1a0641f76f9d98ea2da09247eee4b9d7fc45debe#path:/portfolio-margin
+        specifier: github:Lumerin-protocol/collateral-margin#566cddf77e8a1671ea61a8ddc86272e17c146e39&path:/portfolio-margin
+        version: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/566cddf77e8a1671ea61a8ddc86272e17c146e39#path:/portfolio-margin
       amaro:
         specifier: ^1.1.9
         version: 1.1.10
@@ -102,9 +102,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@hashpower/portfolio-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/1a0641f76f9d98ea2da09247eee4b9d7fc45debe#path:/portfolio-margin':
-    resolution: {gitHosted: true, integrity: sha512-6j52WWUSlblVEbouM9DZJ+INREO38/YkzoVkpiWwRrsNXz0Jut7PEx2D/fkMvp5xo9qJbAfBLXGlEOylksGlzg==, path: /portfolio-margin, tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/1a0641f76f9d98ea2da09247eee4b9d7fc45debe}
-    version: 0.4.0
+  '@hashpower/portfolio-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/566cddf77e8a1671ea61a8ddc86272e17c146e39#path:/portfolio-margin':
+    resolution: {gitHosted: true, integrity: sha512-s+QPciDGKh23dpWAxZLra0edOD10KW/IjgxSiyrpaRoKEEPRv574wOl2sAfWal0IDknbjD4cTEwCuclQbq+wag==, path: /portfolio-margin, tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/566cddf77e8a1671ea61a8ddc86272e17c146e39}
+    version: 0.4.1
     engines: {node: '>=22'}
 
   '@noble/ciphers@1.3.0':
@@ -451,7 +451,7 @@ snapshots:
   '@biomejs/cli-win32-x64@2.4.13':
     optional: true
 
-  '@hashpower/portfolio-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/1a0641f76f9d98ea2da09247eee4b9d7fc45debe#path:/portfolio-margin': {}
+  '@hashpower/portfolio-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/566cddf77e8a1671ea61a8ddc86272e17c146e39#path:/portfolio-margin': {}
 
   '@noble/ciphers@1.3.0': {}
 
