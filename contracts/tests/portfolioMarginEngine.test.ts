@@ -19,9 +19,9 @@ const ONE_LOT_QTY = LOT_QTY;
 const WAD = 10n ** 18n;
 
 describe("PortfolioMarginEngine", () => {
-  it("reports version 2.5.0", async () => {
+  it("reports version 2.6.0", async () => {
     const { pme } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
-    assert.equal(await pme.read.VERSION(), "2.5.0");
+    assert.equal(await pme.read.VERSION(), "2.6.0");
   });
 
   describe("no positions", () => {
@@ -705,13 +705,24 @@ describe("PortfolioMarginEngine", () => {
       );
 
       await oracleMock.write.freezeTimestamp();
-      await networkHelpers.time.increase(3601);
+      await networkHelpers.time.increase(Number(await pme.read.MAX_ORACLE_STALENESS()) + 1);
 
       await viem.assertions.revertWithCustomError(
         pme.read.computePortfolioIM([user]),
         pme,
         "OracleStale",
       );
+    });
+
+    it("N18: accepts a price 72 minutes old, like the 2026-11-02 gap on prd", async () => {
+      const { pme, oracleMock, user } = await networkHelpers.loadFixture(
+        deployPortfolioMarginEngineFixture,
+      );
+
+      await oracleMock.write.freezeTimestamp();
+      await networkHelpers.time.increase(72 * 60);
+
+      await assert.doesNotReject(pme.read.computePortfolioIM([user]));
     });
 
     it("reverts margin reads when the oracle answer is non-positive", async () => {

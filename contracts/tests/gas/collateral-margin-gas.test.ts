@@ -563,6 +563,7 @@ async function benchmarkMarginEngine() {
     const fx = await freshCollateral();
     const pc = await viem.getPublicClient();
     for (const [signature, args] of [
+      ["MAX_ORACLE_STALENESS()", []],
       ["MAX_SPOT_PRICE()", []],
       ["UPGRADE_INTERFACE_VERSION()", []],
       ["VERSION()", []],

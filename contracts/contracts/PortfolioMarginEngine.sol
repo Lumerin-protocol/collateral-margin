@@ -69,12 +69,15 @@ contract PortfolioMarginEngine is
 {
     using EnumerableSet for EnumerableSet.AddressSet;
 
-    uint256 private constant MAX_ORACLE_STALENESS = 1 hours;
+    /// @notice Oldest oracle price the engine accepts. Hashprice updates only on a Bitcoin
+    ///         block, and gaps over an hour happen a few times a month; over 2 hours, about
+    ///         once in three years.
+    uint256 public constant MAX_ORACLE_STALENESS = 2 hours;
     /// @notice Largest spot price the engine accepts, in WAD: $10,000 per contract, the venues'
     ///         `MAX_PRICE`. A feed above it reverts like a stale one, so the shocked spot and
     ///         every stress term stay far inside int256.
     uint256 public constant MAX_SPOT_PRICE = 10_000 * WAD;
-    string public constant VERSION = "2.5.0";
+    string public constant VERSION = "2.6.0";
 
     /// @notice The collateral vault this engine aggregates balances from.
     /// @dev Fixed per implementation, like the products' own vault pins: every registered

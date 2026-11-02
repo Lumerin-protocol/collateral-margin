@@ -289,14 +289,14 @@
     },
     {
       "function": "orderMarginOf(address)",
-      "gas": "82146",
+      "gas": "82078",
       "id": "3 risk and liquidation · PortfolioMarginEngine.orderMarginOf(address)::flat account",
       "kind": "view",
       "scenario": "flat account"
     },
     {
       "function": "orderMarginOf(address)",
-      "gas": "133260",
+      "gas": "133192",
       "id": "3 risk and liquidation · PortfolioMarginEngine.orderMarginOf(address)::perps, futures and options exposure",
       "kind": "view",
       "scenario": "perps, futures and options exposure"
@@ -708,6 +708,13 @@
       "scenario": "representative"
     },
     {
+      "function": "MAX_ORACLE_STALENESS()",
+      "gas": "26206",
+      "id": "4 views · PortfolioMarginEngine.MAX_ORACLE_STALENESS()::representative",
+      "kind": "view",
+      "scenario": "representative"
+    },
+    {
       "function": "MAX_SPOT_PRICE()",
       "gas": "26622",
       "id": "4 views · PortfolioMarginEngine.MAX_SPOT_PRICE()::representative",
@@ -716,7 +723,7 @@
     },
     {
       "function": "UPGRADE_INTERFACE_VERSION()",
-      "gas": "26431",
+      "gas": "26453",
       "id": "4 views · PortfolioMarginEngine.UPGRADE_INTERFACE_VERSION()::representative",
       "kind": "view",
       "scenario": "representative"
@@ -737,14 +744,14 @@
     },
     {
       "function": "imSpotShock()",
-      "gas": "28372",
+      "gas": "28285",
       "id": "4 views · PortfolioMarginEngine.imSpotShock()::representative",
       "kind": "view",
       "scenario": "representative"
     },
     {
       "function": "imVolShock()",
-      "gas": "28307",
+      "gas": "28329",
       "id": "4 views · PortfolioMarginEngine.imVolShock()::representative",
       "kind": "view",
       "scenario": "representative"
@@ -765,21 +772,21 @@
     },
     {
       "function": "mmVolShock()",
-      "gas": "28350",
+      "gas": "28372",
       "id": "4 views · PortfolioMarginEngine.mmVolShock()::representative",
       "kind": "view",
       "scenario": "representative"
     },
     {
       "function": "optionsEngine()",
-      "gas": "28371",
+      "gas": "28393",
       "id": "4 views · PortfolioMarginEngine.optionsEngine()::representative",
       "kind": "view",
       "scenario": "representative"
     },
     {
       "function": "owner()",
-      "gas": "28320",
+      "gas": "28342",
       "id": "4 views · PortfolioMarginEngine.owner()::representative",
       "kind": "view",
       "scenario": "representative"
@@ -856,7 +863,7 @@
     },
     {
       "function": "setMarginEngine(address)",
-      "gas": "43937",
+      "gas": "43850",
       "id": "5 admin and lifecycle · CollateralVault.setMarginEngine(address)::revalidate current engine",
       "kind": "transaction",
       "scenario": "revalidate current engine"
@@ -1017,28 +1024,28 @@
     },
     {
       "function": "removeLinearMarket(address)",
-      "gas": "36612",
+      "gas": "36629",
       "id": "5 admin and lifecycle · PortfolioMarginEngine.removeLinearMarket(address)::registered venue",
       "kind": "transaction",
       "scenario": "registered venue"
     },
     {
       "function": "renounceOwnership()",
-      "gas": "28179",
+      "gas": "28201",
       "id": "5 admin and lifecycle · PortfolioMarginEngine.renounceOwnership()::current owner",
       "kind": "transaction",
       "scenario": "current owner"
     },
     {
       "function": "setOptions(address)",
-      "gas": "48261",
+      "gas": "48283",
       "id": "5 admin and lifecycle · PortfolioMarginEngine.setOptions(address)::revalidate current engine",
       "kind": "transaction",
       "scenario": "revalidate current engine"
     },
     {
       "function": "setOracle(address)",
-      "gas": "47038",
+      "gas": "47060",
       "id": "5 admin and lifecycle · PortfolioMarginEngine.setOracle(address)::replace live feed",
       "kind": "transaction",
       "scenario": "replace live feed"

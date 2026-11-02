@@ -6,7 +6,7 @@ import { verifyContract } from "../lib/verify.ts";
 import { addrUrl, txUrl } from "../lib/explorer.ts";
 import { logInfo, logPrompt, logStep, logSuccess, logTitle } from "../lib/log.ts";
 
-const EXPECTED_VERSION = "2.5.0";
+const EXPECTED_VERSION = "2.6.0";
 
 async function main() {
   logTitle("PortfolioMarginEngine Upgrade");
