@@ -115,16 +115,13 @@ risk.
 
 ## Keeper incentives / fee model
 
-> **Status (current code): keeper incentives are DISABLED.** No `liquidationFee`
-> is transferred on any liquidation path in either venue — `liquidatePosition`,
-> `liquidatePositions`, `liquidateOrder(s)`, and their perps equivalents all emit
-> a `0` fee and move no funds. The `liquidationFee` state variables and their
-> owner setters are **retained** (so a future iteration can re-enable payouts
-> without a storage migration), and the keeper's off-chain solvers model a **0
-> fee** so their balance projections match on-chain reality. The protocol runs
-> the only keeper for now, so there is nothing to incentivise; the anti-farming
-> design below is preserved as the reference for when incentives are turned back
-> on.
+> **Status (current code):** both venues charge `liquidationFeeBps` of the closed
+> notional at the mark (200 bps on prd), capped at the account's balance, and pay
+> `liquidatorShareBps` of it to the caller (20% on prd). Futures takes the fee
+> before its `OverLiquidation` guard, so the keeper reads `liquidationFeeBps` and
+> its futures solver charges it on every leg (N17). The perps solver models no
+> fee: it picks the deepest close under IM, and the fee only lowers the balance
+> further. The flat-fee design below predates the bps fee.
 
 Liquidation fees drive keeper behaviour, so the fee model must not reward
 value-destroying or farming behaviour.

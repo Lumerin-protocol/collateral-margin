@@ -34,7 +34,8 @@ const PARAMS: MMParams = {
   perpQuantityDecimals: 6,
 };
 
-const FEE = 1_000_000n; // $1 flat liquidation fee
+const FEE = 1_000_000n; // $1 flat perps liquidation fee
+const FEE_BPS = 200n; // futures liquidation fee, bps of closed notional
 
 const EXPIRY_A = 1_756_416_000n;
 const EXPIRY_B = 1_759_008_000n;
@@ -82,13 +83,52 @@ function totalCloseQty(closes: readonly FuturesCloseLeg[]): bigint {
   return closes.reduce((s, c) => s + c.closeQty, 0n);
 }
 
+describe("predict/solve: simulateFuturesClose", () => {
+  it("settles PnL like the vault, then charges bps of the closed notional up to the balance", () => {
+    const close = (balance: bigint, accountDebt: bigint, entry: bigint) =>
+      simulateFuturesClose(
+        futuresSnapshot({
+          balance,
+          accountDebt,
+          futures: { positions: [futuresAgg(2n, entry)], orders: [] },
+        }),
+        [{ expirationAt: EXPIRY_A, closeQty: 1n }],
+        P_MODERATE,
+        FEE_BPS,
+      );
+    const fee = (P_MODERATE * FEE_BPS) / 10_000n;
+
+    const paid = close(BALANCE, 0n, ENTRY);
+    assert.equal(paid.balance, BALANCE - (ENTRY - P_MODERATE) - fee);
+    assert.equal(paid.futures.positions[0]?.netQuantity, 1n);
+
+    const capped = close(ENTRY - P_MODERATE + fee / 2n, 0n, ENTRY);
+    assert.equal(capped.balance, 0n, "fee capped at what the loss leaves");
+    assert.equal(capped.accountDebt, 0n);
+
+    const short = close(1_000_000n, 0n, ENTRY);
+    assert.equal(short.balance, 0n);
+    assert.equal(short.accountDebt, ENTRY - P_MODERATE - 1_000_000n);
+
+    const gain = 5_000_000n;
+    const repaid = close(0n, 2_000_000n, P_MODERATE - gain);
+    assert.equal(repaid.accountDebt, 0n, "a gain repays debt first");
+    assert.equal(repaid.balance, gain - 2_000_000n - fee);
+  });
+});
+
 describe("predict/solve: solveFuturesClosesToTarget", () => {
   it("returns an empty set when the account is already healthy", () => {
     const snap = futuresSnapshot({
       balance: 1_000_000_000n,
       futures: { positions: [futuresAgg(1n, ENTRY)], orders: [] },
     });
-    const closes = solveFuturesClosesToTarget(snap, PARAMS, P_MODERATE, FEE);
+    const closes = solveFuturesClosesToTarget(
+      snap,
+      PARAMS,
+      P_MODERATE,
+      FEE_BPS,
+    );
     assert.equal(closes.length, 0);
   });
 
@@ -97,12 +137,12 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
     const P = P_MODERATE;
     assert.ok(mmSurplus(snap, PARAMS, P) < 0n, "fixture must start underwater");
 
-    const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE);
+    const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE_BPS);
     const qty = totalCloseQty(closes);
     assert.ok(qty > 0n, "should close at least one contract");
     assert.ok(qty < 12n, "should leave >=1 contract open (strict subset)");
 
-    const after = simulateFuturesClose(snap, closes, P, FEE);
+    const after = simulateFuturesClose(snap, closes, P, FEE_BPS);
     assert.ok(mmSurplus(after, PARAMS, P) >= 0n, "post-close: healthy at MM");
     assert.ok(imSurplus(after, PARAMS, P) <= 0n, "post-close: at/under IM");
   });
@@ -110,13 +150,13 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
   it("is the DEEPEST in-band close — one more contract breaches IM", () => {
     const snap = twelveLong();
     const P = P_MODERATE;
-    const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE);
+    const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE_BPS);
     const qty = totalCloseQty(closes);
     if (qty < 11n) {
       const oneMore: FuturesCloseLeg[] = [
         { expirationAt: EXPIRY_A, closeQty: qty + 1n },
       ];
-      const after = simulateFuturesClose(snap, oneMore, P, FEE);
+      const after = simulateFuturesClose(snap, oneMore, P, FEE_BPS);
       assert.ok(
         imSurplus(after, PARAMS, P) > 0n,
         "closing one more contract should overshoot IM",
@@ -127,7 +167,7 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
   it("returns a full close on a deep crash with no in-band subset", () => {
     const snap = twelveLong();
     const P = 100_000n;
-    const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE);
+    const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE_BPS);
     assert.equal(totalCloseQty(closes), 12n, "deep crash fully closes");
   });
 
@@ -135,10 +175,10 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
     const snap = twelveLong();
     const P = P_MODERATE;
     const degenerate: MMParams = { ...PARAMS, imSpotShock: PARAMS.mmSpotShock };
-    const closes = solveFuturesClosesToTarget(snap, degenerate, P, FEE);
+    const closes = solveFuturesClosesToTarget(snap, degenerate, P, FEE_BPS);
     const qty = totalCloseQty(closes);
     assert.ok(qty > 0n && qty <= 12n);
-    const after = simulateFuturesClose(snap, closes, P, FEE);
+    const after = simulateFuturesClose(snap, closes, P, FEE_BPS);
     assert.ok(mmSurplus(after, degenerate, P) >= 0n, "healthy at MM");
   });
 
@@ -156,7 +196,7 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
     const P = P_MODERATE;
     assert.ok(mmSurplus(snap, PARAMS, P) < 0n);
 
-    const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE);
+    const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE_BPS);
     assert.ok(totalCloseQty(closes) > 1n);
 
     const countA = closes
@@ -174,7 +214,7 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
       `closures must be balanced within one contract (A=${countA}, B=${countB})`,
     );
 
-    const after = simulateFuturesClose(snap, closes, P, FEE);
+    const after = simulateFuturesClose(snap, closes, P, FEE_BPS);
     assert.ok(mmSurplus(after, PARAMS, P) >= 0n);
     assert.ok(imSurplus(after, PARAMS, P) <= 0n);
   });
@@ -209,8 +249,7 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
     const P = P_MODERATE;
     assert.ok(mmSurplus(snap, PARAMS, P) < 0n, "fixture must start underwater");
 
-    // Production passes a zero fee (the on-chain payout is disabled).
-    const closes = solveFuturesClosesToTarget(snap, PARAMS, P, 0n);
+    const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE_BPS);
     assert.ok(closes.length > 0, "should close something");
     assert.equal(
       closes[0]?.expirationAt,
@@ -218,7 +257,7 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
       "highest per-lot requirement drop first",
     );
 
-    const after = simulateFuturesClose(snap, closes, P, 0n);
+    const after = simulateFuturesClose(snap, closes, P, FEE_BPS);
     assert.ok(mmSurplus(after, PARAMS, P) >= 0n, "post-close: healthy at MM");
     assert.ok(imSurplus(after, PARAMS, P) <= 0n, "post-close: at/under IM");
   });
@@ -238,11 +277,11 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
     const P = P_MODERATE;
     assert.ok(mmSurplus(snap, PARAMS, P) < 0n, "fixture must start underwater");
 
-    const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE);
+    const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE_BPS);
     let state = snap;
     for (const leg of closes) {
       if (mmSurplus(state, PARAMS, P) >= 0n) break;
-      state = simulateFuturesClose(state, [leg], P, FEE);
+      state = simulateFuturesClose(state, [leg], P, FEE_BPS);
       assert.ok(imSurplus(state, PARAMS, P) <= 0n, "never above IM");
     }
     assert.ok(mmSurplus(state, PARAMS, P) >= 0n, "healthy after the batch");
@@ -269,13 +308,13 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
       snap,
       PARAMS,
       P_MODERATE,
-      FEE,
+      FEE_BPS,
       EXPIRY_A,
     );
     assert.ok(closes.length > 0, "the live expiry is still closable");
     assert.ok(closes.every((c) => c.expirationAt === EXPIRY_B));
     assert.deepEqual(
-      solveFuturesClosesToTarget(snap, PARAMS, P_MODERATE, FEE, EXPIRY_B),
+      solveFuturesClosesToTarget(snap, PARAMS, P_MODERATE, FEE_BPS, EXPIRY_B),
       [],
     );
   });
@@ -292,7 +331,7 @@ describe("predict/solve: solveFuturesClosesToTarget", () => {
       },
     });
     const P = P_MODERATE;
-    const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE);
+    const closes = solveFuturesClosesToTarget(snap, PARAMS, P, FEE_BPS);
     const countA = closes
       .filter((c) => c.expirationAt === EXPIRY_A)
       .reduce((s, c) => s + c.closeQty, 0n);

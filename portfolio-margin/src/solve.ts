@@ -18,6 +18,7 @@ import {
 } from "./mm.ts";
 
 const WAD = 10n ** 18n;
+const BPS = 10_000n;
 
 function abs(x: bigint): bigint {
   return x < 0n ? -x : x;
@@ -335,14 +336,20 @@ function overLiquidated(
 
 /**
  * Off-chain replica of the futures batch close: reduce each aggregate toward
- * zero by `closeQty` and debit realized PnL + flat fee per expiry leg.
- * Mirrors `Futures._doPartialLiquidatePosition` / `_doLiquidateFullPosition`.
+ * zero by `closeQty`, settle the realized PnL against the insurance fund as the
+ * vault does (a gain first cancels account debt, a loss beyond the balance
+ * becomes debt), then charge `liquidationFeeBps` of the closed notional at the
+ * live mark, capped at the balance. Mirrors `HashPowerFutures._closePosition`.
+ *
+ * Exact for one leg, which is how `venueRun` replays a candidate. Several legs
+ * are netted before the fee is charged, while the venue caps each leg's fee at
+ * the balance it finds, so the result can differ from the venue's either way.
  */
 export function simulateFuturesClose(
   snap: AccountSnapshot,
   closes: readonly FuturesCloseLeg[],
   currentPrice: bigint,
-  liquidationFee: bigint,
+  liquidationFeeBps: bigint,
 ): AccountSnapshot {
   const closeByExpiry = new Map<bigint, bigint>();
   for (const c of closes) {
@@ -353,7 +360,8 @@ export function simulateFuturesClose(
   }
 
   const remaining: AccountSnapshot["futures"]["positions"] = [];
-  let balanceDelta = 0n;
+  let pnl = 0n;
+  let fee = 0n;
   for (const pos of snap.futures.positions) {
     const want = closeByExpiry.get(pos.expirationAt) ?? 0n;
     if (want <= 0n) {
@@ -373,8 +381,8 @@ export function simulateFuturesClose(
     // mark it has been carrying since settlement, and it cannot move again.
     const mark =
       pos.settlementPrice !== 0n ? pos.settlementPrice : currentPrice;
-    const pnl = (mark - entry) * signedClose;
-    balanceDelta += pnl - liquidationFee;
+    pnl += (mark - entry) * signedClose;
+    fee += (currentPrice * closeAbs * liquidationFeeBps) / BPS;
 
     if (closeAbs >= absNet) continue;
     const newAbs = absNet - closeAbs;
@@ -386,9 +394,23 @@ export function simulateFuturesClose(
     });
   }
 
+  let { balance, accountDebt } = snap;
+  if (pnl >= 0n) {
+    const cancelled = pnl < accountDebt ? pnl : accountDebt;
+    accountDebt -= cancelled;
+    balance += pnl - cancelled;
+  } else if (-pnl > balance) {
+    accountDebt += -pnl - balance;
+    balance = 0n;
+  } else {
+    balance += pnl;
+  }
+  balance -= fee < balance ? fee : balance;
+
   return {
     ...snap,
-    balance: snap.balance + balanceDelta,
+    balance,
+    accountDebt,
     futures: { ...snap.futures, positions: remaining },
   };
 }
@@ -434,19 +456,24 @@ export function simulatePerpClose(
  *
  * The venue runs the legs in order, stops once the account is healthy, and
  * reverts `OverLiquidation` if that close leaves the balance above IM while
- * IM > MM. So every candidate is replayed against that loop (`venueAccepts`), and
- * the first that passes is returned:
+ * IM > MM. So every candidate is replayed against that loop (`venueRun`), and
+ * the first that the venue accepts and that restores MM is returned:
  *   1. the target on the round-robin path, then on each expiry's own path (a
  *      contract of the first-ranked expiry can step clean over the band);
  *   2. the shallowest healthy prefix the guard lets through, on the same paths,
  *      which also finds closes that leave IM equal to MM (a delta-neutral book);
- *   3. two legs on two expiries in any proportion (`pairCloses`);
- *   4. a full close of every closable aggregate (deep crash / bad debt).
+ *   3. two legs on two expiries in any proportion (`pairCloses`).
+ * Failing that, the first accepted candidate that leaves the account underwater
+ * (the fee cap makes a multi-leg prefix depend on the order the venue runs it),
+ * else a full close of every closable aggregate (deep crash / bad debt).
  *
  * Up to the third candidate the cost does not depend on the number of contracts:
  * the paths are never expanded unit by unit (see `searchClosePath`), and the legs
  * carry many contracts each (see `stagedLegs`), so one `liquidatePositions` call
  * can close the whole amount.
+ *
+ * `liquidationFeeBps` is the venue's `liquidationFeeBps()`: it charges that share
+ * of each leg's closed notional before the guard reads the balance.
  *
  * Aggregates expiring at or before `now` (unix seconds) are left alone, as the
  * venue skips matured legs; they still count toward the requirement. Returns `[]`
@@ -456,7 +483,7 @@ export function solveFuturesClosesToTarget(
   snap: AccountSnapshot,
   params: MMParams,
   currentPrice: bigint,
-  liquidationFee: bigint,
+  liquidationFeeBps: bigint,
   now?: bigint,
 ): FuturesCloseLeg[] {
   if (snap.futures.positions.length === 0) return [];
@@ -466,16 +493,22 @@ export function solveFuturesClosesToTarget(
     snap,
     params,
     currentPrice,
-    liquidationFee,
+    liquidationFeeBps,
     now,
   );
   if (ordered.length === 0) return [];
 
   const hasBuffer = params.imSpotShock > params.mmSpotShock;
-  const accepted = (legs: readonly FuturesCloseLeg[]) =>
-    venueAccepts(snap, legs, params, currentPrice, liquidationFee);
+  let underwater: FuturesCloseLeg[] | undefined;
+  const accepted = (legs: FuturesCloseLeg[]) => {
+    const end = venueRun(snap, legs, params, currentPrice, liquidationFeeBps);
+    if (end === undefined) return false;
+    if (mmSurplus(end, params, currentPrice) >= 0n) return true;
+    underwater ??= legs;
+    return false;
+  };
   const stageTo = (path: ClosePath, target: bigint) =>
-    stagedLegs(snap, path, target, params, currentPrice, liquidationFee);
+    stagedLegs(snap, path, target, params, currentPrice, liquidationFeeBps);
 
   const guardedTargets: { path: ClosePath; target: bigint }[] = [];
   const paths =
@@ -487,7 +520,7 @@ export function solveFuturesClosesToTarget(
         snap,
         path.legsBetween(0n, k),
         currentPrice,
-        liquidationFee,
+        liquidationFeeBps,
       );
     const { target, guarded } = searchClosePath(
       path,
@@ -507,37 +540,47 @@ export function solveFuturesClosesToTarget(
     if (accepted(legs)) return legs;
   }
 
-  const pair = pairCloses(snap, ordered, params, currentPrice, liquidationFee);
+  const pair = pairCloses(
+    snap,
+    ordered,
+    params,
+    currentPrice,
+    liquidationFeeBps,
+  );
   if (pair !== undefined && accepted(pair)) return pair;
+  if (underwater !== undefined) return underwater;
 
   const full = ordered.map((p) => ({
     expirationAt: p.expirationAt,
     closeQty: abs(p.netQuantity),
   }));
-  return accepted(full) ? full : [];
+  return venueRun(snap, full, params, currentPrice, liquidationFeeBps)
+    ? full
+    : [];
 }
 
 /**
- * Whether `liquidatePositions` accepts `legs`: it runs them in order, stops
- * before a leg once the account is healthy, and reverts `OverLiquidation` when a
- * close trips the guard, or `NotLiquidatable` when nothing closed.
+ * The account after `liquidatePositions` runs `legs`, or `undefined` if it
+ * reverts. It runs them in order, stops before a leg once the account is
+ * healthy, and reverts `OverLiquidation` when a close trips the guard, or
+ * `NotLiquidatable` when nothing closed.
  */
-function venueAccepts(
+function venueRun(
   snap: AccountSnapshot,
   legs: readonly FuturesCloseLeg[],
   params: MMParams,
   currentPrice: bigint,
-  liquidationFee: bigint,
-): boolean {
+  liquidationFeeBps: bigint,
+): AccountSnapshot | undefined {
   let state = snap;
   let closed = false;
   for (const leg of legs) {
     if (mmSurplus(state, params, currentPrice) >= 0n) break;
-    state = simulateFuturesClose(state, [leg], currentPrice, liquidationFee);
+    state = simulateFuturesClose(state, [leg], currentPrice, liquidationFeeBps);
     closed = true;
-    if (overLiquidated(state, params, currentPrice)) return false;
+    if (overLiquidated(state, params, currentPrice)) return undefined;
   }
-  return closed;
+  return closed ? state : undefined;
 }
 
 const MAX_PAIR_LEADS = 20_000;
@@ -557,7 +600,7 @@ function pairCloses(
   ordered: readonly FuturesAggregate[],
   params: MMParams,
   currentPrice: bigint,
-  liquidationFee: bigint,
+  liquidationFeeBps: bigint,
 ): FuturesCloseLeg[] | undefined {
   const hasBuffer = params.imSpotShock > params.mmSpotShock;
   let leads = MAX_PAIR_LEADS;
@@ -571,7 +614,7 @@ function pairCloses(
           snap,
           [lead],
           currentPrice,
-          liquidationFee,
+          liquidationFeeBps,
         );
         if (mmSurplus(start, params, currentPrice) >= 0n) continue;
         const path = closePath([second]);
@@ -580,7 +623,7 @@ function pairCloses(
             start,
             path.legsBetween(0n, k),
             currentPrice,
-            liquidationFee,
+            liquidationFeeBps,
           );
         const { target, guarded } = searchClosePath(
           path,
@@ -741,10 +784,9 @@ function searchClosePath(
 }
 
 /**
- * Interval bounds over `u ∈ [0, last]` for `searchClosePath`: the ends, `u = 1`
- * (the first close of an expiry can carry a flat fee), and every root of the
- * requirement's clamps. Net delta and both PnL sums are affine in `u`, so each
- * root is read off the line through the ends:
+ * Interval bounds over `u ∈ [0, last]` for `searchClosePath`: the ends, `u = 1`,
+ * and every root of the requirement's clamps. Net delta and both PnL sums are
+ * affine in `u`, so each root is read off the line through the ends:
  *
  *   - stress `max(|netDelta + buy|, |netDelta − sell|)` turns at `netDelta = −buy`,
  *     at `netDelta = sell`, and where the legs swap, `netDelta = (sell − buy) / 2`;
@@ -821,7 +863,7 @@ function stagedLegs(
   target: bigint,
   params: MMParams,
   currentPrice: bigint,
-  liquidationFee: bigint,
+  liquidationFeeBps: bigint,
 ): FuturesCloseLeg[] {
   const cuts = [0n, target];
   for (let split = 0; ; split++) {
@@ -835,7 +877,7 @@ function stagedLegs(
         cuts[s + 1] ?? 0n,
         params,
         currentPrice,
-        liquidationFee,
+        liquidationFeeBps,
       );
       for (const leg of stage) {
         legs.push(leg);
@@ -848,7 +890,7 @@ function stagedLegs(
       stageOf,
       params,
       currentPrice,
-      liquidationFee,
+      liquidationFeeBps,
     );
     if (s === undefined || split === MAX_STAGE_SPLITS) return legs;
     const lo = cuts[s] ?? 0n;
@@ -871,7 +913,7 @@ function stageLegs(
   to: bigint,
   params: MMParams,
   currentPrice: bigint,
-  liquidationFee: bigint,
+  liquidationFeeBps: bigint,
 ): FuturesCloseLeg[] {
   const legs = path.legsBetween(from, to);
   if (legs.length < 2) return legs;
@@ -879,13 +921,13 @@ function stageLegs(
     snap,
     path.legsBetween(0n, from),
     currentPrice,
-    liquidationFee,
+    liquidationFeeBps,
   );
   return legs
     .map((leg) => ({
       leg,
       effect: mmSurplus(
-        simulateFuturesClose(start, [leg], currentPrice, liquidationFee),
+        simulateFuturesClose(start, [leg], currentPrice, liquidationFeeBps),
         params,
         currentPrice,
       ),
@@ -905,14 +947,14 @@ function stageToSplit(
   stageOf: readonly number[],
   params: MMParams,
   currentPrice: bigint,
-  liquidationFee: bigint,
+  liquidationFeeBps: bigint,
 ): number | undefined {
   let state = snap;
   for (const [i, leg] of legs.entries()) {
     if (mmSurplus(state, params, currentPrice) >= 0n) {
       return i > 0 && stageOf[i - 1] === stageOf[i] ? stageOf[i] : undefined;
     }
-    state = simulateFuturesClose(state, [leg], currentPrice, liquidationFee);
+    state = simulateFuturesClose(state, [leg], currentPrice, liquidationFeeBps);
     if (overLiquidated(state, params, currentPrice)) return stageOf[i];
   }
   return undefined;
@@ -1121,7 +1163,7 @@ function rankExpiriesForClose(
   snap: AccountSnapshot,
   params: MMParams,
   currentPrice: bigint,
-  liquidationFee: bigint,
+  liquidationFeeBps: bigint,
   now: bigint | undefined,
 ): FuturesAggregate[] {
   const closable = snap.futures.positions.filter(
@@ -1131,7 +1173,7 @@ function rankExpiriesForClose(
   const dropOf = (p: FuturesAggregate) =>
     before -
     mmRequired(
-      unitClosed(snap, p, currentPrice, liquidationFee),
+      unitClosed(snap, p, currentPrice, liquidationFeeBps),
       params,
       currentPrice,
     );
@@ -1157,13 +1199,13 @@ function unitClosed(
   snap: AccountSnapshot,
   pos: FuturesAggregate,
   P: bigint,
-  liquidationFee: bigint,
+  liquidationFeeBps: bigint,
 ): AccountSnapshot {
   return simulateFuturesClose(
     snap,
     [{ expirationAt: pos.expirationAt, closeQty: 1n }],
     P,
-    liquidationFee,
+    liquidationFeeBps,
   );
 }
 
