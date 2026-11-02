@@ -551,6 +551,66 @@ export async function readBitcoinTip(): Promise<BitcoinTip> {
   return { height, time, periodStartTime };
 }
 
+/**
+ * Public explorers that report the Bitcoin tip, each run by a different
+ * operator. The SPV keeper reads Bitcoin through the same provider as
+ * readBitcoinTip, so a stuck node there would hide the relay's lag from both.
+ * bitaps answers 429 above 3 requests in 5 seconds; one per check is fine.
+ */
+const PUBLIC_BITCOIN_TIPS: { url: string; height: (body: string) => unknown }[] = [
+  { url: "https://mempool.space/api/blocks/tip/height", height: Number },
+  { url: "https://blockstream.info/api/blocks/tip/height", height: Number },
+  { url: "https://blockchain.info/q/getblockcount", height: Number },
+  { url: "https://api.blockcypher.com/v1/btc/main", height: (body) => JSON.parse(body).height },
+  {
+    url: "https://api.bitaps.com/btc/v1/blockchain/block/last",
+    height: (body) => JSON.parse(body).data.height,
+  },
+];
+/** A throttled explorer must not hold up the check: deadlines to the response headers, then to the end of the body. */
+const EXPLORER_HEADERS_TIMEOUT_MS = 3_000;
+const EXPLORER_BODY_TIMEOUT_MS = 2_000;
+
+async function fetchExplorer(url: string): Promise<string> {
+  const controller = new AbortController();
+  const abortAfter = (ms: number, phase: string) =>
+    setTimeout(() => controller.abort(new Error(`${phase} timed out after ${ms} ms`)), ms);
+  let timer = abortAfter(EXPLORER_HEADERS_TIMEOUT_MS, "connect and headers");
+  try {
+    const response = await fetch(url, {
+      headers: { "User-Agent": "col-mar-vault-mon" },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    clearTimeout(timer);
+    timer = abortAfter(EXPLORER_BODY_TIMEOUT_MS, "body");
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+    // Releases the connection of an unread error body.
+    controller.abort();
+  }
+}
+
+/** Tips from the explorers that answered in time with a valid height, and why the others did not. */
+export async function readPublicBitcoinTips(): Promise<{ heights: number[]; errors: string[] }> {
+  const results = await Promise.allSettled(
+    PUBLIC_BITCOIN_TIPS.map(async ({ url, height }) => {
+      const value = height(await fetchExplorer(url));
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0)
+        throw new Error(`bad height ${String(value).slice(0, 40)}`);
+      return value;
+    }),
+  );
+  const heights: number[] = [];
+  const errors: string[] = [];
+  results.forEach((result, i) => {
+    if (result.status === "fulfilled") heights.push(result.value);
+    else errors.push(`${new URL(PUBLIC_BITCOIN_TIPS[i].url).hostname}: ${result.reason?.message ?? result.reason}`);
+  });
+  return { heights, errors };
+}
+
 /** Base produces a block every 2 seconds; price look-backs are counted in blocks. */
 const BASE_BLOCK_SECONDS = 2n;
 const BLOCKS_1H = 3_600n / BASE_BLOCK_SECONDS;

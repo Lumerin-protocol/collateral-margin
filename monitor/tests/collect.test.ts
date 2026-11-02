@@ -382,10 +382,13 @@ function graphql(url: string) {
   throw new Error(`unexpected url ${url}`);
 }
 
+/** The Bitcoin node's tip; a test sets it below BTC_TIP to model a stuck node. */
+let bitcoinNodeTip = BTC_TIP;
+
 function bitcoinRpc(request: { id: number; method: string; params: unknown[] }) {
   const { id, method, params } = request;
   let result: unknown;
-  if (method === "getblockcount") result = BTC_TIP;
+  if (method === "getblockcount") result = bitcoinNodeTip;
   else if (method === "getblockhash") result = `hash-${params[0]}`;
   else if (method === "getblockheader") {
     const height = Number(String(params[0]).slice("hash-".length));
@@ -394,6 +397,21 @@ function bitcoinRpc(request: { id: number; method: string; params: unknown[] }) 
   return { jsonrpc: "2.0", id, result, error: null };
 }
 
+/** Public explorers by host, each answering the tip in its own format. */
+const EXPLORERS: Record<string, (tip: number) => Response> = {
+  "mempool.space": (tip) => new Response(String(tip)),
+  "blockstream.info": (tip) => new Response(String(tip)),
+  "blockchain.info": (tip) => new Response(String(tip)),
+  "api.blockcypher.com": (tip) => Response.json({ name: "BTC.main", height: tip }),
+  "api.bitaps.com": (tip) => Response.json({ data: { height: tip } }),
+};
+let explorerTip = BTC_TIP;
+/** Per-host replacement answers (errors, hangs, bad heights); cleared after each test. */
+const explorerOverrides = new Map<
+  string,
+  (signal: AbortSignal | null | undefined) => Response | Promise<Response>
+>();
+
 const userAgents = new Set<string>();
 
 globalThis.fetch = (async (
@@ -401,6 +419,11 @@ globalThis.fetch = (async (
   init?: RequestInit,
 ) => {
   const url = String(input);
+  const host = new URL(url).hostname;
+  if (host in EXPLORERS) {
+    const override = explorerOverrides.get(host);
+    return override ? override(init?.signal) : EXPLORERS[host](explorerTip);
+  }
   if (url.startsWith("https://mm.test"))
     return failHealth
       ? new Response("busy", { status: 503 })
@@ -543,6 +566,87 @@ describe("collect", () => {
     assert.equal(value("SpvBlocksBehind"), 1);
     assert.ok(Math.abs((value("SpvFeedAgeSeconds") ?? 0) - 300) <= 5);
     assert.equal(value("BtcUsdUpdates1h"), 5);
+  });
+
+  it("N18: measures the relay's lag against public explorers when the Bitcoin node is stuck", async () => {
+    // The keeper and this monitor share one Bitcoin provider. If its node stops at
+    // the relay's height, the relay looks current; the explorers have two more blocks.
+    const relayed = BTC_TIP - 1;
+    bitcoinNodeTip = relayed;
+    explorerTip = relayed + 2;
+    try {
+      const { collect } = await import("../src/index.ts");
+      const result = await collect();
+      const behind = result.points.find((p) => p.MetricName === "SpvBlocksBehind");
+      assert.equal(behind?.Value, 2);
+    } finally {
+      bitcoinNodeTip = BTC_TIP;
+      explorerTip = BTC_TIP;
+    }
+  });
+
+  it("outvotes one explorer reporting a wrong height", async () => {
+    explorerOverrides.set("api.blockcypher.com", () => Response.json({ height: BTC_TIP + 500 }));
+    explorerOverrides.set("blockchain.info", () => new Response("<html>busy</html>"));
+    try {
+      const { collect } = await import("../src/index.ts");
+      const result = await collect();
+      const behind = result.points.find((p) => p.MetricName === "SpvBlocksBehind");
+      assert.equal(behind?.Value, 1);
+      assert.doesNotMatch(result.summary, /failed=/);
+    } finally {
+      explorerOverrides.clear();
+    }
+  });
+
+  it("drops throttled, unresponsive and stalled explorers within the deadlines", async () => {
+    const hangUntilAborted = (signal: AbortSignal | null | undefined) =>
+      new Promise<Response>((_, reject) =>
+        signal?.addEventListener("abort", () => reject(signal.reason)),
+      );
+    // Headers arrive, then the body never finishes.
+    const stalledBody = (signal: AbortSignal | null | undefined) =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("97"));
+            signal?.addEventListener("abort", () => controller.error(signal.reason));
+          },
+        }),
+      );
+    explorerOverrides.set("api.bitaps.com", () => Response.json({ info: "ratelimit" }, { status: 429 }));
+    explorerOverrides.set("mempool.space", hangUntilAborted);
+    explorerOverrides.set("blockstream.info", stalledBody);
+    bitcoinNodeTip = BTC_TIP - 1;
+    explorerTip = BTC_TIP + 1;
+    const started = Date.now();
+    try {
+      const { collect } = await import("../src/index.ts");
+      const result = await collect();
+      const elapsed = Date.now() - started;
+      assert.ok(elapsed < 4_000, `took ${elapsed} ms`);
+      // node and two explorers left: BTC_TIP - 1, BTC_TIP + 1, BTC_TIP + 1
+      const behind = result.points.find((p) => p.MetricName === "SpvBlocksBehind");
+      assert.equal(behind?.Value, 2);
+    } finally {
+      explorerOverrides.clear();
+      bitcoinNodeTip = BTC_TIP;
+      explorerTip = BTC_TIP;
+    }
+  });
+
+  it("falls back to the Bitcoin node and reports it when every explorer fails", async () => {
+    for (const host of Object.keys(EXPLORERS))
+      explorerOverrides.set(host, () => new Response("down", { status: 503 }));
+    try {
+      const { collect } = await import("../src/index.ts");
+      const result = await collect();
+      const behind = result.points.find((p) => p.MetricName === "SpvBlocksBehind");
+      assert.equal(behind?.Value, 1);
+      assert.match(result.summary, /failed=bitcoin_explorers/);
+    } finally {
+      explorerOverrides.clear();
+    }
   });
 
   it("names markets perp and fut-<mon>-<dd> by the expiry's UTC date", () => {

@@ -510,6 +510,31 @@ resource "aws_cloudwatch_metric_alarm" "price_feed_age" {
   })
 }
 
+# The oracle repo's hpo-oracle page measures the same lag through the keeper's
+# own Bitcoin node, so a stuck node makes the relay look current there. This
+# one takes the tip most of Alchemy and five public explorers agree on.
+resource "aws_cloudwatch_metric_alarm" "spv_behind_bitcoin" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-spv-behind-bitcoin-${local.vault_mon_env}"
+  alarm_description   = "The hashprice oracle trails the Bitcoin tip by 2 or more blocks for 15 minutes, by the tip most of Alchemy and the public explorers agree on. If hpo-oracle-${local.vault_mon_env} is OK, the keeper's Bitcoin node is stuck and the keeper does not see the new blocks: check its logs and its BITCOIN_RPC_URL. The venues and the margin engine reject the price once it is older than MAX_ORACLE_STALENESS."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 3
+  metric_name         = "SpvBlocksBehind"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Minimum"
+  threshold           = 2
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar SPV Behind Bitcoin"
+    Capability = "Monitoring"
+  })
+}
+
 resource "aws_cloudwatch_metric_alarm" "vault_util_warn" {
   count               = var.vault_monitoring.create ? 1 : 0
   provider            = aws.use1
@@ -1226,6 +1251,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
               [for alarm in aws_cloudwatch_metric_alarm.btc_halving : alarm.arn],
               [for alarm in aws_cloudwatch_metric_alarm.price_move : alarm.arn],
               [for alarm in aws_cloudwatch_metric_alarm.price_feed_age : alarm.arn],
+              aws_cloudwatch_metric_alarm.spv_behind_bitcoin[*].arn,
               aws_cloudwatch_metric_alarm.vault_util_warn[*].arn,
               aws_cloudwatch_metric_alarm.vault_util_crit[*].arn,
               aws_cloudwatch_metric_alarm.vault_halted[*].arn,

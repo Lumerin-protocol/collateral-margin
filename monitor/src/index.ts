@@ -33,6 +33,7 @@ import {
   readMarketMakerHealth,
   readPointsMeta,
   readPrices,
+  readPublicBitcoinTips,
   readSubgraphMeta,
   WATCHED_SUBGRAPHS,
   readVault,
@@ -91,6 +92,7 @@ export async function collect(): Promise<{
     maker,
     makerHealth,
     bitcoinTip,
+    publicTips,
     prices,
     subgraphMetas,
   ] = await Promise.all([
@@ -125,6 +127,8 @@ export async function collect(): Promise<{
         log(`halving check failed: ${error}`);
         return null;
       }),
+      // Never rejects; each explorer that fails is left out.
+      readPublicBitcoinTips(),
       // Best-effort for the same reason.
       readPrices(at, vault.marginEngine).catch((error) => {
         failed.push("prices");
@@ -315,11 +319,15 @@ export async function collect(): Promise<{
     const { roundId, roundId1h } = prices.btcUsd;
     if (roundId >> 64n === roundId1h >> 64n)
       points.push(metric("BtcUsdUpdates1h", Number(roundId - roundId1h), "Count"));
-    if (bitcoinTip)
-      points.push(
-        metric("SpvBlocksBehind", Math.max(0, bitcoinTip.height - prices.spv.height), "Count"),
-      );
+    const tip = consensusTip([
+      ...(bitcoinTip ? [bitcoinTip.height] : []),
+      ...publicTips.heights,
+    ]);
+    if (tip !== null)
+      points.push(metric("SpvBlocksBehind", Math.max(0, tip - prices.spv.height), "Count"));
   }
+  if (publicTips.errors.length) log(`bitcoin explorers failed: ${publicTips.errors.join("; ")}`);
+  if (!publicTips.heights.length) failed.push("bitcoin_explorers");
 
   const book = maker ? marketMakerMetrics(maker, decimals) : null;
   points.push(...(book?.points ?? []));
@@ -355,6 +363,17 @@ function feedMetrics(prefix: string, ageMetric: string, feed: FeedHistory): Metr
     metric(`${prefix}Change24hPct`, change(feed.ago24h)),
     metric(ageMetric, secondsSince(feed.updatedAt), "Seconds"),
   ];
+}
+
+/**
+ * The upper median of the tips that answered: a node stuck behind, or one
+ * explorer reporting a wrong height, is outvoted, and with two answers the
+ * higher one wins so a stuck node still shows. Null when none answered.
+ */
+function consensusTip(heights: number[]): number | null {
+  if (!heights.length) return null;
+  const sorted = [...heights].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
 }
 
 function secondsSince(timestamp: number): number {
