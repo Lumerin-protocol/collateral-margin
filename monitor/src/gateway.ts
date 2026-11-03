@@ -151,6 +151,11 @@ export interface ChainState {
   pendingFunding: bigint;
   futuresLegs: { expirationAt: bigint; net: bigint }[];
   perpsNet: bigint;
+  /** Mark prices, collateral-token units: futures is per whole contract, perps per 1e6 units. */
+  futuresMark: bigint;
+  perpsMark: bigint;
+  /** Liquidation fee each venue keeps after the liquidator's share, in bps of notional. */
+  unwindBudgetBps: { venue: Address; bps: number }[];
 }
 
 export async function readChainState(
@@ -164,12 +169,26 @@ export async function readChainState(
     "function getActiveExpirationDates(address user) view returns (uint256[])",
     "function getUserPosition(address user, uint256 expirationAt) view returns (Position)",
     "function getUserPosition(address user) view returns (Position)",
+    "function liquidationFeeBps() view returns (uint16)",
+    "function liquidatorShareBps() view returns (uint16)",
+    "function getMarketPrice() view returns (uint256)",
   ]);
   const futures = { ...at, abi, address: FUTURES_ADDRESS };
   const perps = { ...at, abi, address: PERPS_ADDRESS };
 
-  const [usdcRaw, futuresRisk, expiries, perpsRisk, perpsPosition] =
-    await chain.multicall({
+  const [
+    usdcRaw,
+    futuresRisk,
+    expiries,
+    perpsRisk,
+    perpsPosition,
+    futuresLiquidationFee,
+    futuresLiquidatorShare,
+    perpsLiquidationFee,
+    perpsLiquidatorShare,
+    futuresMark,
+    perpsMark,
+  ] = await chain.multicall({
       ...at,
       multicallAddress: MULTICALL3,
       allowFailure: false,
@@ -200,6 +219,12 @@ export async function readChainState(
           functionName: "getUserPosition",
           args: [BACKSTOP],
         },
+        { ...futures, functionName: "liquidationFeeBps" },
+        { ...futures, functionName: "liquidatorShareBps" },
+        { ...perps, functionName: "liquidationFeeBps" },
+        { ...perps, functionName: "liquidatorShareBps" },
+        { ...futures, functionName: "getMarketPrice" },
+        { ...perps, functionName: "getMarketPrice" },
       ],
     });
 
@@ -212,7 +237,7 @@ export async function readChainState(
       functionName: "getUserPosition",
       args: [BACKSTOP, expirationAt],
     })),
-  })) as { netQuantity: bigint; netEntryValue: bigint }[];
+  })) as unknown as { netQuantity: bigint; netEntryValue: bigint }[];
   const futuresLegs = expiries.flatMap((expirationAt, index) => {
     const net = positions[index].netQuantity;
     return net === 0n ? [] : [{ expirationAt, net }];
@@ -224,12 +249,29 @@ export async function readChainState(
     pendingFunding: perpsRisk.pendingFunding,
     futuresLegs,
     perpsNet: perpsPosition.netQuantity,
+    futuresMark,
+    perpsMark,
+    unwindBudgetBps: [
+      {
+        venue: FUTURES_ADDRESS,
+        bps: keptBps(futuresLiquidationFee, futuresLiquidatorShare),
+      },
+      {
+        venue: PERPS_ADDRESS,
+        bps: keptBps(perpsLiquidationFee, perpsLiquidatorShare),
+      },
+    ],
   };
+}
+
+/** Same rounding as the venues: the liquidator's share rounds down, the venue keeps the rest. */
+function keptBps(feeBps: number, liquidatorShareBps: number): number {
+  return feeBps - Math.floor((feeBps * liquidatorShareBps) / 10_000);
 }
 
 /** One order book and the market maker's position in it. Prices are collateral-token units. */
 export interface MarketBook {
-  /** "perps" or "futures-<expirationAt>". */
+  /** "perp" or "fut-<mon>-<dd>" (marketName). */
   market: string;
   /** notional = price * |net| / quantityScale: perps 1e6, futures whole contracts. */
   quantityScale: bigint;
@@ -331,7 +373,7 @@ export async function readMarketMaker(
 
   const markets: MarketBook[] = [
     {
-      market: "perps",
+      market: marketName("perps"),
       quantityScale: 1_000_000n,
       markPrice: perpsPrice,
       bids: perpsBids,
@@ -345,7 +387,7 @@ export async function readMarketMaker(
       ];
       const position = futuresReads[2 * index + 1] as { netQuantity: bigint };
       return {
-        market: `futures-${expirationAt}`,
+        market: marketName(`futures:${expirationAt}`),
         quantityScale: 1n,
         markPrice: futuresPrice,
         bids,
@@ -397,12 +439,26 @@ export async function readMarketMakerHealth(
     throttled: body.risk.throttled,
     pauseNew: body.risk.pauseNew,
     markets: body.markets.map((market) => ({
-      // Same ids as the book metrics: "futures:<exp>" becomes "futures-<exp>".
-      market: market.id.replace(":", "-"),
+      market: marketName(market.id),
       breaker: market.breaker,
       ownOrders: market.ownOrders,
     })),
   };
+}
+
+const MONTHS = "jan feb mar apr may jun jul aug sep oct nov dec".split(" ");
+
+/**
+ * Market dimension value, shared by the book metrics and the market maker's
+ * /health ids ("perps", "futures:<expirationAt>"): "perp", or "fut-<mon>-<dd>"
+ * from the expiry's UTC date. Listed expiries are under a year apart, so the
+ * year is left out.
+ */
+export function marketName(id: string): string {
+  if (id === "perps") return "perp";
+  const expiry = new Date(Number(id.slice("futures:".length)) * 1000);
+  const day = String(expiry.getUTCDate()).padStart(2, "0");
+  return `fut-${MONTHS[expiry.getUTCMonth()]}-${day}`;
 }
 
 /** Block timestamp at a pinned height, for when the subgraph omits its own. */
@@ -416,16 +472,233 @@ export function readBlockNumber() {
 }
 
 /** Points-subgraph head, so the caller can measure its lag against the chain. */
-export async function readPointsMeta(): Promise<{
+export function readPointsMeta() {
+  return readSubgraphMeta(POINTS_SUBGRAPH_URL);
+}
+
+/**
+ * Subgraphs the monitor only watches for lag and indexing errors, keyed by the
+ * Subgraph dimension. An unset URL is skipped.
+ */
+export const WATCHED_SUBGRAPHS = {
+  futures: process.env.FUTURES_SUBGRAPH_URL ?? "",
+  derivatives: process.env.DERIVATIVES_SUBGRAPH_URL ?? "",
+  oracles: process.env.HASHPRICE_ORACLE_SUBGRAPH_URL ?? "",
+};
+
+/** A subgraph's indexed head and error flag from `_meta`. */
+export async function readSubgraphMeta(url: string): Promise<{
   block: number;
   hasIndexingErrors: boolean;
 }> {
   const { _meta } = await gql(
-    POINTS_SUBGRAPH_URL,
+    url,
     `{ _meta { block { number } hasIndexingErrors } }`,
   );
   return {
     block: Number(_meta.block.number),
     hasIndexingErrors: Boolean(_meta.hasIndexingErrors),
   };
+}
+
+/** Blocks between Bitcoin difficulty retargets; the block-time average spans one. */
+export const DIFFICULTY_PERIOD = 2016;
+
+/** Bitcoin tip height and the header times at the tip and one retarget period back. */
+export interface BitcoinTip {
+  height: number;
+  time: number;
+  periodStartTime: number;
+}
+
+/**
+ * Terraform hands the Lambda BITCOIN_RPC_URL (Alchemy's bitcoin-mainnet); a
+ * local run composes it from ALCHEMY_API_KEY. Resolved per call so a missing
+ * URL fails only the halving countdown.
+ */
+function resolveBitcoinRpcUrl(): string {
+  const explicit = process.env.BITCOIN_RPC_URL;
+  if (explicit) return explicit;
+  const apiKey = process.env.ALCHEMY_API_KEY;
+  if (!apiKey) throw new Error("set BITCOIN_RPC_URL or ALCHEMY_API_KEY");
+  return `https://bitcoin-mainnet.g.alchemy.com/v2/${apiKey}`;
+}
+
+async function bitcoinRpc<T>(method: string, params: unknown[] = []): Promise<T> {
+  const response = await fetch(resolveBitcoinRpcUrl(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const body = await response.json();
+  if (body.error) throw new Error(`bitcoin ${method}: ${JSON.stringify(body.error)}`);
+  return body.result as T;
+}
+
+async function bitcoinHeaderTime(height: number): Promise<number> {
+  const hash = await bitcoinRpc<string>("getblockhash", [height]);
+  const header = await bitcoinRpc<{ time: number }>("getblockheader", [hash, true]);
+  return header.time;
+}
+
+export async function readBitcoinTip(): Promise<BitcoinTip> {
+  const height = await bitcoinRpc<number>("getblockcount");
+  const [time, periodStartTime] = await Promise.all([
+    bitcoinHeaderTime(height),
+    bitcoinHeaderTime(height - DIFFICULTY_PERIOD),
+  ]);
+  return { height, time, periodStartTime };
+}
+
+/**
+ * Public explorers that report the Bitcoin tip, each run by a different
+ * operator. The SPV keeper reads Bitcoin through the same provider as
+ * readBitcoinTip, so a stuck node there would hide the relay's lag from both.
+ * bitaps answers 429 above 3 requests in 5 seconds; one per check is fine.
+ */
+const PUBLIC_BITCOIN_TIPS: { url: string; height: (body: string) => unknown }[] = [
+  { url: "https://mempool.space/api/blocks/tip/height", height: Number },
+  { url: "https://blockstream.info/api/blocks/tip/height", height: Number },
+  { url: "https://blockchain.info/q/getblockcount", height: Number },
+  { url: "https://api.blockcypher.com/v1/btc/main", height: (body) => JSON.parse(body).height },
+  {
+    url: "https://api.bitaps.com/btc/v1/blockchain/block/last",
+    height: (body) => JSON.parse(body).data.height,
+  },
+];
+/** A throttled explorer must not hold up the check: deadlines to the response headers, then to the end of the body. */
+const EXPLORER_HEADERS_TIMEOUT_MS = 3_000;
+const EXPLORER_BODY_TIMEOUT_MS = 2_000;
+
+async function fetchExplorer(url: string): Promise<string> {
+  const controller = new AbortController();
+  const abortAfter = (ms: number, phase: string) =>
+    setTimeout(() => controller.abort(new Error(`${phase} timed out after ${ms} ms`)), ms);
+  let timer = abortAfter(EXPLORER_HEADERS_TIMEOUT_MS, "connect and headers");
+  try {
+    const response = await fetch(url, {
+      headers: { "User-Agent": "col-mar-vault-mon" },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    clearTimeout(timer);
+    timer = abortAfter(EXPLORER_BODY_TIMEOUT_MS, "body");
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+    // Releases the connection of an unread error body.
+    controller.abort();
+  }
+}
+
+/** Tips from the explorers that answered in time with a valid height, and why the others did not. */
+export async function readPublicBitcoinTips(): Promise<{ heights: number[]; errors: string[] }> {
+  const results = await Promise.allSettled(
+    PUBLIC_BITCOIN_TIPS.map(async ({ url, height }) => {
+      const value = height(await fetchExplorer(url));
+      if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0)
+        throw new Error(`bad height ${String(value).slice(0, 40)}`);
+      return value;
+    }),
+  );
+  const heights: number[] = [];
+  const errors: string[] = [];
+  results.forEach((result, i) => {
+    if (result.status === "fulfilled") heights.push(result.value);
+    else errors.push(`${new URL(PUBLIC_BITCOIN_TIPS[i].url).hostname}: ${result.reason?.message ?? result.reason}`);
+  });
+  return { heights, errors };
+}
+
+/** Base produces a block every 2 seconds; price look-backs are counted in blocks. */
+const BASE_BLOCK_SECONDS = 2n;
+const BLOCKS_1H = 3_600n / BASE_BLOCK_SECONDS;
+const BLOCKS_24H = 86_400n / BASE_BLOCK_SECONDS;
+
+const feedAbi = parseAbi([
+  "function priceOracle() view returns (address)",
+  "function btcUsdOracle() view returns (address)",
+  "function hashpriceOracle() view returns (address)",
+  "function decimals() view returns (uint8)",
+  "function latestRoundData() view returns (uint80, int256, uint256, uint256, uint80)",
+  "function mmSpotShock() view returns (uint256)",
+]);
+
+/** A feed's answer now, 1 h and 24 h back, and when it last updated. Raw feed units. */
+export interface FeedHistory {
+  decimals: number;
+  now: bigint;
+  ago1h: bigint;
+  ago24h: bigint;
+  updatedAt: number;
+  roundId: bigint;
+  roundId1h: bigint;
+}
+
+async function readFeed(feed: Address, block: bigint): Promise<FeedHistory> {
+  const answerAt = async (blockNumber: bigint) =>
+    (
+      await chain.readContract({
+        address: feed,
+        abi: feedAbi,
+        functionName: "latestRoundData",
+        blockNumber: blockNumber < 0n ? 0n : blockNumber,
+      })
+    ) as readonly [bigint, bigint, bigint, bigint, bigint];
+  const [decimals, latest, hour, day] = await Promise.all([
+    chain.readContract({ address: feed, abi: feedAbi, functionName: "decimals", blockNumber: block }),
+    answerAt(block),
+    answerAt(block - BLOCKS_1H),
+    answerAt(block - BLOCKS_24H),
+  ]);
+  return {
+    decimals,
+    now: latest[1],
+    ago1h: hour[1],
+    ago24h: day[1],
+    updatedAt: Number(latest[3]),
+    roundId: latest[0],
+    roundId1h: hour[0],
+  };
+}
+
+/** The SPV oracle's last relayed Bitcoin height (its round id) and when it was submitted. */
+export interface SpvState {
+  height: number;
+  updatedAt: number;
+}
+
+/**
+ * Hashprice USD (the futures venue's oracle) and the two feeds it is built
+ * from: BTC/USD with look-backs at past blocks, and the SPV oracle's relay
+ * state. Plus the PME's MM spot shock that sizes the move alarms.
+ */
+export async function readPrices(
+  at: { blockNumber: bigint },
+  marginEngine: Address,
+): Promise<{
+  hashprice: FeedHistory;
+  btcUsd: FeedHistory;
+  spv: SpvState;
+  mmSpotShock: bigint;
+}> {
+  const hashpriceFeed = await chain.readContract({
+    address: FUTURES_ADDRESS,
+    abi: feedAbi,
+    functionName: "priceOracle",
+    ...at,
+  });
+  const [btcFeed, spvFeed, mmSpotShock] = await Promise.all([
+    chain.readContract({ address: hashpriceFeed, abi: feedAbi, functionName: "btcUsdOracle", ...at }),
+    chain.readContract({ address: hashpriceFeed, abi: feedAbi, functionName: "hashpriceOracle", ...at }),
+    chain.readContract({ address: marginEngine, abi: feedAbi, functionName: "mmSpotShock", ...at }),
+  ]);
+  const [hashprice, btcUsd, spvRound] = await Promise.all([
+    readFeed(hashpriceFeed, at.blockNumber),
+    readFeed(btcFeed, at.blockNumber),
+    chain.readContract({ address: spvFeed, abi: feedAbi, functionName: "latestRoundData", ...at }),
+  ]);
+  const spv = { height: Number(spvRound[0]), updatedAt: Number(spvRound[3]) };
+  return { hashprice, btcUsd, spv, mmSpotShock };
 }

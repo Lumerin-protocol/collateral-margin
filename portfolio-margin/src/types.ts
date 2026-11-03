@@ -7,28 +7,45 @@
 export type Address = `0x${string}`;
 
 /**
- * A venue's resting book reduced to what the margin math needs, as reported by
- * `ILinearMarket.getRiskView` plus the venue's `getOrderAggregate`.
+ * A resting book reduced to what the margin math needs: per side, the quantity and
+ * the first two price moments, exactly as the venue's `RestingOrderAggregate`
+ * stores them (perps `getOrderAggregate`, futures `getOrderAggregateAtExpiration`).
  *
- * Nothing here is constant in P. The engine stresses order delta as part of net
- * delta, and the fill-loss terms are `max(0, value − P × delta / 10^tokenDecimals)`
- * per side — piecewise-linear in P with one kink each, at the aggregate breakeven
- * `value / delta × 10^tokenDecimals`.
+ * Nothing here is constant in P. The engine stresses order delta (the quantity) as
+ * part of net delta, and the venues charge each side's fill loss as Scarf's bound
+ * from these three sums (`fillLossBound` in `mm.ts`): convex in P, never below the
+ * loss of any book with the same sums, so a deep order cannot hide a marketable one.
  *
- * `delta` uses the `ILinearMarket` convention (scaled by `10^tokenDecimals`), so a
- * side's mark value at price P is `P × delta / 10^tokenDecimals` regardless of the
- * venue's own quantity decimals. That is why the snapshot stores delta rather than
- * raw quantity: it makes perps and futures the same arithmetic.
+ * Quantities are in the venue's own units (perps `10^perpQuantityDecimals`, futures
+ * whole contracts) and prices in token decimals, unscaled: `Σ price · qty`.
  */
 export interface RestingOrders {
-  /** Σ|q| over resting bids, scaled by 10^tokenDecimals. Unsigned. */
-  buyDelta: bigint;
-  /** Σ|q| over resting asks, same scale. Unsigned. */
-  sellDelta: bigint;
-  /** Σ q × limitPrice over resting bids (token decimals). */
-  buyValue: bigint;
-  /** Σ q × limitPrice over resting asks (token decimals). */
-  sellValue: bigint;
+  /** Σ|q| over resting bids. */
+  buyQty: bigint;
+  /** Σ|q| over resting asks. */
+  sellQty: bigint;
+  /** Σ price · |q| over resting bids. */
+  buyPQ: bigint;
+  /** Σ price² · |q| over resting bids. */
+  buyP2Q: bigint;
+  /** Σ price · |q| over resting asks. */
+  sellPQ: bigint;
+  /** Σ price² · |q| over resting asks. */
+  sellP2Q: bigint;
+}
+
+/**
+ * One futures expiry's resting book. The venue bounds fill loss per expiry, at that
+ * expiry's own price, and sums the bounds; pooling expiries first would give a
+ * different (larger) bound than the engine sees.
+ */
+export interface FuturesRestingOrders extends RestingOrders {
+  expirationAt: bigint;
+  /**
+   * `Futures.settlementPrice(expirationAt)`; `0` until the expiry settles. Non-zero
+   * pins this expiry's fill loss at that price instead of the live mark.
+   */
+  settlementPrice: bigint;
 }
 
 /**
@@ -48,6 +65,8 @@ export interface AccountSnapshot {
   user: Address;
   /** Vault balance (token decimals). */
   balance: bigint;
+  /** Unpaid loss owed to the insurance fund (token decimals). */
+  accountDebt: bigint;
 
   /** Perps single netted position (zero-qty if user has no perp exposure). */
   perp: {
@@ -88,8 +107,8 @@ export interface AccountSnapshot {
        */
       settlementPrice: bigint;
     }>;
-    /** Resting futures book, collapsed across expiries as the venue reports it. */
-    orders: RestingOrders;
+    /** Resting futures books, one per expiry in the tradable window that has orders. */
+    orders: FuturesRestingOrders[];
   };
 }
 

@@ -7,7 +7,7 @@
  *   pnpm prd      # config/prd.env + root .env
  */
 import { collect } from "./index.ts";
-import { log } from "./lib.ts";
+import { describeError, log } from "./lib.ts";
 
 try {
   const { points, summary } = await collect();
@@ -29,6 +29,6 @@ try {
   }
 
 } catch (error) {
-  log(`check failed: ${error}`);
+  log(`check failed: ${describeError(error)}`);
   process.exit(1);
 }

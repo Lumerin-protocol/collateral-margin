@@ -16,10 +16,11 @@ It is the **single source of truth for vault state**. Product subgraphs (`perps`
 | **VaultWithdrawal** | immutable | One per `Withdrawn` event. Tracks owner, recipient, amount. `isInsuranceFund` distinguishes `withdrawInsuranceFund` flow. |
 | **VaultInternalTransfer** | immutable | One per `Transfer` event with `from != 0x0 && to != 0x0` (i.e. `internalTransfer` / `internalTransferWithMarginCheck`). Tagged with a `callerCategory` derived from `transaction.to`. |
 | **BadDebtEvent** | immutable | A shortfall from `settleTransfer`. `RESERVE_LOSS` when a trader owes the insurance fund; `FEE` when a trader owes a venue. |
+| **AccountDebtEvent** | immutable | `ACCRUED` or `RECOVERED` change to an account's debt to the insurance fund (vault 1.4.0+), with the debt after it. |
 | **InsuranceDebtEvent** | immutable | A borrow (`BORROW`) or repayment (`REPAY`) of insurance-fund debt, derived from receipt `Transfer` logs. A mint marked by a preceding `Deposited` is a deposit and is not recorded here. |
 | **InsuranceDebtCapChange** | immutable | One per `InsuranceDebtCapSet`. |
 | **VaultHaltEvent** | immutable | A `HALT` or `RESUME`. A `CAP` halt's transaction is the payout that crossed the cap. |
-| **VaultVenue** | mutable | Per-venue bad-debt totals, keyed by the venue address on `BadDebt`. |
+| **VaultVenue** | mutable | Per-venue bad-debt totals, keyed by the venue address on `BadDebt`. Gross: debt cancelled later is netted only on `Vault`. |
 
 ### Caller attribution
 
@@ -44,6 +45,8 @@ This is accurate for "EOA → engine → vault" flows, which is the dominant pat
 | `InsuranceFundDeposited(address,uint256)` | Bumps `Vault.insuranceFundDeposited` and `insuranceCapital`, then recomputes the debt split. (The actual `VaultDeposit` entity is created by the paired `Deposited` event with `isInsuranceFund = true`.) |
 | `InsuranceFundWithdrawn(address,uint256)` | Bumps `Vault.insuranceFundWithdrawn` and subtracts from `insuranceCapital`. |
 | `BadDebt(address,address,uint256,address)` | Records the shortfall. Reserve losses add to `traderBadDebtTotal`; fee shortfalls do not. |
+| `AccountDebtAccrued(address,uint256)` | Follows the reserve-loss `BadDebt` (vault 1.4.0+): adds to `VaultUser.accountDebt` and `Vault.accountDebtTotal`. The `BadDebt` already counted the totals. Older history has no such event, so its losses create no account debt. |
+| `AccountDebtRecovered(address,uint256)` | An insurance-fund payout cancelled debt instead of paying it; no `Transfer` is emitted for that part. Subtracts from the account's debt, `Vault.traderBadDebtTotal` (and `backstopBadDebtTotal` for the backstop), then recomputes the debt split. Floors at zero with a warning rather than aborting. |
 | `InsuranceDebtCapSet(uint256,uint256)` | Stores the new cap. Lowering it does not halt. |
 | `VaultHalted(uint8,uint256,uint256)` / `VaultResumed(uint256,uint256)` | Latches or clears `halted` and `haltedSince`. |
 | `MarginEngineSet(address)` | Stores the margin engine, including `address(0)` when it is unset. |

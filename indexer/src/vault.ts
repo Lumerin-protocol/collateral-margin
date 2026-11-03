@@ -1,5 +1,7 @@
 import { Address, BigInt, Bytes, dataSource, log } from "@graphprotocol/graph-ts";
 import {
+  AccountDebtAccrued,
+  AccountDebtRecovered,
   BackstopParamsSet,
   BackstopWithdrawn,
   BadDebt,
@@ -16,6 +18,7 @@ import {
   Withdrawn,
 } from "../generated/CollateralVault/CollateralVault";
 import {
+  AccountDebtEvent,
   BackstopParamsChange,
   BadDebtEvent,
   InsuranceDebtCapChange,
@@ -50,6 +53,8 @@ const CATEGORY_OTHER = "OTHER";
 
 const KIND_RESERVE_LOSS = "RESERVE_LOSS";
 const KIND_FEE = "FEE";
+const KIND_ACCRUED = "ACCRUED";
+const KIND_RECOVERED = "RECOVERED";
 const KIND_BORROW = "BORROW";
 const KIND_REPAY = "REPAY";
 const KIND_HALT = "HALT";
@@ -113,6 +118,8 @@ function getOrCreateVault(): Vault {
     vault.insuranceDebtRepaidTotal = BigInt.zero();
     vault.traderBadDebtTotal = BigInt.zero();
     vault.backstopBadDebtTotal = BigInt.zero();
+    vault.accountDebtTotal = BigInt.zero();
+    vault.accountDebtRecoveredTotal = BigInt.zero();
     vault.backstopUnwindBandBps = 0;
     vault.backstopUnwindFeeBps = 0;
     vault.insuranceCapital = BigInt.zero();
@@ -168,6 +175,8 @@ function getOrCreateVaultUser(address: Address, timestamp: BigInt): VaultUser {
     user.netFromPerps = BigInt.zero();
     user.netFromOptions = BigInt.zero();
     user.netFromOther = BigInt.zero();
+    user.accountDebt = BigInt.zero();
+    user.accountDebtRecoveredTotal = BigInt.zero();
     user.depositCount = 0;
     user.withdrawalCount = 0;
     user.createdAt = timestamp;
@@ -604,6 +613,91 @@ export function handleBadDebt(event: BadDebt): void {
     if (isBackstop) vault.backstopBadDebtTotal = vault.backstopBadDebtTotal.plus(amount);
     recomputeDebtSplit(vault);
   }
+  bumpUserCount(vault, isNewUser);
+  vault.lastUpdatedAt = event.block.timestamp;
+  vault.save();
+}
+
+/** `a - b`, floored at zero so an out-of-sync total cannot abort indexing. */
+function minusFloored(a: BigInt, b: BigInt, what: string): BigInt {
+  if (b.le(a)) return a.minus(b);
+  log.warning("{}: subtracting {} from {}, flooring at 0", [what, b.toString(), a.toString()]);
+  return BigInt.zero();
+}
+
+function saveAccountDebtEvent(
+  id: Bytes,
+  user: VaultUser,
+  kind: string,
+  amount: BigInt,
+  timestamp: BigInt,
+  blockNumber: BigInt,
+  transactionHash: Bytes,
+): void {
+  const row = new AccountDebtEvent(id);
+  row.user = user.id;
+  row.kind = kind;
+  row.amount = amount;
+  row.debtAfter = user.accountDebt;
+  row.timestamp = timestamp;
+  row.blockNumber = blockNumber;
+  row.transactionHash = transactionHash;
+  row.save();
+}
+
+/** Follows the `BadDebt` of the same shortfall, which already counted it in the totals. */
+export function handleAccountDebtAccrued(event: AccountDebtAccrued): void {
+  const amount = event.params.amount;
+  const isNewUser = VaultUser.load(event.params.account) === null;
+  const user = getOrCreateVaultUser(event.params.account, event.block.timestamp);
+  user.accountDebt = user.accountDebt.plus(amount);
+  user.lastActivityAt = event.block.timestamp;
+  user.save();
+  saveAccountDebtEvent(
+    createEventId(event.transaction.hash, event.logIndex),
+    user,
+    KIND_ACCRUED,
+    amount,
+    event.block.timestamp,
+    event.block.number,
+    event.transaction.hash,
+  );
+
+  const vault = getOrCreateVault();
+  vault.accountDebtTotal = vault.accountDebtTotal.plus(amount);
+  bumpUserCount(vault, isNewUser);
+  vault.lastUpdatedAt = event.block.timestamp;
+  vault.save();
+}
+
+/** The vault cancelled debt instead of paying: no Transfer, but its bad-debt total drops. */
+export function handleAccountDebtRecovered(event: AccountDebtRecovered): void {
+  const account = event.params.account;
+  const amount = event.params.amount;
+  const isNewUser = VaultUser.load(account) === null;
+  const user = getOrCreateVaultUser(account, event.block.timestamp);
+  user.accountDebt = minusFloored(user.accountDebt, amount, "VaultUser.accountDebt");
+  user.accountDebtRecoveredTotal = user.accountDebtRecoveredTotal.plus(amount);
+  user.lastActivityAt = event.block.timestamp;
+  user.save();
+  saveAccountDebtEvent(
+    createEventId(event.transaction.hash, event.logIndex),
+    user,
+    KIND_RECOVERED,
+    amount,
+    event.block.timestamp,
+    event.block.number,
+    event.transaction.hash,
+  );
+
+  const vault = getOrCreateVault();
+  vault.accountDebtTotal = minusFloored(vault.accountDebtTotal, amount, "Vault.accountDebtTotal");
+  vault.accountDebtRecoveredTotal = vault.accountDebtRecoveredTotal.plus(amount);
+  vault.traderBadDebtTotal = minusFloored(vault.traderBadDebtTotal, amount, "Vault.traderBadDebtTotal");
+  if (account.equals(BACKSTOP_ADDR)) {
+    vault.backstopBadDebtTotal = minusFloored(vault.backstopBadDebtTotal, amount, "Vault.backstopBadDebtTotal");
+  }
+  recomputeDebtSplit(vault);
   bumpUserCount(vault, isNewUser);
   vault.lastUpdatedAt = event.block.timestamp;
   vault.save();

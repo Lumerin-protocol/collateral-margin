@@ -86,7 +86,8 @@ export class EthUsdFeed {
    * units (`123456` micro-USD).
    */
   weiToUsd(weiAmount: bigint): number | undefined {
-    if (this.price === undefined || this.decimals === undefined) return undefined;
+    if (this.price === undefined || this.decimals === undefined)
+      return undefined;
     // usd = wei * priceUsdPerEth / 1e18 / 10^decimals
     // Do the integer scaling in bigint to avoid wei overflow, then
     // promote to number for the final fractional value.
@@ -130,7 +131,10 @@ export class EthUsdFeed {
       })) as readonly [bigint, bigint, bigint, bigint, bigint];
       const answer = data[1];
       if (answer <= 0n) {
-        this.logger.warn({ answer }, "ETH/USD feed returned non-positive answer — keeping previous");
+        this.logger.warn(
+          { answer },
+          "ETH/USD feed returned non-positive answer — keeping previous",
+        );
         return;
       }
       this.price = answer;
@@ -138,7 +142,10 @@ export class EthUsdFeed {
     } catch (err) {
       // RPC blip or stale node — keep the previous price (it's only
       // used for logging enrichment) and try again next tick.
-      this.logger.warn({ err }, "ETH/USD feed refresh failed — keeping previous price");
+      this.logger.warn(
+        { err },
+        "ETH/USD feed refresh failed — keeping previous price",
+      );
     }
   }
 }

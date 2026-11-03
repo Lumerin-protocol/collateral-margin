@@ -57,6 +57,9 @@ vault_monitoring = {
   mm_perps_position_warn_usd   = 2400
   mm_futures_position_warn_usd = 800
   book_drift_warn_bps          = 100
+  # Protocol backstop, sized to the ~2k USDC insurance fund; raise with the fund.
+  backstop_notional_warn_usd = 2000
+  backstop_loss_crit_usd     = 500
 }
 
 ########################################

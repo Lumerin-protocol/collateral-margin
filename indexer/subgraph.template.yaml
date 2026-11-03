@@ -34,6 +34,7 @@ dataSources:
         - VaultInternalTransfer
         - VaultVenue
         - BadDebtEvent
+        - AccountDebtEvent
         - InsuranceDebtEvent
         - InsuranceDebtCapChange
         - VaultHaltEvent
@@ -55,6 +56,10 @@ dataSources:
           handler: handleInsuranceFundWithdrawn
         - event: BadDebt(indexed address,indexed address,uint256,indexed address)
           handler: handleBadDebt
+        - event: AccountDebtAccrued(indexed address,uint256)
+          handler: handleAccountDebtAccrued
+        - event: AccountDebtRecovered(indexed address,uint256)
+          handler: handleAccountDebtRecovered
         - event: InsuranceDebtCapSet(uint256,uint256)
           handler: handleInsuranceDebtCapSet
         - event: BackstopWithdrawn(indexed address,uint256)

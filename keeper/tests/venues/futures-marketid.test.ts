@@ -1,6 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { expirationAtMarketId, marketIdToExpirationAt } from "../../src/venues/futures.ts";
+import {
+  expirationAtMarketId,
+  marketIdToExpirationAt,
+} from "../../src/venues/futures.ts";
 
 describe("futures venue marketId helpers", () => {
   it("encodes a delivery date as bytes32 and round-trips", () => {

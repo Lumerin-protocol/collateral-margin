@@ -24,6 +24,30 @@ contract InsuranceDebtHarness {
         b = vault.settleTransfer(from, to, second);
     }
 
+    /// @notice A zero-sum fill in one transaction: the fund pays the winner first, then the loser pays the fund.
+    function settleWinnerThenLoser(
+        CollateralVault vault,
+        address winner,
+        address loser,
+        uint256 amount
+    ) external {
+        vault.settleTransfer(vault.INSURANCE_FUND_ADDR(), winner, amount);
+        vault.settleTransfer(loser, vault.INSURANCE_FUND_ADDR(), amount);
+    }
+
+    /// @notice An owner batch: the fund pays the winner, the owner halts, then the loser pays the fund.
+    /// @dev The harness must also own the vault.
+    function settleWinnerHaltThenLoser(
+        CollateralVault vault,
+        address winner,
+        address loser,
+        uint256 amount
+    ) external {
+        vault.settleTransfer(vault.INSURANCE_FUND_ADDR(), winner, amount);
+        vault.halt();
+        vault.settleTransfer(loser, vault.INSURANCE_FUND_ADDR(), amount);
+    }
+
     /// @notice Borrow, then try to withdraw in the same transaction. The withdrawal reverts the borrow.
     function settleThenWithdraw(
         CollateralVault vault,

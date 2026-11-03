@@ -55,7 +55,11 @@ type Repo = keyof typeof REPO_PATHS;
  * missing — typically means `pretest:integration` didn't run, or the
  * sibling repo hasn't been compiled yet.
  */
-function readArtifact(repo: Repo, contractPath: string, contractName: string): CompiledArtifact {
+function readArtifact(
+  repo: Repo,
+  contractPath: string,
+  contractName: string,
+): CompiledArtifact {
   // Hardhat's artifact layout:
   //   <repo>/contracts/artifacts/<contractPath>.sol/<contractName>.json
   // `contractPath` is the path *under* `contracts/` (e.g. `contracts/Foo`),
@@ -94,44 +98,51 @@ function readArtifact(repo: Repo, contractPath: string, contractName: string): C
  */
 export const artifacts = {
   // ── collateral-margin (local) ─────────────────────────────────────────
-  vault:        () => readArtifact("collateral", "contracts/CollateralVault",          "CollateralVault"),
-  pme:          () => readArtifact("collateral", "contracts/PortfolioMarginEngine",    "PortfolioMarginEngine"),
-  usdc:         () => readArtifact("collateral", "contracts/mocks/USDCMock",           "USDCMock"),
-  erc1967Proxy: () => readArtifact(
-    "collateral",
-    "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy",
-    "ERC1967Proxy",
-  ),
+  vault: () =>
+    readArtifact("collateral", "contracts/CollateralVault", "CollateralVault"),
+  pme: () =>
+    readArtifact(
+      "collateral",
+      "contracts/PortfolioMarginEngine",
+      "PortfolioMarginEngine",
+    ),
+  usdc: () =>
+    readArtifact("collateral", "contracts/mocks/USDCMock", "USDCMock"),
+  erc1967Proxy: () =>
+    readArtifact(
+      "collateral",
+      "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy",
+      "ERC1967Proxy",
+    ),
   /**
    * Aggregator-shape oracle that emits `AnswerUpdated` on setPrice. Added
    * to this repo's mocks because the perps `PriceOracleMock` is event-less
    * (it satisfies the venue's `latestRoundData` read path but not the
    * predictor's BTC/USDC event subscription).
    */
-  aggregatorEventMock: () => readArtifact(
-    "collateral",
-    "contracts/mocks/AggregatorEventMock",
-    "AggregatorEventMock",
-  ),
+  aggregatorEventMock: () =>
+    readArtifact(
+      "collateral",
+      "contracts/mocks/AggregatorEventMock",
+      "AggregatorEventMock",
+    ),
 
   // ── perps (sibling repo) ──────────────────────────────────────────────
-  perps:           () => readArtifact("perps", "contracts/HashPowerPerpsDEX",        "HashPowerPerpsDEX"),
-  priceOracleMock: () => readArtifact("perps", "contracts/mocks/PriceOracleMock",    "PriceOracleMock"),
+  perps: () =>
+    readArtifact("perps", "contracts/HashPowerPerpsDEX", "HashPowerPerpsDEX"),
+  priceOracleMock: () =>
+    readArtifact("perps", "contracts/mocks/PriceOracleMock", "PriceOracleMock"),
   /**
    * Multicall3 (shipped by perps for the indexer/keeper). We deploy this on
    * the test node so viem's `multicall` action — which `pme/health.ts` uses
    * for batched reads — has a contract to dispatch through. viem refuses to
    * multicall against a chain whose `contracts.multicall3.address` is unset.
    */
-  multicall3:      () => readArtifact("perps", "contracts/Multicall3",               "Multicall3"),
+  multicall3: () => readArtifact("perps", "contracts/Multicall3", "Multicall3"),
 
   // ── futures (sibling repo) ────────────────────────────────────────────
   futures: () =>
-    readArtifact(
-      "futures",
-      "contracts/HashPowerFutures",
-      "HashPowerFutures",
-    ),
+    readArtifact("futures", "contracts/HashPowerFutures", "HashPowerFutures"),
 } as const;
 
 /** Resolved repo paths — exported for diagnostic logs. */

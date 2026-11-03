@@ -1,8 +1,14 @@
 import type { NetworkConnection } from "hardhat/types/network";
 import { encodeFunctionData, maxUint256 } from "viem";
 
-/** Index price used by the PME oracle mock and as perps mock entry price ($50k, token decimals). */
-export const DEFAULT_MARKET_PRICE = 50_000_000_000n;
+/** Index price used by the PME oracle mock and as perps mock entry price ($50, token decimals). */
+export const DEFAULT_MARKET_PRICE = 50_000_000n;
+
+/** One test lot in the mocks' 6-decimal quantity units: 1,000 contracts. */
+export const LOT_QTY = 1_000_000_000n;
+
+/** Notional of one lot at the default price: $50k, token decimals. */
+export const LOT_NOTIONAL = (LOT_QTY * DEFAULT_MARKET_PRICE) / 1_000_000n;
 
 const VAULT_TEST_TOP_UP = 100_000_000_000n; // 100k USDC for alice, bob, engine
 

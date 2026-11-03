@@ -19,22 +19,33 @@
  */
 import type { MetricDatum } from "@aws-sdk/client-cloudwatch";
 import {
+  type BitcoinTip,
+  DIFFICULTY_PERIOD,
+  type FeedHistory,
   type MarketMakerHealth,
   type MarketMakerState,
+  marketName,
+  readBitcoinTip,
   readBlockNumber,
   readBlockTimestamp,
   readChainState,
   readMarketMaker,
   readMarketMakerHealth,
   readPointsMeta,
+  readPrices,
+  readPublicBitcoinTips,
+  readSubgraphMeta,
+  WATCHED_SUBGRAPHS,
   readVault,
 } from "./gateway.ts";
 import {
+  describeError,
   dim,
   log,
   metric,
   publishFailure,
   push,
+  redact,
   toUnits,
   utilizationPct,
 } from "./lib.ts";
@@ -43,6 +54,11 @@ import {
 const { CW_NAMESPACE } = process.env as Record<string, string>;
 /** Empty where the market maker service is not deployed. */
 const MM_HEALTH_URL = process.env.MM_HEALTH_URL ?? "";
+/** Venue dimension values, matching the per-venue metrics the subgraph tags by address. */
+const FUTURES_VENUE = process.env.FUTURES_ADDRESS?.toLowerCase() ?? "";
+const PERPS_VENUE = process.env.PERPS_ADDRESS?.toLowerCase() ?? "";
+/** Bitcoin consensus: the block subsidy halves every 210,000 blocks. */
+const HALVING_INTERVAL = 210_000;
 
 export async function handler(): Promise<{ statusCode: number; body: string }> {
   log(`vault monitor ${new Date().toISOString()}`);
@@ -52,9 +68,9 @@ export async function handler(): Promise<{ statusCode: number; body: string }> {
     log(`ok ${summary}`);
     return { statusCode: 200, body: "ok" };
   } catch (error) {
-    log(`check failed: ${error}`);
+    log(`check failed: ${describeError(error)}`);
     await publishFailure(CW_NAMESPACE);
-    return { statusCode: 500, body: String(error) };
+    return { statusCode: 500, body: redact(describeError(error)) };
   }
 }
 
@@ -68,6 +84,8 @@ export async function collect(): Promise<{
 
   // Chain reads, all pinned to the subgraph block.
   const at = { blockNumber: BigInt(block) };
+  // Best-effort reads that failed; PartialCheckFailures alarms on the count.
+  const failed: string[] = [];
   const [
     { usdcRaw, ...backstop },
     timestamp,
@@ -75,6 +93,10 @@ export async function collect(): Promise<{
     pointsMeta,
     maker,
     makerHealth,
+    bitcoinTip,
+    publicTips,
+    prices,
+    subgraphMetas,
   ] = await Promise.all([
       readChainState(at, vault.collateralToken),
       // Goldsky leaves _meta.block.timestamp null; the age alarm needs the real one.
@@ -84,20 +106,52 @@ export async function collect(): Promise<{
       readBlockNumber(),
       readPointsMeta().catch((error) => {
         // Best-effort: a points failure must not fail the vault debt check.
-        log(`points drift failed: ${error}`);
+        failed.push("points");
+        log(`points drift failed: ${describeError(error)}`);
         return null;
       }),
       // Best-effort for the same reason; MarketCheckSuccess=0 flags it.
       readMarketMaker(at, vault.marginEngine).catch((error) => {
-        log(`market maker check failed: ${error?.shortMessage ?? error}`);
+        failed.push("market_maker");
+        log(`market maker check failed: ${describeError(error)}`);
         return null;
       }),
       MM_HEALTH_URL
         ? readMarketMakerHealth(MM_HEALTH_URL).catch((error) => {
-            log(`market maker health failed: ${error}`);
+            failed.push("mm_health");
+            log(`market maker health failed: ${describeError(error)}`);
             return null;
           })
         : undefined,
+      // Best-effort: the halving countdown must not fail the vault debt check.
+      readBitcoinTip().catch((error) => {
+        failed.push("halving");
+        log(`halving check failed: ${describeError(error)}`);
+        return null;
+      }),
+      // Never rejects; each explorer that fails is left out.
+      readPublicBitcoinTips(),
+      // Best-effort for the same reason.
+      readPrices(at, vault.marginEngine).catch((error) => {
+        failed.push("prices");
+        log(`price check failed: ${describeError(error)}`);
+        return null;
+      }),
+      // Best-effort: these subgraphs feed the UI and market maker, not the vault check.
+      Promise.all(
+        Object.entries(WATCHED_SUBGRAPHS)
+          .filter(([, url]) => url)
+          .map(([name, url]) =>
+            readSubgraphMeta(url).then(
+              (meta) => ({ name, meta }),
+              (error) => {
+                failed.push(`subgraph_${name}`);
+                log(`${name} subgraph check failed: ${describeError(error)}`);
+                return null;
+              },
+            ),
+          ),
+      ),
     ]);
   const head = Number(headBlock);
 
@@ -112,10 +166,26 @@ export async function collect(): Promise<{
   // now. Negative means a loss is forming that BadDebt has not recorded yet.
   const equity =
     vault.backstopBalance + backstop.unrealizedPnl + backstop.pendingFunding;
+  // Band + caller fee is what an unwind may give away; above the liquidation fee
+  // the venue kept, a self-dealing liquidate-and-unwind loop profits (X3-R3A-2).
+  const unwindBudget = Math.min(
+    ...backstop.unwindBudgetBps.map((venue) => venue.bps),
+  );
+  const overBudget = Math.max(
+    0,
+    vault.backstopUnwindBandBps + vault.backstopUnwindFeeBps - unwindBudget,
+  );
   const futuresNet = backstop.futuresLegs.reduce(
     (sum, leg) => sum + leg.net,
     0n,
   );
+  const abs = (n: bigint) => (n < 0n ? -n : n);
+  // Gross exposure at the mark: futures legs at different expiries do not offset.
+  const futuresNotional =
+    backstop.futuresLegs.reduce((sum, leg) => sum + abs(leg.net), 0n) *
+    backstop.futuresMark;
+  const perpsNotional =
+    (abs(backstop.perpsNet) * backstop.perpsMark) / 1_000_000n;
 
   const points: MetricDatum[] = [
     metric("InsuranceFundBalance", usdc(vault.insuranceFundBalance)),
@@ -136,6 +206,7 @@ export async function collect(): Promise<{
     metric("BackstopEquity", usdc(equity)),
     metric("BackstopUnwindBandBps", vault.backstopUnwindBandBps, "Count"),
     metric("BackstopUnwindFeeBps", vault.backstopUnwindFeeBps, "Count"),
+    metric("BackstopUnwindOverBudgetBps", overBudget, "Count"),
     metric(
       "BackstopOpenLegs",
       backstop.futuresLegs.length + (backstop.perpsNet === 0n ? 0 : 1),
@@ -144,6 +215,19 @@ export async function collect(): Promise<{
     // Raw contract units: futures counts whole contracts, perps is 1e6-scaled.
     metric("BackstopFuturesNetQuantity", futuresNet, "Count"),
     metric("BackstopPerpsNetQuantity", backstop.perpsNet, "Count"),
+    metric("BackstopNotional", usdc(futuresNotional + perpsNotional)),
+    metric(
+      "BackstopNotional",
+      usdc(futuresNotional),
+      "None",
+      dim("Venue", FUTURES_VENUE),
+    ),
+    metric(
+      "BackstopNotional",
+      usdc(perpsNotional),
+      "None",
+      dim("Venue", PERPS_VENUE),
+    ),
     metric("Halted", vault.halted ? 1 : 0, "Count"),
     metric("FuturesFeeBalance", usdc(vault.futuresFeeBalance)),
     metric("PerpsFeeBalance", usdc(vault.perpsFeeBalance)),
@@ -159,8 +243,13 @@ export async function collect(): Promise<{
         "BackstopFuturesNetQuantity",
         leg.net,
         "Count",
-        dim("ExpirationAt", leg.expirationAt),
+        dim("Market", marketName(`futures:${leg.expirationAt}`)),
       ),
+    );
+  }
+  for (const { venue, bps } of backstop.unwindBudgetBps) {
+    points.push(
+      metric("BackstopUnwindBudgetBps", bps, "Count", dim("Venue", venue)),
     );
   }
   for (const venue of vault.venues) {
@@ -201,6 +290,47 @@ export async function collect(): Promise<{
     );
   }
 
+  for (const entry of subgraphMetas) {
+    if (!entry) continue;
+    points.push(
+      metric(
+        "SubgraphBlocksBehind",
+        Math.max(0, head - entry.meta.block),
+        "Count",
+        dim("Subgraph", entry.name),
+      ),
+      metric(
+        "SubgraphIndexingErrors",
+        entry.meta.hasIndexingErrors ? 1 : 0,
+        "Count",
+        dim("Subgraph", entry.name),
+      ),
+    );
+  }
+
+  if (bitcoinTip) points.push(...halvingMetrics(bitcoinTip));
+  if (prices) {
+    points.push(
+      ...feedMetrics("Hashprice", "HashpriceFeedAgeSeconds", prices.hashprice),
+      ...feedMetrics("Btc", "BtcUsdFeedAgeSeconds", prices.btcUsd),
+      // WAD → percent, the unit the move alarms compare against.
+      metric("MmSpotShockPct", Number(prices.mmSpotShock) / 1e16),
+      metric("SpvFeedAgeSeconds", secondsSince(prices.spv.updatedAt), "Seconds"),
+    );
+    // Proxy round ids are phase << 64 | round; across a phase change the difference is meaningless.
+    const { roundId, roundId1h } = prices.btcUsd;
+    if (roundId >> 64n === roundId1h >> 64n)
+      points.push(metric("BtcUsdUpdates1h", Number(roundId - roundId1h), "Count"));
+    const tip = consensusTip([
+      ...(bitcoinTip ? [bitcoinTip.height] : []),
+      ...publicTips.heights,
+    ]);
+    if (tip !== null)
+      points.push(metric("SpvBlocksBehind", Math.max(0, tip - prices.spv.height), "Count"));
+  }
+  if (publicTips.errors.length) log(`bitcoin explorers failed: ${publicTips.errors.join("; ")}`);
+  if (!publicTips.heights.length) failed.push("bitcoin_explorers");
+
   const book = maker ? marketMakerMetrics(maker, decimals) : null;
   points.push(...(book?.points ?? []));
   points.push(metric("MarketCheckSuccess", book ? 1 : 0, "Count"));
@@ -215,8 +345,56 @@ export async function collect(): Promise<{
 
   const summary =
     `block=${block} head=${head} behind=${behind} age=${age}s debt=${vault.insuranceDebt} gap_raw=${gapRaw} ` +
-    `halted=${vault.halted} backstop_equity=${equity} ${book?.summary ?? "mm=failed"}${healthSummary}`;
+    `halted=${vault.halted} backstop_equity=${equity} ${book?.summary ?? "mm=failed"}${healthSummary}` +
+    (failed.length ? ` failed=${failed.sort().join(",")}` : "");
+  points.push(metric("PartialCheckFailures", failed.length, "Count"));
   return { points, summary };
+}
+
+/**
+ * A feed's USD price and its signed change over 1 h and 24 h, in percent. The
+ * alarms compare |change| with the MM spot shock: a move that size puts the
+ * most levered accounts at liquidation.
+ */
+function feedMetrics(prefix: string, ageMetric: string, feed: FeedHistory): MetricDatum[] {
+  const change = (past: bigint) =>
+    past > 0n ? (Number(feed.now - past) / Number(past)) * 100 : 0;
+  return [
+    metric(`${prefix}Usd`, toUnits(feed.now, feed.decimals)),
+    metric(`${prefix}Change1hPct`, change(feed.ago1h)),
+    metric(`${prefix}Change24hPct`, change(feed.ago24h)),
+    metric(ageMetric, secondsSince(feed.updatedAt), "Seconds"),
+  ];
+}
+
+/**
+ * The upper median of the tips that answered: a node stuck behind, or one
+ * explorer reporting a wrong height, is outvoted, and with two answers the
+ * higher one wins so a stuck node still shows. Null when none answered.
+ */
+function consensusTip(heights: number[]): number | null {
+  if (!heights.length) return null;
+  const sorted = [...heights].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+function secondsSince(timestamp: number): number {
+  return Math.max(0, Math.floor(Date.now() / 1000) - timestamp);
+}
+
+/**
+ * Countdown to the next Bitcoin halving, which cuts the subsidy part of
+ * hashprice in half in one block. Days use the average block time over the
+ * last retarget period, so the reminder alarms fire close to the real date.
+ */
+function halvingMetrics({ height, time, periodStartTime }: BitcoinTip): MetricDatum[] {
+  const next = (Math.floor(height / HALVING_INTERVAL) + 1) * HALVING_INTERVAL;
+  const blocks = next - height;
+  const blockSeconds = (time - periodStartTime) / DIFFICULTY_PERIOD;
+  return [
+    metric("BtcBlocksUntilHalving", blocks, "Count"),
+    metric("BtcDaysUntilHalving", (blocks * blockSeconds) / 86_400),
+  ];
 }
 
 /**
@@ -241,7 +419,7 @@ function marketMakerMetrics(
     const absNet = book.mmNet < 0n ? -book.mmNet : book.mmNet;
     const notional = usdc((absNet * book.markPrice) / book.quantityScale);
     minSide = Math.min(minSide, book.bids.length, book.asks.length);
-    if (book.market === "perps") perpsNotional = notional;
+    if (book.market === marketName("perps")) perpsNotional = notional;
     else futuresMaxNotional = Math.max(futuresMaxNotional, notional);
 
     points.push(

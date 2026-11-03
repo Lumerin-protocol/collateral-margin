@@ -8,13 +8,18 @@ import type { ParticipantSource } from "../discovery/types.ts";
 import type { PriceFeed, PriceUpdate } from "../oracle/priceFeed.ts";
 import type { Notifier } from "../alert/notifier.ts";
 import { readAccountHealthBatch } from "../pme/health.ts";
-import { readAccountSnapshot, readMMParams } from "./snapshot.ts";
+import {
+  MM_PARAMS_REFRESH_MS,
+  readAccountSnapshot,
+  readMMParams,
+} from "./snapshot.ts";
 import {
   type MMParams,
   solveAlertThresholds,
   solveLiquidationThresholds,
 } from "@hashpower/portfolio-margin";
 import { PredictiveIndex } from "./predictiveIndex.ts";
+import { PortfolioMarginEngineAbi } from "collateral-margin-abi/PortfolioMarginEngine.ts";
 
 /**
  * Wires the predictive layer into the existing keeper:
@@ -37,7 +42,9 @@ import { PredictiveIndex } from "./predictiveIndex.ts";
  *
  * Lifecycle:
  *   - `start()`: load shared `MMParams`, hook tracker.onChanged, hook
- *     priceFeed.onUpdate. Returns immediately.
+ *     priceFeed.onUpdate, and re-read `MMParams` on the PME's `ShocksUpdated`
+ *     (plus every `MM_PARAMS_REFRESH_MS` in case a log is missed); a change
+ *     rebuilds every tracked user. Returns immediately.
  *   - `stop()`: detach hooks. In-flight `rebuild` calls finish; nothing
  *     gracefully cancellable in the snapshot reader.
  *   - `rebuild(user)`: read fresh snapshot + solve + index.upsert. Public
@@ -98,9 +105,60 @@ export class PredictiveCoordinator {
 
     // New users → build their first snapshot. Existing users with state
     // changes are also funnelled through here, so we avoid two listeners.
-    this.disposers.push(this.tracker.onAdded((user) => void this.rebuild(user)));
-    this.disposers.push(this.tracker.onChanged((user) => void this.rebuild(user)));
-    this.disposers.push(this.priceFeed.onUpdate((user) => this.handlePriceUpdate(user)));
+    this.disposers.push(
+      this.tracker.onAdded((user) => void this.rebuild(user)),
+    );
+    this.disposers.push(
+      this.tracker.onChanged((user) => void this.rebuild(user)),
+    );
+    this.disposers.push(
+      this.priceFeed.onUpdate((user) => this.handlePriceUpdate(user)),
+    );
+    const refresh = setInterval(
+      () => void this.refreshParams(),
+      MM_PARAMS_REFRESH_MS,
+    );
+    refresh.unref?.();
+    this.disposers.push(() => clearInterval(refresh));
+    this.disposers.push(
+      this.chain.publicClient.watchContractEvent({
+        address: this.config.pme.address,
+        abi: PortfolioMarginEngineAbi,
+        eventName: "ShocksUpdated",
+        onLogs: () => void this.refreshParams(),
+      }),
+    );
+  }
+
+  /** Re-read `MMParams`; on a `setShocks` change, re-solve every tracked user. */
+  private async refreshParams(): Promise<void> {
+    let next: MMParams;
+    try {
+      next = await readMMParams(this.chain, this.config);
+    } catch (err) {
+      this.logger.warn({ err }, "MM params re-read failed — keeping cached");
+      return;
+    }
+    const prev = this.params;
+    if (
+      prev !== undefined &&
+      prev.imSpotShock === next.imSpotShock &&
+      prev.mmSpotShock === next.mmSpotShock &&
+      prev.tokenDecimals === next.tokenDecimals &&
+      prev.perpQuantityDecimals === next.perpQuantityDecimals
+    ) {
+      return;
+    }
+    this.params = next;
+    this.logger.info(
+      {
+        imSpotShock: next.imSpotShock,
+        mmSpotShock: next.mmSpotShock,
+        users: this.tracker.size(),
+      },
+      "PredictiveCoordinator: MM params changed — rebuilding thresholds",
+    );
+    for (const user of this.tracker.list()) void this.rebuild(user);
   }
 
   stop(): void {
@@ -209,11 +267,17 @@ export class PredictiveCoordinator {
     if (this.params === undefined) return;
     const current = this.priceFeed.current();
     if (current === undefined) {
-      this.logger.debug({ user }, "rebuild deferred — priceFeed has no value yet");
+      this.logger.debug(
+        { user },
+        "rebuild deferred — priceFeed has no value yet",
+      );
       return;
     }
     try {
-      const snap = await readAccountSnapshot(this.chain, this.config, user);
+      const snap = await readAccountSnapshot(this.chain, this.config, user, {
+        params: this.params,
+        logger: this.logger,
+      });
       const liq = solveLiquidationThresholds(snap, this.params, current);
       const liqTracked = this.liqIndex.upsert(liq);
 
@@ -223,9 +287,19 @@ export class PredictiveCoordinator {
       let warnTracked = false;
       let critTracked = false;
       if (this.notifier !== undefined && snap.balance > 0n) {
-        const warnPpm = BigInt(Math.round(this.config.alerts.imWarnUtilization * 1_000_000));
-        const critPpm = BigInt(Math.round(this.config.alerts.imCriticalUtilization * 1_000_000));
-        const alerts = solveAlertThresholds(snap, this.params, current, warnPpm, critPpm);
+        const warnPpm = BigInt(
+          Math.round(this.config.alerts.imWarnUtilization * 1_000_000),
+        );
+        const critPpm = BigInt(
+          Math.round(this.config.alerts.imCriticalUtilization * 1_000_000),
+        );
+        const alerts = solveAlertThresholds(
+          snap,
+          this.params,
+          current,
+          warnPpm,
+          critPpm,
+        );
         warnTracked = this.warnIndex.upsert({
           user: alerts.user,
           liqDown: alerts.warnDown,
@@ -255,7 +329,10 @@ export class PredictiveCoordinator {
         "predictive snapshot rebuilt",
       );
     } catch (err) {
-      this.logger.error({ err, user }, "rebuild failed — leaving prior thresholds in place");
+      this.logger.error(
+        { err, user },
+        "rebuild failed — leaving prior thresholds in place",
+      );
     }
   }
 
@@ -266,7 +343,10 @@ export class PredictiveCoordinator {
     if (this.config.oracle.priceMoveTriggerBps > 0) {
       const moveBps = absDelta(prev, next);
       if (moveBps < this.config.oracle.priceMoveTriggerBps) {
-        this.logger.debug({ prev, next, moveBps }, "price move below trigger threshold — skipping");
+        this.logger.debug(
+          { prev, next, moveBps },
+          "price move below trigger threshold — skipping",
+        );
         return;
       }
     }
@@ -275,7 +355,8 @@ export class PredictiveCoordinator {
     const warnCrossings = this.warnIndex.crossings(prev, next);
     const critCrossings = this.critIndex.crossings(prev, next);
 
-    if (liqCrossings.length + warnCrossings.length + critCrossings.length === 0) return;
+    if (liqCrossings.length + warnCrossings.length + critCrossings.length === 0)
+      return;
 
     this.logger.info(
       {
@@ -322,7 +403,12 @@ export class PredictiveCoordinator {
     critUsers: Set<Address>,
   ): Promise<void> {
     try {
-      const healths = await readAccountHealthBatch(this.chain, this.config, allUsers);
+      const healths = await readAccountHealthBatch(
+        this.chain,
+        this.config,
+        allUsers,
+        { logger: this.logger },
+      );
       let enqueued = 0;
       let alertsFired = 0;
       for (const h of healths) {
@@ -358,18 +444,27 @@ export class PredictiveCoordinator {
         }
       }
       if (enqueued > 0) {
-        this.logger.info({ enqueued, evaluated: healths.length }, "predictive enqueue");
+        this.logger.info(
+          { enqueued, evaluated: healths.length },
+          "predictive enqueue",
+        );
         this.executor.kick();
       }
       if (alertsFired > 0) {
-        this.logger.info({ alertsFired, evaluated: healths.length }, "predictive alerts queued");
+        this.logger.info(
+          { alertsFired, evaluated: healths.length },
+          "predictive alerts queued",
+        );
         // Drain immediately — the sweep could be 60s away. Fire-and-forget;
         // any failures re-buffer themselves at the head.
         if (this.notifier !== undefined) void this.notifier.drain();
       }
       for (const user of allUsers) void this.rebuild(user);
     } catch (err) {
-      this.logger.error({ err, users: allUsers.length }, "handleCrossings failed");
+      this.logger.error(
+        { err, users: allUsers.length },
+        "handleCrossings failed",
+      );
     }
   }
 }
@@ -392,7 +487,10 @@ export interface ThresholdSides {
   up: string | null;
 }
 
-function priceSides(down: bigint | undefined, up: bigint | undefined): ThresholdSides {
+function priceSides(
+  down: bigint | undefined,
+  up: bigint | undefined,
+): ThresholdSides {
   return {
     down: down === undefined ? null : down.toString(),
     up: up === undefined ? null : up.toString(),

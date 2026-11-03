@@ -12,6 +12,7 @@ import type {
   VenueEvents,
   WalletContext,
 } from "../../core/adapter.ts";
+import { IM_SPOT_SHOCK_REFRESH_MS } from "../../core/adapter.ts";
 import type { NetworkClients } from "../../core/client.ts";
 import { HashPowerPerpsDEXAbi } from "perps-contracts/abi/HashPowerPerpsDEX.ts";
 import { CollateralVaultAbi } from "collateral-margin-contracts/abi/CollateralVault.ts";
@@ -74,6 +75,9 @@ export class PerpsVenueAdapter implements VenueAdapter {
   private engineAddressCache: `0x${string}` | null = null;
   private collateralTokenCache: `0x${string}` | null = null;
   private imSpotShockCache: bigint | null = null;
+  private imSpotShockReadAt = 0;
+  private imSpotShockRefreshing = false;
+  private unwatchShocks: (() => void) | null = null;
   private readonly rawOracle: RawOracleReader;
 
   constructor(opts: PerpsVenueOptions) {
@@ -267,15 +271,60 @@ export class PerpsVenueAdapter implements VenueAdapter {
   }
 
   async fetchImSpotShock(): Promise<bigint> {
-    if (this.imSpotShockCache !== null) return this.imSpotShockCache;
+    if (
+      this.imSpotShockCache !== null &&
+      Date.now() - this.imSpotShockReadAt < IM_SPOT_SHOCK_REFRESH_MS
+    ) {
+      return this.imSpotShockCache;
+    }
     const { engine } = await this.resolveAddresses();
+    this.watchShocks(engine);
     const shock = await this.publicClient.readContract({
       address: engine,
       abi: PortfolioMarginEngineAbi,
       functionName: "imSpotShock",
     });
     this.imSpotShockCache = shock;
+    this.imSpotShockReadAt = Date.now();
     return shock;
+  }
+
+  /**
+   * The cached IM spot shock, or `null` before the first fetch. A stale value
+   * starts a background re-read, so synchronous order sizing follows `setShocks`.
+   */
+  cachedImSpotShock(): bigint | null {
+    this.refreshStaleImSpotShock();
+    return this.imSpotShockCache;
+  }
+
+  /** Take a `setShocks` IM change from the engine's `ShocksUpdated` as soon as it lands. */
+  private watchShocks(engine: `0x${string}`): void {
+    if (this.unwatchShocks !== null) return;
+    this.unwatchShocks = this.publicClient.watchContractEvent({
+      address: engine,
+      abi: PortfolioMarginEngineAbi,
+      eventName: "ShocksUpdated",
+      onLogs: (logs) => {
+        for (const log of logs) {
+          if (log.args.imSpot === undefined) continue;
+          this.imSpotShockCache = log.args.imSpot;
+          this.imSpotShockReadAt = Date.now();
+          this.logger.info({ imSpotShock: log.args.imSpot }, "imSpotShock updated from ShocksUpdated");
+        }
+      },
+    });
+  }
+
+  private refreshStaleImSpotShock(): void {
+    if (this.imSpotShockCache === null || this.imSpotShockRefreshing) return;
+    if (Date.now() - this.imSpotShockReadAt < IM_SPOT_SHOCK_REFRESH_MS) return;
+    this.imSpotShockRefreshing = true;
+    this.fetchImSpotShock()
+      .catch((err) => this.logger.warn({ err }, "imSpotShock re-read failed — keeping cached"))
+      .finally(() => {
+        this.imSpotShockRefreshing = false;
+      });
   }
 }
 

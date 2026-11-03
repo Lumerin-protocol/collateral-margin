@@ -66,7 +66,8 @@ run(user):
   # 2. Position leg — loop, worst-venue-first.
   for iter in 0..MAX_POSITION_ITERATIONS:
      ranked = rankVenuesByLoss(user)         # sum(unrealizedLoss) desc, notional tiebreak
-     if ranked empty: return badDebt         # nothing left to close, still < MM
+     if ranked empty and none closed: return standingDebt  # only account debt from an earlier close; info log
+     if ranked empty: return badDebt         # this run's closes left it < MM; error log
      worst = first actionable venue
      result = worst.reduceToTarget(user)     # ONE gas-bounded batched tx
      if result == ordersStillOpen: replay orders leg
@@ -114,16 +115,13 @@ risk.
 
 ## Keeper incentives / fee model
 
-> **Status (current code): keeper incentives are DISABLED.** No `liquidationFee`
-> is transferred on any liquidation path in either venue — `liquidatePosition`,
-> `liquidatePositions`, `liquidateOrder(s)`, and their perps equivalents all emit
-> a `0` fee and move no funds. The `liquidationFee` state variables and their
-> owner setters are **retained** (so a future iteration can re-enable payouts
-> without a storage migration), and the keeper's off-chain solvers model a **0
-> fee** so their balance projections match on-chain reality. The protocol runs
-> the only keeper for now, so there is nothing to incentivise; the anti-farming
-> design below is preserved as the reference for when incentives are turned back
-> on.
+> **Status (current code):** both venues charge `liquidationFeeBps` of the closed
+> notional at the mark (200 bps on prd), capped at the account's balance, and pay
+> `liquidatorShareBps` of it to the caller (20% on prd). Futures takes the fee
+> before its `OverLiquidation` guard, so the keeper reads `liquidationFeeBps` and
+> its futures solver charges it on every leg. The perps solver models no
+> fee: it picks the deepest close under IM, and the fee only lowers the balance
+> further. The flat-fee design below predates the bps fee.
 
 Liquidation fees drive keeper behaviour, so the fee model must not reward
 value-destroying or farming behaviour.
@@ -177,10 +175,16 @@ Mitigations (contract already supports these):
 ## Contract invariants relied upon
 
 - `liquidatePositions` / `liquidatePosition(user, closeQty)` do **not** recompute
-  margin per unit closed. They close the keeper-supplied amount and enforce a
-  **single** end-of-tx `OverLiquidation` guard: with exposure remaining and a
-  real buffer (`IM > MM`), leftover balance must be ≤ IM. A full close skips the
-  guard (the buffer is undefined once the position is gone — bad-debt path).
+  margin per unit closed. They close the keeper-supplied amount, and
+  `liquidatePositions` stops before a leg once the account is healthy. After each
+  close the `OverLiquidation` guard reverts if the balance is above IM while
+  `IM > MM`, so it decides at the first close that restores MM. It is vacuous only
+  once IM equals MM: no portfolio risk left (the bad-debt path) or a delta-neutral
+  book. Fully closing one expiry while others stay open is still checked, so a
+  full close of a profitable book can revert. The futures solver replays its legs
+  against this loop, falls back to two legs on a pair of expiries in any
+  proportion, and returns nothing when no candidate passes, which the venue reports
+  as `nothingToClose`.
 - Sizing the close so the account lands in `[MM, IM]` is the keeper's off-chain
   responsibility; the guard is only a backstop against over-liquidation, not a
   planner.

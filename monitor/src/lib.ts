@@ -5,8 +5,28 @@ import {
   PutMetricDataCommand,
   type StandardUnit,
 } from "@aws-sdk/client-cloudwatch";
+import { serializeError } from "./errSerializer.ts";
 
-export const log = (message: string) => console.log(message);
+/**
+ * RPC URLs carry the provider key in their path, and viem copies the request URL
+ * into its error messages, so anything logged or returned goes through this.
+ */
+export function redact(text: string): string {
+  let out = text;
+  for (const url of [process.env.ETH_RPC_URL, process.env.BITCOIN_RPC_URL]) {
+    if (url && URL.canParse(url))
+      out = out.replaceAll(url, `${new URL(url).origin}/<redacted>`);
+  }
+  const key = process.env.ALCHEMY_API_KEY;
+  if (key) out = out.replaceAll(key, "<redacted>");
+  return out.replace(/(alchemy\.com\/v2\/)[^\s"'/]+/g, "$1<redacted>");
+}
+
+export const log = (message: string) => console.log(redact(message));
+
+/** One-line form of a caught error; viem's full messages repeat the calldata at every cause level. */
+export const describeError = (error: unknown) =>
+  JSON.stringify(serializeError(error));
 
 // ── GraphQL ─────────────────────────────────────────────────────────────────
 
@@ -93,6 +113,6 @@ export async function publishFailure(namespace: string): Promise<void> {
   try {
     await push(namespace, [metric("CheckSuccess", 0, "Count")]);
   } catch (error) {
-    log(`failed to publish CheckSuccess=0: ${error}`);
+    log(`failed to publish CheckSuccess=0: ${describeError(error)}`);
   }
 }

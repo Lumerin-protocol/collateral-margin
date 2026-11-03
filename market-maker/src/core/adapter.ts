@@ -152,6 +152,12 @@ export interface CollateralSnapshot {
 }
 
 /**
+ * How long a venue trusts its cached PME `imSpotShock`. It changes only on admin
+ * `setShocks`; re-reading this often picks that up without a restart.
+ */
+export const IM_SPOT_SHOCK_REFRESH_MS = 600_000;
+
+/**
  * Per-venue collateral + portfolio-margin facade used by core. Concrete
  * adapters implement this against {perps DEX, futures} + the shared
  * CollateralVault + PortfolioMarginEngine.
@@ -159,7 +165,7 @@ export interface CollateralSnapshot {
 export interface CollateralAccount {
   /** One-shot read of all collateral / margin signals. Multicalled on chain. */
   snapshot(): Promise<CollateralSnapshot>;
-  /** Cached spot price of the engine's IM shock factor (used for IM estimation). */
+  /** The engine's IM spot shock (used for IM estimation), cached for `IM_SPOT_SHOCK_REFRESH_MS`. */
   imSpotShock(): Promise<bigint>;
   /**
    * Deposit `amount` of the collateral token from the wallet into the vault.
