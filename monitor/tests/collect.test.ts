@@ -5,6 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { before, describe, it } from "node:test";
+import { CloudWatchClient } from "@aws-sdk/client-cloudwatch";
 import {
   decodeFunctionData,
   encodeFunctionResult,
@@ -54,6 +55,8 @@ const MARGIN_ENGINE = "0x0000000000000000000000000000000000000009";
 const [EXP1, EXP2, EXP3, EXP4] = [1_795_608_000n, 1_798_200_000n, 1_800_792_000n, 1_803_384_000n];
 let failMarketMaker = false;
 let failHealth = false;
+/** The Base RPC answers 503, as Alchemy does when it sheds load. */
+let failRpc = false;
 
 const healthResponse = () => ({
   status: "running",
@@ -431,6 +434,8 @@ globalThis.fetch = (async (
   if (url.startsWith("https://btc.test"))
     return Response.json(bitcoinRpc(JSON.parse(String(init?.body))));
   userAgents.add(new Headers(init?.headers).get("user-agent") ?? "");
+  if (failRpc && url.startsWith("https://rpc.test"))
+    return new Response("upstream busy", { status: 503 });
   const body = JSON.parse(String(init?.body));
   const payload = url.startsWith("https://rpc.test")
     ? Array.isArray(body)
@@ -776,6 +781,28 @@ describe("collect", () => {
     } finally {
       failHealth = false;
       failMarketMaker = false;
+    }
+  });
+});
+
+describe("handler", () => {
+  it("N13: keeps the RPC key out of the log and the response when the chain read fails", async (t) => {
+    const lines: string[] = [];
+    t.mock.method(console, "log", (line: string) => lines.push(line));
+    t.mock.method(CloudWatchClient.prototype, "send", async () => ({}));
+    failRpc = true;
+    try {
+      const { handler } = await import("../src/index.ts");
+      const response = await handler();
+      assert.equal(response.statusCode, 500);
+      const output = [...lines, response.body].join("\n");
+      assert.match(output, /check failed/);
+      assert.ok(
+        !output.includes(new URL(String(process.env.ETH_RPC_URL)).pathname),
+        `the RPC key leaked:\n${output}`,
+      );
+    } finally {
+      failRpc = false;
     }
   });
 });

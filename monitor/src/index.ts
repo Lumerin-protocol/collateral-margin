@@ -39,11 +39,13 @@ import {
   readVault,
 } from "./gateway.ts";
 import {
+  describeError,
   dim,
   log,
   metric,
   publishFailure,
   push,
+  redact,
   toUnits,
   utilizationPct,
 } from "./lib.ts";
@@ -66,9 +68,9 @@ export async function handler(): Promise<{ statusCode: number; body: string }> {
     log(`ok ${summary}`);
     return { statusCode: 200, body: "ok" };
   } catch (error) {
-    log(`check failed: ${error}`);
+    log(`check failed: ${describeError(error)}`);
     await publishFailure(CW_NAMESPACE);
-    return { statusCode: 500, body: String(error) };
+    return { statusCode: 500, body: redact(describeError(error)) };
   }
 }
 
@@ -105,26 +107,26 @@ export async function collect(): Promise<{
       readPointsMeta().catch((error) => {
         // Best-effort: a points failure must not fail the vault debt check.
         failed.push("points");
-        log(`points drift failed: ${error}`);
+        log(`points drift failed: ${describeError(error)}`);
         return null;
       }),
       // Best-effort for the same reason; MarketCheckSuccess=0 flags it.
       readMarketMaker(at, vault.marginEngine).catch((error) => {
         failed.push("market_maker");
-        log(`market maker check failed: ${error?.shortMessage ?? error}`);
+        log(`market maker check failed: ${describeError(error)}`);
         return null;
       }),
       MM_HEALTH_URL
         ? readMarketMakerHealth(MM_HEALTH_URL).catch((error) => {
             failed.push("mm_health");
-            log(`market maker health failed: ${error}`);
+            log(`market maker health failed: ${describeError(error)}`);
             return null;
           })
         : undefined,
       // Best-effort: the halving countdown must not fail the vault debt check.
       readBitcoinTip().catch((error) => {
         failed.push("halving");
-        log(`halving check failed: ${error}`);
+        log(`halving check failed: ${describeError(error)}`);
         return null;
       }),
       // Never rejects; each explorer that fails is left out.
@@ -132,7 +134,7 @@ export async function collect(): Promise<{
       // Best-effort for the same reason.
       readPrices(at, vault.marginEngine).catch((error) => {
         failed.push("prices");
-        log(`price check failed: ${error?.shortMessage ?? error}`);
+        log(`price check failed: ${describeError(error)}`);
         return null;
       }),
       // Best-effort: these subgraphs feed the UI and market maker, not the vault check.
@@ -144,7 +146,7 @@ export async function collect(): Promise<{
               (meta) => ({ name, meta }),
               (error) => {
                 failed.push(`subgraph_${name}`);
-                log(`${name} subgraph check failed: ${error}`);
+                log(`${name} subgraph check failed: ${describeError(error)}`);
                 return null;
               },
             ),
