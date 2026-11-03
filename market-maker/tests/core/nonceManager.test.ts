@@ -1,6 +1,12 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { Account, Chain, PublicClient, WalletClient } from "viem";
+import { describe, it } from "node:test";
+import type {
+  Account,
+  Chain,
+  PublicClient,
+  TransactionReceipt,
+  WalletClient,
+} from "viem";
 import { NonceManager } from "../../src/core/nonceManager.ts";
 
 const noop = () => {};
@@ -20,16 +26,10 @@ function pending<T>(): Promise<T> {
   return new Promise<T>(() => {});
 }
 
-interface Mocks {
-  publicClient: PublicClient;
-  walletClient: WalletClient;
-  cancelCalls: { nonce: number }[];
-}
-
 function makeMocks(opts: {
   startNonce: number;
   receiptFor: (hash: string) => Promise<typeof RECEIPT>;
-}): Mocks {
+}) {
   const cancelCalls: { nonce: number }[] = [];
   const publicClient = {
     getTransactionCount: async () => opts.startNonce,
@@ -147,8 +147,8 @@ describe("NonceManager", () => {
       return Promise.resolve("0xok" as const);
     };
     // Swap receiptFor to resolve now.
-    (mocks.publicClient as unknown as { waitForTransactionReceipt: unknown }).waitForTransactionReceipt =
-      async () => RECEIPT;
+    mocks.publicClient.waitForTransactionReceipt = async () =>
+      RECEIPT as TransactionReceipt;
     await nm.submit(ok, { maxFeePerGas: 1n, label: "next" });
     assert.deepEqual(seen, [4]);
   });
@@ -186,11 +186,10 @@ describe("NonceManager", () => {
     // retry at the fresh nonce — NOT fee-bump a spent nonce or send a cancel-tx.
     let reads = 0;
     const mocks = makeMocks({ startNonce: 100, receiptFor: async () => RECEIPT });
-    (mocks.publicClient as unknown as { getTransactionCount: () => Promise<number> }).getTransactionCount =
-      async () => {
-        reads++;
-        return reads === 1 ? 100 : 101; // chain advanced by the other party
-      };
+    mocks.publicClient.getTransactionCount = async () => {
+      reads++;
+      return reads === 1 ? 100 : 101; // chain advanced by the other party
+    };
     const nm = new NonceManager(
       mocks.publicClient,
       mocks.walletClient,
@@ -227,11 +226,10 @@ describe("NonceManager", () => {
     // with a higher fee — it must NOT be treated as a stolen nonce and resynced.
     let reads = 0;
     const mocks = makeMocks({ startNonce: 42, receiptFor: async () => RECEIPT });
-    (mocks.publicClient as unknown as { getTransactionCount: () => Promise<number> }).getTransactionCount =
-      async () => {
-        reads++;
-        return 42; // if this were wrongly treated as desync, a re-read would happen
-      };
+    mocks.publicClient.getTransactionCount = async () => {
+      reads++;
+      return 42; // if this were wrongly treated as desync, a re-read would happen
+    };
     const nm = new NonceManager(
       mocks.publicClient,
       mocks.walletClient,
@@ -294,11 +292,10 @@ describe("NonceManager", () => {
   it("escalates to a cancel-tx and re-reads the nonce after a persistent send error", async () => {
     const mocks = makeMocks({ startNonce: 2, receiptFor: async () => RECEIPT });
     let counts = 0;
-    (mocks.publicClient as unknown as { getTransactionCount: () => Promise<number> }).getTransactionCount =
-      async () => {
-        counts++;
-        return counts === 1 ? 2 : 50; // desync: chain jumps ahead after reset
-      };
+    mocks.publicClient.getTransactionCount = async () => {
+      counts++;
+      return counts === 1 ? 2 : 50; // desync: chain jumps ahead after reset
+    };
     const nm = new NonceManager(
       mocks.publicClient,
       mocks.walletClient,
@@ -327,10 +324,9 @@ describe("NonceManager", () => {
 
   it("swallows a failing cancel-tx and still advances", async () => {
     const mocks = makeMocks({ startNonce: 8, receiptFor: () => pending<typeof RECEIPT>() });
-    (mocks.walletClient as unknown as { sendTransaction: () => Promise<never> }).sendTransaction =
-      async () => {
-        throw new Error("cancel broadcast failed");
-      };
+    mocks.walletClient.sendTransaction = async () => {
+      throw new Error("cancel broadcast failed");
+    };
     const nm = new NonceManager(
       mocks.publicClient,
       mocks.walletClient,
@@ -351,8 +347,9 @@ describe("NonceManager", () => {
     // Base's base fee can triple within half a minute (daily around 00:02 UTC), so a fee
     // read seconds earlier is rejected; a 15% bump alone stays below the new base fee.
     const mocks = makeMocks({ startNonce: 106_830, receiptFor: async () => RECEIPT });
-    (mocks.publicClient as unknown as { getBlock: () => Promise<{ baseFeePerGas: bigint }> }).getBlock =
-      async () => ({ baseFeePerGas: 18_800_000n });
+    mocks.publicClient.getBlock = (async () => ({
+      baseFeePerGas: 18_800_000n,
+    })) as PublicClient["getBlock"];
     const levels: string[] = [];
     const record = (level: string) => () => levels.push(level);
     const logger = {
@@ -394,11 +391,10 @@ describe("NonceManager", () => {
   it("resetNonce() forces a fresh chain read on the next submit", async () => {
     let counts = 0;
     const mocks = makeMocks({ startNonce: 0, receiptFor: async () => RECEIPT });
-    (mocks.publicClient as unknown as { getTransactionCount: () => Promise<number> }).getTransactionCount =
-      async () => {
-        counts++;
-        return counts === 1 ? 10 : 20;
-      };
+    mocks.publicClient.getTransactionCount = async () => {
+      counts++;
+      return counts === 1 ? 10 : 20;
+    };
     const nm = new NonceManager(
       mocks.publicClient,
       mocks.walletClient,
@@ -417,5 +413,93 @@ describe("NonceManager", () => {
     nm.resetNonce();
     await nm.submit(broadcast, { maxFeePerGas: 1n, label: "2" });
     assert.deepEqual(seen, [10, 20], "second submit re-read the nonce from chain");
+  });
+});
+
+/**
+ * N11: a tx mined after the confirmation timeout made its same-nonce replacement fail
+ * "nonce too low", which read as another party spending the nonce, so the same calldata
+ * was broadcast again at the next nonce and the update could land twice.
+ */
+describe("N11 — a late receipt is not sent again", () => {
+  it("returns the original tx when its replacement finds the nonce spent", async () => {
+    const mined = new Set<string>();
+    const mocks = makeMocks({
+      startNonce: 7,
+      // Only the original's receipt arrives after the confirmation timeout.
+      receiptFor: (hash) =>
+        new Promise((resolve) =>
+          setTimeout(
+            () => {
+              mined.add(hash);
+              resolve(RECEIPT);
+            },
+            hash === "0xa" ? 40 : 0,
+          ),
+        ),
+    });
+    let reads = 0;
+    mocks.publicClient.getTransactionCount = async () => (reads++ === 0 ? 7 : 8);
+    mocks.publicClient.getTransactionReceipt = async ({ hash }) => {
+      if (!mined.has(hash))
+        throw new Error(
+          `Transaction receipt with hash "${hash}" could not be found.`,
+        );
+      return { ...RECEIPT, status: "success" } as TransactionReceipt;
+    };
+    const nm = new NonceManager(
+      mocks.publicClient,
+      mocks.walletClient,
+      account,
+      chain,
+      { confirmationTimeoutMs: 20, maxReplacements: 2 },
+      makeLogger(),
+    );
+
+    const attempts: number[] = [];
+    const broadcast = async ({ nonce }: { nonce: number }) => {
+      attempts.push(nonce);
+      if (attempts.length === 1) return "0xa" as const;
+      // The replacement goes out after the original was mined.
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      if (nonce === 7)
+        throw new Error("nonce too low: next nonce 8, tx nonce 7");
+      return "0xb" as const;
+    };
+
+    const outcome = await nm.submit(broadcast, {
+      maxFeePerGas: 100n,
+      label: "perps",
+    });
+    assert.equal(outcome.gasUsed, RECEIPT.gasUsed);
+    assert.deepEqual(
+      attempts,
+      [7, 7],
+      "the update must not be broadcast again at nonce 8",
+    );
+    assert.equal(mocks.cancelCalls.length, 0);
+  });
+
+  it("rejects when the tx lands reverted", async () => {
+    const mocks = makeMocks({
+      startNonce: 3,
+      receiptFor: async () => ({ ...RECEIPT, status: "reverted" }),
+    });
+    const nm = new NonceManager(
+      mocks.publicClient,
+      mocks.walletClient,
+      account,
+      chain,
+      {},
+      makeLogger(),
+    );
+
+    await assert.rejects(
+      nm.submit(() => Promise.resolve("0xr" as const), {
+        maxFeePerGas: 1n,
+        label: "futures",
+      }),
+      /reverted/,
+    );
   });
 });

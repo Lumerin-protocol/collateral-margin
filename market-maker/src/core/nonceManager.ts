@@ -31,6 +31,10 @@ export interface TxOutcome {
   effectiveGasPrice: bigint;
 }
 
+interface MinedReceipt extends TxOutcome {
+  status?: "success" | "reverted";
+}
+
 /**
  * Owns the shared wallet's nonce for a single-wallet, multi-venue process.
  *
@@ -45,6 +49,10 @@ export interface TxOutcome {
  *      this is safe even for non-idempotent creates).
  *   3. After `maxReplacements`, escalate to a `cancel-tx` (0-value self-send at
  *      nonce N with an aggressive fee) to free the nonce, then advance.
+ *
+ * A replacement rejected "nonce too low" may only mean an earlier broadcast at
+ * N landed after its timeout, so the hashes already sent at N are checked
+ * before the tx is treated as displaced and sent again at a fresh nonce.
  */
 export class NonceManager {
   private next: number | null = null;
@@ -121,29 +129,30 @@ export class NonceManager {
     let nonce = await this.nextNonce();
     let fee = opts.maxFeePerGas;
     let resyncs = 0;
+    /** Every hash broadcast at `nonce`; any of them may be the one that lands. */
+    let sent: Hex[] = [];
 
     for (let attempt = 0; attempt <= this.maxReplacements; attempt++) {
+      let receipt: MinedReceipt | null = null;
       try {
         const hash = await broadcast({ nonce, maxFeePerGas: fee });
-        const receipt = await this.waitWithTimeout(hash);
-        if (receipt) {
-          this.next = nonce + 1;
-          return {
-            gasUsed: receipt.gasUsed,
-            effectiveGasPrice: receipt.effectiveGasPrice,
-          };
+        sent.push(hash);
+        receipt = await this.waitWithTimeout(hash);
+        if (!receipt) {
+          // Timeout: bump fee and resubmit the same nonce.
+          fee = this.bump(fee);
+          this.logger.warn(
+            { label: opts.label, nonce, attempt, maxFeePerGas: fee.toString() },
+            "tx confirmation timed out; replacing by fee",
+          );
+          continue;
         }
-        // Timeout: bump fee and resubmit the same nonce.
-        fee = this.bump(fee);
-        this.logger.warn(
-          { label: opts.label, nonce, attempt, maxFeePerGas: fee.toString() },
-          "tx confirmation timed out; replacing by fee",
-        );
       } catch (err) {
-        // A *third party* (e.g. a keeper sharing this wallet) consumed our nonce.
-        // Fee-bumping or cancelling a nonce that is already spent is pointless and
-        // only burns gas, so re-read the live nonce and retry at the fresh value.
-        if (isNonceDesyncError(err)) {
+        if (isNonceDesyncError(err)) receipt = await this.landedReceipt(sent);
+        // Not one of ours: a *third party* (e.g. a keeper sharing this wallet)
+        // consumed the nonce. Fee-bumping or cancelling a spent nonce is pointless
+        // and only burns gas, so re-read the live nonce and retry at the fresh value.
+        if (!receipt && isNonceDesyncError(err)) {
           // Exhausted the resync budget: the nonce is being taken faster than we
           // can claim it. A spent nonce cannot be replaced or cancelled, so skip
           // the fee-bump/cancel escalation entirely and surface the failure now —
@@ -164,27 +173,40 @@ export class NonceManager {
             "nonce advanced by another party; resyncing to chain",
           );
           nonce = fresh;
+          sent = [];
           fee = opts.maxFeePerGas; // fresh nonce starts from the base fee again
           attempt = -1; // ...becomes 0 after the loop increment: full retry budget
           continue;
         }
-        // A submission error (revert-on-send, RPC error). Fee-bump-and-retry a
-        // couple of times; a persistent failure likely means the nonce is
-        // wedged, so unstick it below. A warning only: the caller logs the error
-        // if the send does not recover.
-        this.logger.warn(
-          { err, label: opts.label, nonce, attempt },
-          "tx submission failed",
-        );
-        if (attempt >= this.maxReplacements) {
-          await this.tryCancelTx(nonce, fee);
-          this.next = nonce + 1;
-          this.resetNonce(); // resync from chain next time in case of desync
-          throw err instanceof Error ? err : new Error(String(err));
+        if (!receipt) {
+          // A submission error (revert-on-send, RPC error). Fee-bump-and-retry a
+          // couple of times; a persistent failure likely means the nonce is
+          // wedged, so unstick it below. A warning only: the caller logs the error
+          // if the send does not recover.
+          this.logger.warn(
+            { err, label: opts.label, nonce, attempt },
+            "tx submission failed",
+          );
+          if (attempt >= this.maxReplacements) {
+            await this.tryCancelTx(nonce, fee);
+            this.next = nonce + 1;
+            this.resetNonce(); // resync from chain next time in case of desync
+            throw err instanceof Error ? err : new Error(String(err));
+          }
+          fee = this.bump(fee);
+          if (isFeeCapTooLowError(err)) fee = await this.aboveBaseFee(fee);
+          continue;
         }
-        fee = this.bump(fee);
-        if (isFeeCapTooLowError(err)) fee = await this.aboveBaseFee(fee);
       }
+
+      this.next = nonce + 1;
+      if (receipt.status === "reverted") {
+        throw new Error(`tx "${opts.label}" reverted at nonce ${nonce}`);
+      }
+      return {
+        gasUsed: receipt.gasUsed,
+        effectiveGasPrice: receipt.effectiveGasPrice,
+      };
     }
 
     // Exhausted replacements on repeated timeout: free the nonce and advance.
@@ -210,17 +232,27 @@ export class NonceManager {
     }
   }
 
-  private async waitWithTimeout(
-    hash: Hex,
-  ): Promise<{ gasUsed: bigint; effectiveGasPrice: bigint } | null> {
+  private async waitWithTimeout(hash: Hex): Promise<MinedReceipt | null> {
     const timeout = new Promise<null>((resolve) =>
       setTimeout(() => resolve(null), this.confirmationTimeoutMs),
     );
     const receipt = this.publicClient
       .waitForTransactionReceipt({ hash })
-      .then((r) => ({ gasUsed: r.gasUsed, effectiveGasPrice: r.effectiveGasPrice }))
+      .then(minedReceipt)
       .catch(() => null);
     return Promise.race([receipt, timeout]);
+  }
+
+  /** The receipt of whichever of `hashes` was mined, or null if none was. */
+  private async landedReceipt(hashes: readonly Hex[]): Promise<MinedReceipt | null> {
+    for (const hash of hashes) {
+      try {
+        return minedReceipt(await this.publicClient.getTransactionReceipt({ hash }));
+      } catch {
+        // Not mined (or not visible yet): try the next hash.
+      }
+    }
+    return null;
   }
 
   /**
@@ -245,6 +277,10 @@ export class NonceManager {
       this.logger.error({ err, nonce }, "cancel-tx failed; will resync nonce");
     }
   }
+}
+
+function minedReceipt(r: MinedReceipt): MinedReceipt {
+  return { gasUsed: r.gasUsed, effectiveGasPrice: r.effectiveGasPrice, status: r.status };
 }
 
 /**
