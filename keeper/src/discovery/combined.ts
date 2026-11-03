@@ -39,6 +39,13 @@ export class CombinedParticipantSource implements ParticipantSource {
       this.sources.map((source) => source.onChanged(listener)),
     );
   }
+
+  idlePruner(): (idle: readonly Address[]) => number {
+    const pruners = this.sources.flatMap((source) =>
+      source.idlePruner ? [source.idlePruner()] : [],
+    );
+    return (idle) => pruners.reduce((dropped, prune) => dropped + prune(idle), 0);
+  }
 }
 
 function combineDisposers(disposers: Array<() => void>): () => void {

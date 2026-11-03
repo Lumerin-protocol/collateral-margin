@@ -30,14 +30,19 @@ import { isProtocolAccount } from "../protocolAccounts.ts";
  * the gap from `fromBlock` up to the head of the watcher.
  *
  * The tracker is a "set of users to consider" — it never decides whether a
- * user is liquidatable. That's the planner's job. Users are not removed when
- * they go flat: an extra `readAccountHealthBatch` read per dormant trader is
- * far cheaper than missing one.
+ * user is liquidatable. That's the planner's job. The sweep drops users it
+ * reads with no margin requirement at all (no position, order or debt), via
+ * `idlePruner`, so a dust order cannot keep an address in every sweep for
+ * good. Exposure only returns through a perps order or match, whose event
+ * tracks the user again; futures exposure is covered by `FuturesExpiryIndex`.
  */
 export type TrackerListener = ParticipantListener;
 
 export class ParticipantTracker implements ParticipantSource {
   private readonly users = new Set<Address>();
+  /** Perps event count, and the count at each user's last perps event. */
+  private activity = 0;
+  private readonly lastActivity = new Map<Address, number>();
   private readonly addedListeners = new Set<TrackerListener>();
   private readonly changedListeners = new Set<TrackerListener>();
   /** Disposers returned by `watchContractEvent` — unwatched on `stop()`. */
@@ -242,9 +247,29 @@ export class ParticipantTracker implements ParticipantSource {
     return added;
   }
 
-  /** Returns true if the user was tracked. We rarely call this — see class doc. */
+  /** Returns true if the user was tracked. */
   remove(user: Address): boolean {
-    return this.users.delete(getAddress(user));
+    const checksummed = getAddress(user);
+    this.lastActivity.delete(checksummed);
+    return this.users.delete(checksummed);
+  }
+
+  /**
+   * Taken before the sweep reads health: a user whose perps event lands after
+   * it may hold an order the read did not see, so only users with no perps
+   * event since are dropped.
+   */
+  idlePruner(): (idle: readonly Address[]) => number {
+    const mark = this.activity;
+    return (idle) => {
+      let dropped = 0;
+      for (const user of idle) {
+        const checksummed = getAddress(user);
+        if ((this.lastActivity.get(checksummed) ?? 0) > mark) continue;
+        if (this.remove(checksummed)) dropped++;
+      }
+      return dropped;
+    };
   }
 
   list(): Address[] {
@@ -315,7 +340,10 @@ export class ParticipantTracker implements ParticipantSource {
    */
   private touch(user: Address): void {
     this.add(user);
-    this.notifyChanged(getAddress(user));
+    const checksummed = getAddress(user);
+    if (this.users.has(checksummed))
+      this.lastActivity.set(checksummed, ++this.activity);
+    this.notifyChanged(checksummed);
   }
 
   /**

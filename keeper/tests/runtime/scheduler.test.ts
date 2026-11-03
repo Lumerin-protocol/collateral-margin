@@ -340,3 +340,96 @@ describe("Scheduler.runSweep: queue + executor wiring", () => {
     assert.equal(tracking.kicks, 0);
   });
 });
+
+/**
+ * A chain whose `watchContractEvent` keeps each handler, so a test can deliver perps logs the
+ * way the live watcher does. `duringRead` runs while the sweep's health multicall is in flight.
+ */
+function makeWatchedChain(opts: {
+  healthScript: Array<{ balance: bigint; im: bigint; mm: bigint }>;
+  duringRead?: () => void;
+}): { chain: Chain; deliver: (eventName: string, args: Record<string, Address>) => void } {
+  const handlers = new Map<string, (logs: readonly unknown[]) => void>();
+  const chain = {
+    publicClient: {
+      multicall: async () => {
+        opts.duringRead?.();
+        return opts.healthScript
+          .flatMap((h) => [h.balance, h.im, h.mm])
+          .map((result) => ({ status: "success", result }));
+      },
+      readContract: async () => [],
+      watchContractEvent: ({
+        eventName,
+        onLogs,
+      }: {
+        eventName: string;
+        onLogs: (logs: readonly unknown[]) => void;
+      }) => {
+        handlers.set(eventName, onLogs);
+        return () => undefined;
+      },
+    },
+  } as unknown as Chain;
+  const deliver = (eventName: string, args: Record<string, Address>) =>
+    handlers.get(eventName)?.([{ args }]);
+  return { chain, deliver };
+}
+
+/**
+ * N9: the perps watch set only grew. With 1 USDC deposited, a dust perps order (about $0.02 of
+ * gas) added an address that every sweep then read forever, even after the order was cancelled
+ * and the USDC withdrawn.
+ */
+describe("N9 — the sweep drops perps users with nothing to liquidate", () => {
+  const withdrawn = { balance: 0n, im: 0n, mm: 0n };
+  const holding = { balance: 50_000_000n, im: 4_950_000n, mm: 3_300_000n };
+
+  async function sweepOnce(
+    healthScript: Array<{ balance: bigint; im: bigint; mm: bigint }>,
+    users: readonly Address[],
+    duringRead?: (deliver: (eventName: string, args: Record<string, Address>) => void) => void,
+  ) {
+    const config = makeConfig();
+    let deliverLater: (eventName: string, args: Record<string, Address>) => void = () => undefined;
+    const { chain, deliver } = makeWatchedChain({
+      healthScript,
+      duringRead: () => duringRead?.(deliverLater),
+    });
+    deliverLater = deliver;
+    const tracker = new ParticipantTracker(chain, config, silentLogger);
+    await tracker.start();
+    for (const user of users) deliver("OrderCreated", { participant: user });
+    const scheduler = new Scheduler(
+      chain,
+      config,
+      tracker,
+      new CoordinatorQueue(),
+      makeKickableExecutor().executor,
+      new Notifier(config, silentLogger, { poster: async () => undefined }),
+      silentLogger,
+    );
+    await scheduler.runSweep();
+    return { tracker, deliver };
+  }
+
+  it("drops a user with no position, order or debt and keeps one holding a position", async () => {
+    const { tracker } = await sweepOnce([withdrawn, holding], [userAt(0), userAt(1)]);
+    assert.equal(tracker.has(userAt(0)), false, "a withdrawn dust trader must leave the sweep");
+    assert.equal(tracker.has(userAt(1)), true);
+  });
+
+  it("keeps a user whose perps order arrives while the sweep reads health", async () => {
+    const { tracker } = await sweepOnce([withdrawn], [userAt(0)], (deliver) =>
+      deliver("OrderCreated", { participant: userAt(0) }),
+    );
+    assert.equal(tracker.has(userAt(0)), true);
+  });
+
+  it("tracks a dropped user again on their next perps order", async () => {
+    const { tracker, deliver } = await sweepOnce([withdrawn], [userAt(0)]);
+    assert.equal(tracker.has(userAt(0)), false);
+    deliver("OrderMatched", { maker: userAt(2), taker: userAt(0) });
+    assert.equal(tracker.has(userAt(0)), true);
+  });
+});
