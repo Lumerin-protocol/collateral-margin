@@ -64,7 +64,9 @@ interface ILinearMarket {
     }
 
     /// @notice Batched read of the user's margin inputs (see RiskView).
-    /// @dev Deliberately a new selector rather than an extension of the former
+    /// @dev Deprecated for margin: the engine reads `ILinearMarketExposure.getExposureView`,
+    ///      and this only for a market without it, valuing its deltas at the index.
+    ///      Deliberately a new selector rather than an extension of the former
     ///      `getAccountView`. Engine and markets are independently upgraded UUPS
     ///      proxies; the old four-word decoder reading this seven-word tuple would
     ///      silently take `pendingFunding` as the old `orderMargin` instead of

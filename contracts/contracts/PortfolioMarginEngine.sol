@@ -11,6 +11,7 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {AggregatorV3Interface} from "./interfaces/AggregatorV3Interface.sol";
 import {ICollateralVault} from "./interfaces/ICollateralVault.sol";
 import {ILinearMarket} from "./interfaces/ILinearMarket.sol";
+import {ILinearMarketExposure} from "./interfaces/ILinearMarketExposure.sol";
 import {IOptionsEnginePortfolioView} from "./interfaces/IOptionsEnginePortfolioView.sol";
 import {IPortfolioMarginEngine} from "./interfaces/IPortfolioMarginEngine.sol";
 import {Versionable} from "./interfaces/Versionable.sol";
@@ -23,12 +24,17 @@ import {MathLib as M, WAD} from "./libs/MathLib.sol";
 ///         The engine is product-agnostic: linear markets are managed via
 ///         addLinearMarket/removeLinearMarket, options via setOptions.
 ///
-///         portfolio{IM,MM} = max( stress(netDelta + Σ buyOrderDelta),
-///                                 stress(netDelta − Σ sellOrderDelta) )
+///         portfolio{IM,MM} = max( stress(netExposure + Σ buyOrderExposure),
+///                                 stress(netExposure − Σ sellOrderExposure) )
 ///                            + Σ buyOrderFillLoss + Σ sellOrderFillLoss + optionsReserved
 ///                            + pnlTerm + Σ max(0, pendingFunding)
 ///                            + accountDebt
 ///         (sums over all registered linear markets)
+///
+///         Exposure is value at each market's own mark (`ILinearMarketExposure`), so a market
+///         whose mark is not the index (one anticipating a scheduled step) is stressed at what
+///         its contracts are worth; options delta is valued at the index. Stress shocks exposure
+///         by the spot shock: stress(E) = |E| × shock, plus the options gamma and vega terms.
 ///
 ///         The two requirements differ only in their spot shock and in `pnlTerm`:
 ///
@@ -53,9 +59,9 @@ import {MathLib as M, WAD} from "./libs/MathLib.sol";
 ///         venues' `OverLiquidation` guard depends on.
 ///
 ///         The two stress legs bound the requirement after *any* subset of the
-///         account's resting orders fills: a subset leaves net delta somewhere in
-///         [netDelta − sellOrderDelta, netDelta + buyOrderDelta], and stress is convex
-///         in delta, so the maximum over that interval is attained at an endpoint. The
+///         account's resting orders fills: a subset leaves net exposure somewhere in
+///         [netExposure − sellOrderExposure, netExposure + buyOrderExposure], and stress is
+///         convex in exposure, so the maximum over that interval is attained at an endpoint. The
 ///         no-fill case is interior and therefore bounded too. That is the guarantee
 ///         the venues cannot provide themselves — there is no margin check on a maker
 ///         at fill time, so the reservation held against a resting order is the only
@@ -77,7 +83,7 @@ contract PortfolioMarginEngine is
     ///         `MAX_PRICE`. A feed above it reverts like a stale one, so the shocked spot and
     ///         every stress term stay far inside int256.
     uint256 public constant MAX_SPOT_PRICE = 10_000 * WAD;
-    string public constant VERSION = "2.6.0";
+    string public constant VERSION = "2.6.1";
 
     /// @notice The collateral vault this engine aggregates balances from.
     /// @dev Fixed per implementation, like the products' own vault pins: every registered
@@ -268,9 +274,9 @@ contract PortfolioMarginEngine is
 
     /// @notice Compute IM and MM from one market/options snapshot and one oracle read.
     function computePortfolioMargins(address user) external view returns (uint256 im, uint256 mm) {
-        MarginInputs memory inputs = _marginInputs(user, _linearAggregate(user));
-        inputs.accountDebt = vault.accountDebt(user);
         uint256 spotPrice = _getSpotPriceWad();
+        MarginInputs memory inputs = _marginInputs(user, _linearAggregate(user, spotPrice));
+        inputs.accountDebt = vault.accountDebt(user);
         im = _marginFromInputs(inputs, true, spotPrice);
         mm = _marginFromInputs(inputs, false, spotPrice);
     }
@@ -351,14 +357,14 @@ contract PortfolioMarginEngine is
     ///      the cost of two orders is not the sum of their individual costs. Callers
     ///      wanting a per-order gate want `linearOrderMargin` instead.
     function orderMarginOf(address user) external view returns (uint256) {
-        LinearAggregate memory agg = _linearAggregate(user);
-        if (agg.buyOrderDelta == 0 && agg.sellOrderDelta == 0 && agg.fillLoss == 0) return 0;
-        MarginInputs memory inputs = _marginInputs(user, agg);
         uint256 spotPrice = _getSpotPriceWad();
+        LinearAggregate memory agg = _linearAggregate(user, spotPrice);
+        if (agg.buyOrderExposure == 0 && agg.sellOrderExposure == 0 && agg.fillLoss == 0) return 0;
+        MarginInputs memory inputs = _marginInputs(user, agg);
         uint256 withOrders = _marginFromInputs(inputs, true, spotPrice);
 
-        inputs.linear.buyOrderDelta = 0;
-        inputs.linear.sellOrderDelta = 0;
+        inputs.linear.buyOrderExposure = 0;
+        inputs.linear.sellOrderExposure = 0;
         inputs.linear.fillLoss = 0;
         uint256 withoutOrders = _marginFromInputs(inputs, true, spotPrice);
 
@@ -386,13 +392,13 @@ contract PortfolioMarginEngine is
 
     // ── Internal ────────────────────────────────────────────────────────────
 
-    /// @dev Summed `ILinearMarket.RiskView` across every registered market. Deltas are
-    ///      WAD-lifted (the engine's internal scale); the monetary add-ons stay in token
-    ///      decimals, as the markets report them.
+    /// @dev Summed margin inputs across every registered market. Exposures are WAD-lifted
+    ///      (the engine's internal scale); the monetary add-ons stay in token decimals, as the
+    ///      markets report them.
     struct LinearAggregate {
-        int256 netDelta;
-        uint256 buyOrderDelta;
-        uint256 sellOrderDelta;
+        int256 netExposure;
+        uint256 buyOrderExposure;
+        uint256 sellOrderExposure;
         uint256 fillLoss;
         uint256 unrealizedLossPerMarket;
         int256 netUnrealizedPnl;
@@ -401,7 +407,8 @@ contract PortfolioMarginEngine is
 
     struct MarginInputs {
         LinearAggregate linear;
-        int256 netDelta;
+        /// @dev Options delta in contracts (WAD); valued at the index when stressed.
+        int256 optionsDelta;
         int256 netGamma;
         int256 netVega;
         uint256 optionsReserved;
@@ -409,7 +416,8 @@ contract PortfolioMarginEngine is
     }
 
     function _computeMargin(address user, bool isIM) private view returns (uint256) {
-        return _marginFromAggregate(user, _linearAggregate(user), isIM);
+        uint256 spotPrice = _getSpotPriceWad();
+        return _marginFromInputs(_debtInputs(user, _linearAggregate(user, spotPrice)), isIM, spotPrice);
     }
 
     /// @dev Inputs, spot and balance read once, so IM and MM priced from them describe the
@@ -419,9 +427,8 @@ contract PortfolioMarginEngine is
         view
         returns (MarginInputs memory inputs, uint256 spotPrice, uint256 balance)
     {
-        inputs = _marginInputs(user, _linearAggregate(user));
-        inputs.accountDebt = vault.accountDebt(user);
         spotPrice = _getSpotPriceWad();
+        inputs = _debtInputs(user, _linearAggregate(user, spotPrice));
         balance = vault.balanceOf(user);
     }
 
@@ -432,25 +439,19 @@ contract PortfolioMarginEngine is
         returns (MarginInputs memory inputs)
     {
         inputs.linear = agg;
-        inputs.netDelta = agg.netDelta;
         if (address(optionsEngine) != address(0)) {
             (int256 optDelta, int256 optGamma, int256 optVega) = optionsEngine.getNetGreeks(user);
-            inputs.netDelta += optDelta;
+            inputs.optionsDelta = optDelta;
             inputs.netGamma = optGamma;
             inputs.netVega = optVega;
             inputs.optionsReserved = M.fromWad(optionsEngine.getOptionsReservedMargin(user), collateralDecimals);
         }
     }
 
-    /// @dev Price one shared account snapshot at either IM or MM shocks.
-    function _marginFromAggregate(address user, LinearAggregate memory agg, bool isIM)
-        private
-        view
-        returns (uint256)
-    {
-        MarginInputs memory inputs = _marginInputs(user, agg);
+    /// @dev `_marginInputs` with the account's debt, ready to price at either shock.
+    function _debtInputs(address user, LinearAggregate memory agg) private view returns (MarginInputs memory inputs) {
+        inputs = _marginInputs(user, agg);
         inputs.accountDebt = vault.accountDebt(user);
-        return _marginFromInputs(inputs, isIM, _getSpotPriceWad());
     }
 
     function _marginFromInputs(MarginInputs memory inputs, bool isIM, uint256 spotPrice)
@@ -459,13 +460,15 @@ contract PortfolioMarginEngine is
         returns (uint256)
     {
         LinearAggregate memory agg = inputs.linear;
+        // 1. Net exposure: linear exposure at each market's mark, options delta at the index.
+        int256 netExposure = agg.netExposure + inputs.optionsDelta * int256(spotPrice) / int256(WAD);
         // 2. Stress both fill legs (WAD-scaled) and keep the worse. Gamma and vega ride
-        //    along unchanged in both — only delta moves with the orders.
+        //    along unchanged in both — only exposure moves with the orders.
         uint256 worstLoss = _worstStressLoss(
-            inputs.netDelta + SafeCast.toInt256(agg.buyOrderDelta), inputs.netGamma, inputs.netVega, isIM, spotPrice
+            netExposure + SafeCast.toInt256(agg.buyOrderExposure), inputs.netGamma, inputs.netVega, isIM, spotPrice
         );
         uint256 sellLoss = _worstStressLoss(
-            inputs.netDelta - SafeCast.toInt256(agg.sellOrderDelta), inputs.netGamma, inputs.netVega, isIM, spotPrice
+            netExposure - SafeCast.toInt256(agg.sellOrderExposure), inputs.netGamma, inputs.netVega, isIM, spotPrice
         );
         if (sellLoss > worstLoss) worstLoss = sellLoss;
 
@@ -483,34 +486,63 @@ contract PortfolioMarginEngine is
             + inputs.accountDebt;
     }
 
-    /// @dev One batched getRiskView call per registered linear market: sums the WAD-lifted
-    ///      net and per-side order deltas alongside the fill-loss / negative-PnL /
-    ///      funding-owed add-ons.
+    /// @dev One batched call per registered linear market: sums the WAD-lifted net and
+    ///      per-side order exposures alongside the fill-loss / negative-PnL / funding-owed
+    ///      add-ons. `getExposureView` first; a market without it reports deltas through
+    ///      `getRiskView`, valued here at the index.
     ///
     ///      Both sides' fill losses are summed into one term and charged in both stress
     ///      legs. That over-reserves slightly, and deliberately so: it removes any
     ///      dependence on an argument about which side can carry a loss at a given spot.
     ///      Futures orders at different expiries are not mutually crossed, so both sides
     ///      genuinely can.
-    function _linearAggregate(address user) private view returns (LinearAggregate memory agg) {
+    function _linearAggregate(address user, uint256 spotPrice) private view returns (LinearAggregate memory agg) {
         uint256 len = linearMarkets.length();
         for (uint256 i = 0; i < len; i++) {
-            ILinearMarket.RiskView memory account = ILinearMarket(linearMarkets.at(i)).getRiskView(user);
-
-            agg.netDelta += M.toWad(account.netPositionDelta, collateralDecimals);
-            agg.buyOrderDelta += M.toWad(account.buyOrderDelta, collateralDecimals);
-            agg.sellOrderDelta += M.toWad(account.sellOrderDelta, collateralDecimals);
-            agg.fillLoss += account.buyOrderFillLoss + account.sellOrderFillLoss;
-            agg.netUnrealizedPnl += account.unrealizedPnl;
-            if (account.unrealizedPnl < 0) agg.unrealizedLossPerMarket += uint256(-account.unrealizedPnl);
-            if (account.pendingFunding > 0) agg.fundingOwed += uint256(account.pendingFunding);
+            address market = linearMarkets.at(i);
+            int256 unrealizedPnl;
+            int256 pendingFunding;
+            try ILinearMarketExposure(market).getExposureView(user) returns (
+                ILinearMarketExposure.ExposureView memory account
+            ) {
+                agg.netExposure += M.toWad(account.netPositionExposure, collateralDecimals);
+                agg.buyOrderExposure += M.toWad(account.buyOrderExposure, collateralDecimals);
+                agg.sellOrderExposure += M.toWad(account.sellOrderExposure, collateralDecimals);
+                agg.fillLoss += account.buyOrderFillLoss + account.sellOrderFillLoss;
+                unrealizedPnl = account.unrealizedPnl;
+                pendingFunding = account.pendingFunding;
+            } catch (bytes memory reason) {
+                // A revert with data is the market failing, not lacking the view: fail closed.
+                if (reason.length != 0) {
+                    assembly {
+                        revert(add(reason, 32), mload(reason))
+                    }
+                }
+                // A market without the exposure view marks at the index. Order deltas must fit
+                // int256 before they are valued, so an oversized one is rejected, not wrapped.
+                ILinearMarket.RiskView memory account = ILinearMarket(market).getRiskView(user);
+                int256 index = int256(spotPrice);
+                agg.netExposure += M.toWad(account.netPositionDelta, collateralDecimals) * index / int256(WAD);
+                agg.buyOrderExposure += uint256(
+                    SafeCast.toInt256(M.toWad(account.buyOrderDelta, collateralDecimals)) * index / int256(WAD)
+                );
+                agg.sellOrderExposure += uint256(
+                    SafeCast.toInt256(M.toWad(account.sellOrderDelta, collateralDecimals)) * index / int256(WAD)
+                );
+                agg.fillLoss += account.buyOrderFillLoss + account.sellOrderFillLoss;
+                unrealizedPnl = account.unrealizedPnl;
+                pendingFunding = account.pendingFunding;
+            }
+            agg.netUnrealizedPnl += unrealizedPnl;
+            if (unrealizedPnl < 0) agg.unrealizedLossPerMarket += uint256(-unrealizedPnl);
+            if (pendingFunding > 0) agg.fundingOwed += uint256(pendingFunding);
         }
     }
 
     /// @dev Return the worst loss over (±Δs, ±Δσ), where each linear term is minimized
     ///      independently and the gamma term is unchanged across spot directions.
-    ///      PnL ≈ delta·Δs + ½·gamma·Δs² + vega·Δσ
-    function _worstStressLoss(int256 netDelta, int256 netGamma, int256 netVega, bool isIM, uint256 spotPrice)
+    ///      PnL ≈ exposure·shock + ½·gamma·Δs² + vega·Δσ, with Δs = shock·spot
+    function _worstStressLoss(int256 netExposure, int256 netGamma, int256 netVega, bool isIM, uint256 spotPrice)
         private
         view
         returns (uint256 worst)
@@ -524,7 +556,7 @@ contract PortfolioMarginEngine is
         // Pre-compute gamma term: ½ · gamma · Δs²
         int256 gammaTerm = netGamma * int256(deltaS) / int256(WAD) * int256(deltaS) / int256(2 * WAD);
 
-        int256 deltaPnl = netDelta * int256(deltaS) / int256(WAD);
+        int256 deltaPnl = netExposure * int256(spotShockFrac) / int256(WAD);
         int256 vegaPnl = netVega * int256(volShock) / int256(WAD);
         uint256 deltaLoss = deltaPnl < 0 ? uint256(-deltaPnl) : uint256(deltaPnl);
         uint256 vegaLoss = vegaPnl < 0 ? uint256(-vegaPnl) : uint256(vegaPnl);
