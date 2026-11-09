@@ -115,8 +115,12 @@ function makeChainStub(opts: {
           return snapshotMulticall(opts.balance, [expiry]);
         }
         if (fns[0] === "getUserPosition") {
-          // Per-expiry batch: positions, settlement prices, order aggregates.
+          // Per-expiry batch: positions, settlement prices, order aggregates, and
+          // every mark at the index.
           return contracts.map((c) => {
+            if (c.functionName === "getMarkRange")
+              return [opts.marketPrice, opts.marketPrice];
+            if (c.functionName === "getMarketPrice") return opts.marketPrice;
             if (c.functionName === "settlementPrice") return 0n;
             if (c.functionName === "getOrderAggregateAtExpiration") {
               return EMPTY_AGGREGATE;
@@ -236,6 +240,9 @@ describe("futures venue: reduceToTarget", () => {
           }
           if (fns[0] === "getUserPosition") {
             return contracts.map((c) => {
+              if (c.functionName === "getMarkRange")
+                return [100_000n, 100_000n];
+              if (c.functionName === "getMarketPrice") return 100_000n;
               if (c.functionName === "settlementPrice") return 0n;
               if (c.functionName === "getOrderAggregateAtExpiration") {
                 return EMPTY_AGGREGATE;
@@ -295,6 +302,9 @@ describe("futures venue: reduceToTarget", () => {
           }
           if (fns[0] === "getUserPosition") {
             return contracts.map((c) => {
+              if (c.functionName === "getMarkRange")
+                return [100_000n, 100_000n];
+              if (c.functionName === "getMarketPrice") return 100_000n;
               if (c.functionName === "settlementPrice") return 0n;
               if (c.functionName === "getOrderAggregateAtExpiration") {
                 return EMPTY_AGGREGATE;

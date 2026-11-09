@@ -1167,6 +1167,82 @@ export function halvingMarksFixtureBuilder(rpcUrl: string) {
   };
 }
 
+/** Alice's perps long on the glide, partly liquidatable after a BTC fall. */
+export interface HalvingPerpsPartialCrashFixture extends BaseFixture {
+  aliceQty: bigint;
+  /** Perps mark at entry: the glide, about 73% of the index. */
+  perpsMark: bigint;
+  makeLiquidatable(): Promise<void>;
+}
+
+/**
+ * CF-321: `halvingMarksFixtureBuilder`'s oracle chain with perps alone in play. Alice buys 5
+ * perps at the glide with 31% of the notional, the proportions of
+ * `perpsPartialCrashFixtureBuilder`; a 28.7% fall in BTC/USD moves the index and the glide
+ * down together and leaves her below MM, recoverable by a partial close.
+ */
+export function halvingPerpsPartialCrashFixtureBuilder(rpcUrl: string) {
+  return async (): Promise<HalvingPerpsPartialCrashFixture> => {
+    const base = await baseFixture(rpcUrl);
+    const { publicClient: pc } = base;
+    const owner = base.accounts.owner.client;
+    const btcArt = artifacts.hashpriceBtcMock();
+    const feedArt = artifacts.priceFeedMock();
+    const btc = await deploy(pc, owner, btcArt, []);
+    const btcUsd = await deploy(pc, owner, feedArt, [8, "BTC/USD"]);
+    await write(pc, owner, btcUsd, feedArt.abi, "setPrice", [BTC_USD]);
+    await write(pc, owner, btc, btcArt.abi, "setBlock", [
+      Number(HALVING_HEIGHT - 600n),
+      BTC_FEES,
+      BTC_DIFFICULTY,
+    ]);
+    const hashpriceUsd = await deploy(pc, owner, artifacts.hashpriceUsd(), [
+      btc,
+      btcUsd,
+    ]);
+    const glide = await deploy(pc, owner, artifacts.hashpriceGlideUsd(), [
+      hashpriceUsd,
+    ]);
+    const { pme, perps, futures } = base.addresses;
+    await write(pc, owner, pme, base.abis.pme, "setOracle", [hashpriceUsd]);
+    await write(pc, owner, perps, base.abis.perps, "setOracle", [glide]);
+    await write(pc, owner, futures, base.abis.futures, "setOracle", [glide]);
+
+    const perpsMark = (await pc.readContract({
+      address: perps,
+      abi: base.abis.perps,
+      functionName: "getMarketPrice",
+    })) as bigint;
+    const aliceQty = parseUnits("5", base.config.quantityDecimals);
+    const notional =
+      (perpsMark * aliceQty) / 10n ** BigInt(base.config.quantityDecimals);
+    await base.deposit(
+      base.accounts.alice.account.address,
+      (notional * 31n) / 100n,
+    );
+    await base.deposit(
+      base.accounts.bob.account.address,
+      parseUnits("3000", base.config.tokenDecimals),
+    );
+    await matchPerpsTrade(base, {
+      buyer: base.accounts.alice,
+      seller: base.accounts.bob,
+      price: perpsMark,
+      quantity: aliceQty,
+    });
+
+    return {
+      ...base,
+      aliceQty,
+      perpsMark,
+      makeLiquidatable: () =>
+        write(pc, owner, btcUsd, feedArt.abi, "setPrice", [
+          (BTC_USD * 713n) / 1000n,
+        ]),
+    };
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Internal placement / writing helpers
 // ─────────────────────────────────────────────────────────────────────────

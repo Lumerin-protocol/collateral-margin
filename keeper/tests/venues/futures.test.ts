@@ -164,6 +164,9 @@ describe("futures venue: readPositions", () => {
       readContract: makeReadHandler(marketPrice, [DELIVERY_AT]),
       multicall: (calls) => {
         assert.equal(calls.length, 1);
+        // Every expiry marks at the index here.
+        if (calls[0]?.functionName === "getMarkRange")
+          return [[marketPrice, marketPrice]];
         assert.equal(calls[0]?.functionName, "getUserPosition");
         return [{ netQuantity: 1n, netEntryValue: entry }];
       },
@@ -181,7 +184,10 @@ describe("futures venue: readPositions", () => {
     const marketPrice = 130n;
     const chain = makeChainStub({
       readContract: makeReadHandler(marketPrice, [DELIVERY_AT]),
-      multicall: () => [{ netQuantity: -1n, netEntryValue: -entry }],
+      multicall: (calls) =>
+        calls[0]?.functionName === "getMarkRange"
+          ? [[marketPrice, marketPrice]]
+          : [{ netQuantity: -1n, netEntryValue: -entry }],
     });
     const venue = new FuturesVenue(chain, makeConfigStub(), silentLogger);
     const [pos] = await venue.readPositions(BUYER);
