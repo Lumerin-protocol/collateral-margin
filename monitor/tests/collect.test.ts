@@ -41,6 +41,7 @@ const venueAbi = parseAbi([
   "function getOrderBookPrices(uint256 maxLevels) view returns (uint256[] bids, uint256[] asks)",
   "function getOrderBookPrices(uint256 expirationAt, uint256 maxLevels) view returns (uint256[] bids, uint256[] asks)",
   "function getMarketPrice() view returns (uint256)",
+  "function getMarkRange(uint256 expirationAt) view returns (uint256 low, uint256 high)",
   "function getExpirationDates() view returns (uint256[])",
   "function liquidationFeeBps() view returns (uint16)",
   "function liquidatorShareBps() view returns (uint16)",
@@ -51,9 +52,17 @@ const mmAbi = parseAbi([
   "function getEthBalance(address addr) view returns (uint256)",
 ]);
 const MARGIN_ENGINE = "0x0000000000000000000000000000000000000009";
+/** Perps' price oracle on the CF-321 venue: the halving glide. */
+const GLIDE_FEED = "0x00000000000000000000000000000000000000a7";
+const glideAbi = parseAbi([
+  "function glideProgress() view returns (uint256)",
+  "function halvingStep() view returns (uint256)",
+]);
 /** Listed futures expiries (12:00 UTC): 2026-11-25, 2026-12-25, 2027-01-24, 2027-02-23. */
 const [EXP1, EXP2, EXP3, EXP4] = [1_795_608_000n, 1_798_200_000n, 1_800_792_000n, 1_803_384_000n];
 let failMarketMaker = false;
+/** CF-321: an expiry settling after the halving, marked and quoted at about half the index. */
+let postHalvingExpiry: bigint | undefined;
 let failHealth = false;
 /** The Base RPC answers 503, as Alchemy does when it sheds load. */
 let failRpc = false;
@@ -208,6 +217,17 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
     return encodeFunctionResult({ abi: feedAbi, functionName: "mmSpotShock", result: 10n ** 17n });
   if (address === process.env.FUTURES_ADDRESS && data.startsWith(toFunctionSelector("function priceOracle()")))
     return encodeFunctionResult({ abi: feedAbi, functionName: "priceOracle", result: HASHPRICE_FEED });
+  if (address === process.env.PERPS_ADDRESS && data.startsWith(toFunctionSelector("function priceOracle()")))
+    return encodeFunctionResult({ abi: feedAbi, functionName: "priceOracle", result: GLIDE_FEED });
+  if (address === GLIDE_FEED) {
+    // 40% down the glide toward a 49.5% halving step.
+    const { functionName } = decodeFunctionData({ abi: glideAbi, data });
+    return encodeFunctionResult({
+      abi: glideAbi,
+      functionName,
+      result: functionName === "glideProgress" ? 4n * 10n ** 17n : 495n * 10n ** 15n,
+    });
+  }
   if (address === MARGIN_ENGINE)
     return encodeFunctionResult({
       abi: mmAbi,
@@ -250,6 +270,12 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
       if (failMarketMaker) throw new Error("book read reverted");
       // perps two-sided; futures EXP1 two-sided, EXP2 bids only, EXP3 two-sided.
       const expiry = isFutures ? args?.[0] : undefined;
+      if (expiry !== undefined && expiry === postHalvingExpiry)
+        return encodeFunctionResult({
+          abi: venueAbi,
+          functionName,
+          result: [[19_740_000n], [19_760_000n]],
+        });
       const bids = [39_500_000n, 39_490_000n];
       const asks = expiry === EXP2 ? [] : [39_510_000n];
       return encodeFunctionResult({
@@ -264,6 +290,10 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
         functionName,
         result: 40_000_000n,
       });
+    case "getMarkRange": {
+      const mark = args?.[0] === postHalvingExpiry ? 19_750_000n : 40_000_000n;
+      return encodeFunctionResult({ abi: venueAbi, functionName, result: [mark, mark] });
+    }
     case "getExpirationDates":
       return encodeFunctionResult({
         abi: venueAbi,
@@ -476,10 +506,10 @@ describe("collect", () => {
   });
 
   it("batches contract reads into two multicalls per check", () => {
-    // backstop 11 + 2 legs; market maker 8 + 2 reads for each of 3 expiries
+    // backstop 11 + 2 reads for each of 2 legs; market maker 7 + 3 reads for each of 3 expiries
     assert.deepEqual(
       [...multicallSizes].sort((a, b) => a - b),
-      [2, 6, 8, 11],
+      [4, 7, 9, 11],
     );
   });
 
@@ -696,6 +726,41 @@ describe("collect", () => {
           p.Dimensions?.[0]?.Value === "fut-dec-25",
       ),
     );
+  });
+
+  it("CF-321: measures a post-halving date's mid against its own mark", async () => {
+    postHalvingExpiry = EXP3;
+    try {
+      const { collect } = await import("../src/index.ts");
+      const result = await collect();
+      // mid 19.75 against the date's 19.75 mark, not the 40 index
+      const drift = result.points.find(
+        (p) => p.MetricName === "BookMidDriftBps" && p.Dimensions?.[0]?.Value === "fut-jan-24",
+      )?.Value;
+      assert.ok(drift !== undefined && drift < 1, `drift ${drift}`);
+    } finally {
+      postHalvingExpiry = undefined;
+    }
+  });
+
+  it("CF-321: reports the glide and values each backstop leg at its own mark", async () => {
+    assert.equal(value("GlideProgressPct"), 40);
+    assert.equal(value("HalvingStepPct"), 49.5);
+    assert.equal(value("PerpsMarkDiscountPct"), 0);
+    postHalvingExpiry = EXP1;
+    try {
+      const { collect } = await import("../src/index.ts");
+      const result = await collect();
+      const notional = result.points.find(
+        (p) =>
+          p.MetricName === "BackstopNotional" &&
+          p.Dimensions?.[0]?.Value === process.env.FUTURES_ADDRESS,
+      )?.Value;
+      // the backstop's 2-contract long on a post-halving date, at its 19.75 low mark
+      assert.equal(notional, 39.5);
+    } finally {
+      postHalvingExpiry = undefined;
+    }
   });
 
   it("reports the market maker's own state from /health", () => {

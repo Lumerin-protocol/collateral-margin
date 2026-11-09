@@ -1068,7 +1068,7 @@ resource "aws_cloudwatch_metric_alarm" "book_mark_drift" {
   count               = var.vault_monitoring.create ? 1 : 0
   provider            = aws.use1
   alarm_name          = "${local.shortname}-book-mark-drift-${local.vault_mon_env}"
-  alarm_description   = "A two-sided book's mid has been more than ${var.vault_monitoring.book_drift_warn_bps} bps from the mark for 15 minutes. The market maker is leaving stale quotes that takers can trade against. Check the market-maker state panel for a quarantined market, gas throttle, or paused placements, then the market-maker log. Warning only."
+  alarm_description   = "A two-sided book's mid has been more than ${var.vault_monitoring.book_drift_warn_bps} bps from its mark for 15 minutes (perps: the halving glide; a futures date: the middle of its mark range, about half the index once it settles after the halving). The market maker is leaving stale quotes that takers can trade against, or the market disagrees with the halving schedule. Check the market-maker state panel for a quarantined market, gas throttle, or paused placements, then the market-maker log. Warning only."
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 3
   metric_name         = "BookMaxMidDriftBps"
@@ -1427,13 +1427,16 @@ resource "aws_cloudwatch_dashboard" "vault" {
           width  = 12
           height = 6
           properties = {
-            title  = "Days until the Bitcoin halving"
+            title  = "Bitcoin halving and the perps glide"
             region = var.default_region
             period = 3600
             view   = "singleValue"
             metrics = [
               [local.vault_mon_ns, "BtcDaysUntilHalving", { label = "Days", stat = "Minimum" }],
               [local.vault_mon_ns, "BtcBlocksUntilHalving", { label = "Blocks", stat = "Minimum" }],
+              [local.vault_mon_ns, "GlideProgressPct", { label = "Glide progress %", stat = "Maximum" }],
+              [local.vault_mon_ns, "HalvingStepPct", { label = "Halving step %", stat = "Average" }],
+              [local.vault_mon_ns, "PerpsMarkDiscountPct", { label = "Perps mark below index %", stat = "Maximum" }],
             ]
           }
         },

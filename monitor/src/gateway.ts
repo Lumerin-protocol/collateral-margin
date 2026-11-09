@@ -149,9 +149,10 @@ export interface ChainState {
   usdcRaw: bigint;
   unrealizedPnl: bigint;
   pendingFunding: bigint;
-  futuresLegs: { expirationAt: bigint; net: bigint }[];
+  /** Each backstop futures leg with its mark for the side held (a long at `low`, a short at `high`). */
+  futuresLegs: { expirationAt: bigint; net: bigint; mark: bigint }[];
   perpsNet: bigint;
-  /** Mark prices, collateral-token units: futures is per whole contract, perps per 1e6 units. */
+  /** Mark prices, collateral-token units: futures (the index) per whole contract, perps per 1e6 units. */
   futuresMark: bigint;
   perpsMark: bigint;
   /** Liquidation fee each venue keeps after the liquidator's share, in bps of notional. */
@@ -172,6 +173,7 @@ export async function readChainState(
     "function liquidationFeeBps() view returns (uint16)",
     "function liquidatorShareBps() view returns (uint16)",
     "function getMarketPrice() view returns (uint256)",
+    "function getMarkRange(uint256 expirationAt) view returns (uint256 low, uint256 high)",
   ]);
   const futures = { ...at, abi, address: FUTURES_ADDRESS };
   const perps = { ...at, abi, address: PERPS_ADDRESS };
@@ -228,19 +230,26 @@ export async function readChainState(
       ],
     });
 
-  const positions = (await chain.multicall({
+  const legReads = (await chain.multicall({
     ...at,
     multicallAddress: MULTICALL3,
     allowFailure: false,
-    contracts: expiries.map((expirationAt) => ({
-      ...futures,
-      functionName: "getUserPosition",
-      args: [BACKSTOP, expirationAt],
-    })),
-  })) as unknown as { netQuantity: bigint; netEntryValue: bigint }[];
+    contracts: expiries.flatMap((expirationAt) => [
+      {
+        ...futures,
+        functionName: "getUserPosition",
+        args: [BACKSTOP, expirationAt],
+      },
+      { ...futures, functionName: "getMarkRange", args: [expirationAt] },
+    ]),
+  })) as unknown as (
+    | { netQuantity: bigint; netEntryValue: bigint }
+    | readonly [bigint, bigint]
+  )[];
   const futuresLegs = expiries.flatMap((expirationAt, index) => {
-    const net = positions[index].netQuantity;
-    return net === 0n ? [] : [{ expirationAt, net }];
+    const net = (legReads[2 * index] as { netQuantity: bigint }).netQuantity;
+    const [low, high] = legReads[2 * index + 1] as readonly [bigint, bigint];
+    return net === 0n ? [] : [{ expirationAt, net, mark: net > 0n ? low : high }];
   });
 
   return {
@@ -275,6 +284,7 @@ export interface MarketBook {
   market: string;
   /** notional = price * |net| / quantityScale: perps 1e6, futures whole contracts. */
   quantityScale: bigint;
+  /** The mark quotes should center on: perps' (the glide), a futures expiry's mid-range. */
   markPrice: bigint;
   /** Best first: bids descending, asks ascending. */
   bids: readonly bigint[];
@@ -299,6 +309,7 @@ export async function readMarketMaker(
     "function getOrderBookPrices(uint256 maxLevels) view returns (uint256[] bids, uint256[] asks)",
     "function getOrderBookPrices(uint256 expirationAt, uint256 maxLevels) view returns (uint256[] bids, uint256[] asks)",
     "function getMarketPrice() view returns (uint256)",
+    "function getMarkRange(uint256 expirationAt) view returns (uint256 low, uint256 high)",
     "function getExpirationDates() view returns (uint256[])",
     "function getUserPosition(address user, uint256 expirationAt) view returns (Position)",
     "function getUserPosition(address user) view returns (Position)",
@@ -317,7 +328,6 @@ export async function readMarketMaker(
     perpsPrice,
     perpsPosition,
     expiries,
-    futuresPrice,
   ] = await chain.multicall({
     ...at,
     multicallAddress: MULTICALL3,
@@ -345,7 +355,6 @@ export async function readMarketMaker(
       { ...perps, functionName: "getMarketPrice" },
       { ...perps, functionName: "getUserPosition", args: [MM_ADDRESS] },
       { ...futures, functionName: "getExpirationDates" },
-      { ...futures, functionName: "getMarketPrice" },
     ],
   });
 
@@ -365,6 +374,7 @@ export async function readMarketMaker(
         functionName: "getUserPosition",
         args: [MM_ADDRESS, expirationAt],
       },
+      { ...futures, functionName: "getMarkRange", args: [expirationAt] },
     ]),
   })) as unknown as (
     | readonly [readonly bigint[], readonly bigint[]]
@@ -381,15 +391,18 @@ export async function readMarketMaker(
       mmNet: perpsPosition.netQuantity,
     },
     ...quoted.map((expirationAt, index) => {
-      const [bids, asks] = futuresReads[2 * index] as readonly [
+      const [bids, asks] = futuresReads[3 * index] as readonly [
         readonly bigint[],
         readonly bigint[],
       ];
-      const position = futuresReads[2 * index + 1] as { netQuantity: bigint };
+      const position = futuresReads[3 * index + 1] as { netQuantity: bigint };
+      // The middle of the expiry's mark range: the index before the halving window, about
+      // half of it for a date settling after the halving, between the two inside the window.
+      const [low, high] = futuresReads[3 * index + 2] as unknown as readonly [bigint, bigint];
       return {
         market: marketName(`futures:${expirationAt}`),
         quantityScale: 1n,
-        markPrice: futuresPrice,
+        markPrice: (low + high) / 2n,
         bids,
         asks,
         mmNet: position.netQuantity,
@@ -702,3 +715,30 @@ export async function readPrices(
   const spv = { height: Number(spvRound[0]), updatedAt: Number(spvRound[3]) };
   return { hashprice, btcUsd, spv, mmSpotShock };
 }
+
+/** The perps halving glide: how far down it is and the step it glides to, both WAD. */
+export interface GlideState {
+  progress: bigint;
+  step: bigint;
+}
+
+/** Read from perps' price oracle, `HashpriceGlideUSD` on the CF-321 venue. */
+export async function readGlide(at: { blockNumber: bigint }): Promise<GlideState> {
+  const glide = await chain.readContract({
+    address: PERPS_ADDRESS,
+    abi: glideAbi,
+    functionName: "priceOracle",
+    ...at,
+  });
+  const [progress, step] = await Promise.all([
+    chain.readContract({ address: glide, abi: glideAbi, functionName: "glideProgress", ...at }),
+    chain.readContract({ address: glide, abi: glideAbi, functionName: "halvingStep", ...at }),
+  ]);
+  return { progress, step };
+}
+
+const glideAbi = parseAbi([
+  "function priceOracle() view returns (address)",
+  "function glideProgress() view returns (uint256)",
+  "function halvingStep() view returns (uint256)",
+]);
