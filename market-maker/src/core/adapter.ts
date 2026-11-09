@@ -342,6 +342,13 @@ export interface InstrumentAdapter {
 
   getIndexPrice(): Promise<bigint>;
   /**
+   * The price the venue values this instrument at, on `getIndexPrice()`'s scale (no tick
+   * rounding): perps at its mark (the halving glide), a futures expiry at the middle of its
+   * mark range. Quotes center on it; volatility still comes from the index, of which it is
+   * a fixed multiple between halving events. Absent, the instrument marks at the index.
+   */
+  getMarkPrice?(): Promise<bigint>;
+  /**
    * The aggregator behind `getIndexPrice()` and the fixed-point scale its
    * answers come back in. Lets consumers that mix in prices from elsewhere
    * (the σ-window backfill) prove both sides describe the same feed on the
