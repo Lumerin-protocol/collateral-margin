@@ -143,6 +143,27 @@ export const artifacts = {
   // ── futures (sibling repo) ────────────────────────────────────────────
   futures: () =>
     readArtifact("futures", "contracts/HashPowerFutures", "HashPowerFutures"),
+  // ── hashprice oracle chain, as the futures build compiles it ──────────
+  hashpriceBtcMock: () =>
+    readArtifact(
+      "futures",
+      "hashprice-oracle/contracts/contracts/mocks/HashpriceBTCMock",
+      "HashpriceBTCMock",
+    ),
+  hashpriceUsd: () =>
+    readArtifact(
+      "futures",
+      "hashprice-oracle/contracts/contracts/HashpriceUSD",
+      "HashpriceUSD",
+    ),
+  hashpriceGlideUsd: () =>
+    readArtifact(
+      "futures",
+      "hashprice-oracle/contracts/contracts/HashpriceGlideUSD",
+      "HashpriceGlideUSD",
+    ),
+  priceFeedMock: () =>
+    readArtifact("futures", "contracts/mocks/PriceFeedMock", "PriceFeedMock"),
   /** Futures' required mark oracle: every expiry marks at the wrapped index feed. */
   futuresMarkOracle: () =>
     readArtifact(

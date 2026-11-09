@@ -8,6 +8,7 @@ import { HashPowerPerpsDEXAbi } from "derivatives-marketplace-abi/HashPowerPerps
 import { HashPowerFuturesAbi } from "../abi/HashPowerFutures.ts";
 import {
   type AccountSnapshot,
+  bookFillLoss,
   type MMParams,
   type RestingOrders,
   venueFillLoss,
@@ -94,12 +95,14 @@ type RiskView = {
  *   1. Bulk multicall: balance, account debt, perps risk/aggregate/position,
  *      futures risk, futures active position expiries, and the tradable delivery window.
  *   2. Per-expiry multicall: hydrate each futures position via `getUserPosition`
- *      + `settlementPrice`, and, when the futures risk view shows resting order
- *      delta, each window expiry's `getOrderAggregateAtExpiration` +
- *      `settlementPrice`. With a `check`, the mark of every venue with orders.
+ *      + `settlementPrice` + `getMarkRange`, and, when the futures risk view shows
+ *      resting order delta, each window expiry's `getOrderAggregateAtExpiration` +
+ *      `settlementPrice` + `getMarkRange`; the index (futures `getMarketPrice`) the
+ *      marks were read at; and for a perps account its mark and `getPendingDrift`.
  *
- * Round-trip 2 is skipped when the user has no futures positions or orders and no
- * check needs a mark.
+ * Round-trip 2 is skipped when the user has no position or order on either venue.
+ * The replica moves every mark with the index (`markAt`), so one snapshot still
+ * answers at any price.
  *
  * `getRiskView` carries the per-side order delta but reports fill loss only at the
  * current mark, so the per-side quantity and price moments come from the
@@ -186,27 +189,27 @@ export async function readAccountSnapshot(
   });
 
   const expirationAts = activeExpirationAts as readonly bigint[];
+  const perpsHasPosition = perpPosition.netQuantity !== 0n;
   const perpsHasOrders = hasOrderDelta(perpRisk);
   const futuresHasOrders = hasOrderDelta(futuresRisk);
   const orderExpirationAts = futuresHasOrders
     ? (tradableExpirationAts as readonly bigint[])
     : [];
-  // `getRiskView` already read each of these marks at this block for a venue with
-  // orders, so the reads cannot revert where the snapshot itself did not.
-  const readPerpsMark = check !== undefined && perpsHasOrders;
-  const readFuturesMark = check !== undefined && futuresHasOrders;
+  // Marks follow the index, so they are read with the index they were read at, for the
+  // venues the account trades. `getRiskView` already read each of them at this block for
+  // such a venue, so the reads cannot revert where the snapshot itself did not.
+  const perpsActive = perpsHasPosition || perpsHasOrders;
+  const readIndex = perpsActive || expirationAts.length > 0 || futuresHasOrders;
 
   const futuresPositions: AccountSnapshot["futures"]["positions"] = [];
   const futuresOrders: AccountSnapshot["futures"]["orders"] = [];
+  let index: bigint | undefined;
   let perpsMark: bigint | undefined;
-  let futuresMark: bigint | undefined;
+  let perpsDrift: bigint | undefined;
 
-  if (
-    expirationAts.length > 0 ||
-    orderExpirationAts.length > 0 ||
-    readPerpsMark ||
-    readFuturesMark
-  ) {
+  if (readIndex) {
+    const positionCount = expirationAts.length;
+    const orderCount = orderExpirationAts.length;
     const perExpiry = await chain.publicClient.multicall({
       contracts: [
         ...expirationAts.map((expirationAt) => ({
@@ -221,6 +224,12 @@ export async function readAccountSnapshot(
           functionName: "settlementPrice" as const,
           args: [expirationAt] as const,
         })),
+        ...expirationAts.map((expirationAt) => ({
+          address: config.futures.address,
+          abi: HashPowerFuturesAbi,
+          functionName: "getMarkRange" as const,
+          args: [expirationAt] as const,
+        })),
         ...orderExpirationAts.map((expirationAt) => ({
           address: config.futures.address,
           abi: HashPowerFuturesAbi,
@@ -233,7 +242,18 @@ export async function readAccountSnapshot(
           functionName: "settlementPrice" as const,
           args: [expirationAt] as const,
         })),
-        ...(readPerpsMark
+        ...orderExpirationAts.map((expirationAt) => ({
+          address: config.futures.address,
+          abi: HashPowerFuturesAbi,
+          functionName: "getMarkRange" as const,
+          args: [expirationAt] as const,
+        })),
+        {
+          address: config.futures.address,
+          abi: HashPowerFuturesAbi,
+          functionName: "getMarketPrice" as const,
+        },
+        ...(perpsActive
           ? [
               {
                 address: config.perps.address,
@@ -242,12 +262,13 @@ export async function readAccountSnapshot(
               },
             ]
           : []),
-        ...(readFuturesMark
+        ...(perpsHasPosition
           ? [
               {
-                address: config.futures.address,
-                abi: HashPowerFuturesAbi,
-                functionName: "getMarketPrice" as const,
+                address: config.perps.address,
+                abi: HashPowerPerpsDEXAbi,
+                functionName: "getPendingDrift" as const,
+                args: [user] as const,
               },
             ]
           : []),
@@ -256,12 +277,15 @@ export async function readAccountSnapshot(
       blockNumber,
     });
 
-    for (let i = 0; i < expirationAts.length; i++) {
+    for (let i = 0; i < positionCount; i++) {
       const pos = perExpiry[i] as
         | { netQuantity: bigint; netEntryValue: bigint }
         | undefined;
-      const settlementPrice = perExpiry[expirationAts.length + i] as
+      const settlementPrice = perExpiry[positionCount + i] as
         | bigint
+        | undefined;
+      const range = perExpiry[positionCount * 2 + i] as
+        | readonly [bigint, bigint]
         | undefined;
       const expirationAt = expirationAts[i];
       if (pos === undefined || expirationAt === undefined) continue;
@@ -271,15 +295,19 @@ export async function readAccountSnapshot(
         netQuantity: pos.netQuantity,
         netEntryValue: pos.netEntryValue,
         settlementPrice: settlementPrice ?? 0n,
+        low: range?.[0],
+        high: range?.[1],
       });
     }
 
-    const orderOffset = expirationAts.length * 2;
-    const orderCount = orderExpirationAts.length;
+    const orderOffset = positionCount * 3;
     for (let i = 0; i < orderCount; i++) {
       const aggregate = perExpiry[orderOffset + i] as RestingOrders | undefined;
       const settlementPrice = perExpiry[orderOffset + orderCount + i] as
         | bigint
+        | undefined;
+      const range = perExpiry[orderOffset + orderCount * 2 + i] as
+        | readonly [bigint, bigint]
         | undefined;
       const expirationAt = orderExpirationAts[i];
       if (aggregate === undefined || expirationAt === undefined) continue;
@@ -288,12 +316,15 @@ export async function readAccountSnapshot(
         ...moments(aggregate),
         expirationAt,
         settlementPrice: settlementPrice ?? 0n,
+        low: range?.[0],
+        high: range?.[1],
       });
     }
 
-    let markIndex = orderOffset + orderCount * 2;
-    if (readPerpsMark) perpsMark = perExpiry[markIndex++] as bigint;
-    if (readFuturesMark) futuresMark = perExpiry[markIndex] as bigint;
+    let next = orderOffset + orderCount * 3;
+    index = perExpiry[next++] as bigint;
+    if (perpsActive) perpsMark = perExpiry[next++] as bigint;
+    if (perpsHasPosition) perpsDrift = perExpiry[next] as bigint;
   }
 
   const funding = perpRisk.pendingFunding;
@@ -304,6 +335,7 @@ export async function readAccountSnapshot(
         ? (balance as bigint) - funding
         : (balance as bigint),
     accountDebt: accountDebt as bigint,
+    index,
     perp: {
       netQty: perpPosition.netQuantity,
       entryPrice:
@@ -314,6 +346,8 @@ export async function readAccountSnapshot(
       orders: moments(perpOrderAggregate),
       // PME uses `max(0, pendingFunding)` — only what the user owes.
       fundingOwed: funding > 0n ? funding : 0n,
+      mark: perpsMark,
+      pendingDrift: perpsDrift,
     },
     futures: {
       positions: futuresPositions,
@@ -321,9 +355,9 @@ export async function readAccountSnapshot(
     },
   };
 
-  if (check !== undefined) {
+  if (check !== undefined && index !== undefined) {
     const perpsScale = 10n ** BigInt(check.params.perpQuantityDecimals);
-    if (perpsMark !== undefined) {
+    if (perpsHasOrders && perpsMark !== undefined) {
       const replica = venueFillLoss(
         snapshot.perp.orders,
         perpsMark,
@@ -336,18 +370,20 @@ export async function readAccountSnapshot(
         perpRisk,
       );
     }
-    if (futuresMark !== undefined) {
+    if (futuresHasOrders) {
       let replica = 0n;
       for (const book of snapshot.futures.orders) {
-        replica += venueFillLoss(
+        const pinned = book.settlementPrice;
+        replica += bookFillLoss(
           book,
-          book.settlementPrice !== 0n ? book.settlementPrice : futuresMark,
+          pinned !== 0n ? pinned : (book.low ?? index),
+          pinned !== 0n ? pinned : (book.high ?? index),
           1n,
         );
       }
       warnOnFillLossDrift(
         check,
-        { user, blockNumber, venue: "futures", mark: futuresMark },
+        { user, blockNumber, venue: "futures", mark: index },
         replica,
         futuresRisk,
       );

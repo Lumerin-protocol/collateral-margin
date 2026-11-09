@@ -464,9 +464,9 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
   };
 }
 
-// ── Internal helpers ────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────
 
-async function deploy(
+export async function deploy(
   pc: PublicClient,
   wc: WalletClient,
   artifact: CompiledArtifact,
@@ -502,7 +502,7 @@ async function deployProxy(
   return deploy(pc, wc, artifacts.erc1967Proxy(), [implementation, initData]);
 }
 
-async function write(
+export async function write(
   pc: PublicClient,
   wc: WalletClient,
   address: Address,
