@@ -7,17 +7,18 @@ import type {
   PriceThresholds,
 } from "./types.ts";
 import {
+  futuresMark,
   futuresUnrealizedPnl,
   imRequired,
   imSurplus,
   mmRequired,
   mmSurplus,
-  netDeltaWad,
-  orderDeltaWad,
+  netExposure,
+  orderExposure,
+  perpMark,
   perpUnrealizedPnl,
 } from "./mm.ts";
 
-const WAD = 10n ** 18n;
 const BPS = 10_000n;
 
 function abs(x: bigint): bigint {
@@ -49,19 +50,33 @@ function avgEntry(
 }
 
 /**
- * The futures venue's PnL reduced to the affine form `P · qty − value`, which is
- * what every breakeven below is solved against.
+ * Every mark is `markAt`: `num · P / den`, with one `den` for all legs (the snapshot's
+ * index) so breakevens across legs share it. Without marks both are 1 and a mark is P.
+ */
+function markDen(snap: AccountSnapshot): bigint {
+  return snap.index === undefined || snap.index === 0n ? 1n : snap.index;
+}
+
+function markNum(snap: AccountSnapshot, mark: bigint | undefined): bigint {
+  if (snap.index === undefined || snap.index === 0n) return 1n;
+  return mark ?? snap.index;
+}
+
+/**
+ * The futures venue's PnL reduced to the affine form `P · coef / den − value`, which
+ * is what every breakeven below is solved against: `coef` sums each live expiry's
+ * contracts times its mark's numerator for the side held.
  *
  * A settled-but-unswept expiry is pinned at its `settlementPrice`, so it drops out
- * of `qty` — it no longer moves with spot — and folds its frozen mark into `value`
- * as a constant. Leaving it in `qty` would put the breakeven at a price that does
- * not exist, since the leg cannot reach it.
+ * of `coef` — it no longer moves with spot — and folds its frozen mark into `value`
+ * as a constant. Leaving it in would put the breakeven at a price that does not
+ * exist, since the leg cannot reach it.
  */
 function futuresPnlTerms(snap: AccountSnapshot): {
-  qty: bigint;
+  coef: bigint;
   value: bigint;
 } {
-  let qty = 0n;
+  let coef = 0n;
   let value = 0n;
   for (const pos of snap.futures.positions) {
     value += pos.netEntryValue;
@@ -69,9 +84,10 @@ function futuresPnlTerms(snap: AccountSnapshot): {
       value -= pos.settlementPrice * pos.netQuantity;
       continue;
     }
-    qty += pos.netQuantity;
+    const mark = pos.netQuantity > 0n ? pos.low : pos.high;
+    coef += pos.netQuantity * markNum(snap, mark);
   }
-  return { qty, value };
+  return { coef, value };
 }
 
 /**
@@ -104,23 +120,37 @@ function unrealizedPnlBreakevens(
   requirement: MarginRequirement,
 ): bigint[] {
   const netQty = snap.perp.netQty;
-  const { qty: futuresQty, value: futuresValue } = futuresPnlTerms(snap);
+  const { coef: futuresCoef, value: futuresValue } = futuresPnlTerms(snap);
+  const perpQtyScale = 10n ** BigInt(params.perpQuantityDecimals);
+  const den = markDen(snap);
+  const perpNum = markNum(snap, snap.perp.mark);
+  const drift = netQty === 0n ? 0n : (snap.perp.pendingDrift ?? 0n);
 
   if (requirement === "im") {
     const kinks: bigint[] = [];
-    if (netQty !== 0n) kinks.push(snap.perp.entryPrice);
-    if (futuresQty !== 0n)
-      kinks.push(...straddle(floorDiv(futuresValue, futuresQty)));
+    // (num·P/den − entry)·netQty / scale + drift == 0
+    if (netQty !== 0n)
+      kinks.push(
+        ...straddle(
+          floorDiv(
+            (snap.perp.entryPrice * netQty - drift * perpQtyScale) * den,
+            perpNum * netQty,
+          ),
+        ),
+      );
+    if (futuresCoef !== 0n)
+      kinks.push(...straddle(floorDiv(futuresValue * den, futuresCoef)));
     return kinks.filter((k) => k > 0n);
   }
 
   // perpPnl(P) + futuresPnl(P) == 0
-  //   ⇔ (P − entry)·netQty / scale + P·Σq − Σv == 0
-  //   ⇔ P·(netQty + scale·Σq) == entry·netQty + scale·Σv
-  const perpQtyScale = 10n ** BigInt(params.perpQuantityDecimals);
-  const coefficient = netQty + perpQtyScale * futuresQty;
+  //   ⇔ (num·P/den − entry)·netQty / scale + drift + P·coef/den − Σv == 0
+  //   ⇔ P·(num·netQty + scale·coef) == den·(entry·netQty + scale·(Σv − drift))
+  const coefficient = perpNum * netQty + perpQtyScale * futuresCoef;
   if (coefficient === 0n) return [];
-  const intercept = snap.perp.entryPrice * netQty + perpQtyScale * futuresValue;
+  const intercept =
+    den *
+    (snap.perp.entryPrice * netQty + perpQtyScale * (futuresValue - drift));
   return straddle(floorDiv(intercept, coefficient)).filter((k) => k > 0n);
 }
 
@@ -128,10 +158,9 @@ function unrealizedPnlBreakevens(
  * Find the price thresholds where `mmSurplus(P)` crosses zero.
  *
  * `mmRequired(P)` is convex in P. Stress is
- * `max(|netDelta + buyDelta|, |netDelta − sellDelta|) × shock × P / WAD` after
- * rescaling — linear in P, because net delta and order delta are both independent
- * of price: the two legs are lines through the origin, so whichever has the larger
- * coefficient wins at every price. The MM clamp on the portfolio-wide unrealized
+ * `max(|netExposure + buy|, |netExposure − sell|) × shock` — linear in P, because
+ * every mark is proportional to P: the two legs are lines through the origin, so
+ * whichever has the larger coefficient wins at every price. The MM clamp on the portfolio-wide unrealized
  * PnL is piecewise-linear with one kink, at its break-even. Each side's fill-loss
  * bound is a smooth convex curve in the mark, with no kink at all.
  *
@@ -377,20 +406,22 @@ export function simulateFuturesClose(
 
     const entry = avgEntry(pos);
     const signedClose = pos.netQuantity > 0n ? closeAbs : -closeAbs;
-    // A settled leg realizes against its pinned price, not spot — that is the
-    // mark it has been carrying since settlement, and it cannot move again.
+    // A live leg is taken over at its mark for the side closed (a long at `low`); a
+    // settled leg realizes against its pinned price — the mark it has been carrying
+    // since settlement, which cannot move again.
     const mark =
-      pos.settlementPrice !== 0n ? pos.settlementPrice : currentPrice;
+      pos.settlementPrice !== 0n
+        ? pos.settlementPrice
+        : futuresMark(snap, pos, pos.netQuantity > 0n, currentPrice);
     pnl += (mark - entry) * signedClose;
-    fee += (currentPrice * closeAbs * liquidationFeeBps) / BPS;
+    fee += (mark * closeAbs * liquidationFeeBps) / BPS;
 
     if (closeAbs >= absNet) continue;
     const newAbs = absNet - closeAbs;
     remaining.push({
-      expirationAt: pos.expirationAt,
+      ...pos,
       netQuantity: pos.netQuantity > 0n ? newAbs : -newAbs,
       netEntryValue: (pos.netEntryValue * newAbs) / absNet,
-      settlementPrice: pos.settlementPrice,
     });
   }
 
@@ -437,12 +468,22 @@ export function simulatePerpClose(
   // Perps quantities are scaled by 10^QUANTITY_DECIMALS (=6 in HashPowerPerpsDEX);
   // matches `perpUnrealizedPnl` in mm.ts and the venue's QUANTITY_SCALE.
   const qtyScale = 10n ** 6n;
-  const pnl = ((currentPrice - snap.perp.entryPrice) * signedClose) / qtyScale;
+  // Pending drift belongs to the whole position: the closed slice realizes its share.
+  const drift = snap.perp.pendingDrift ?? 0n;
+  const realizedDrift = (drift * closeAbs) / absNet;
+  const pnl =
+    ((perpMark(snap, currentPrice) - snap.perp.entryPrice) * signedClose) /
+      qtyScale +
+    realizedDrift;
   const newNetQty = isLong ? netQty - closeAbs : netQty + closeAbs;
   return {
     ...snap,
     balance: snap.balance + pnl - liquidationFee,
-    perp: { ...snap.perp, netQty: newNetQty },
+    perp: {
+      ...snap.perp,
+      netQty: newNetQty,
+      pendingDrift: drift - realizedDrift,
+    },
   };
 }
 
@@ -722,7 +763,7 @@ function closePath(ordered: readonly FuturesAggregate[]): ClosePath {
  * delta away from zero for a while. So the in-band set is not a contiguous prefix.
  * But within one segment, the prefixes at a fixed offset `j` into the round are
  * `start + j + width·u`, and along `u` every input to the requirement is affine:
- * net delta, the unrealized PnL of what is left, the realized PnL credited to the
+ * net exposure, the unrealized PnL of what is left, the realized PnL credited to the
  * balance. The requirement is then piecewise-linear in `u`, with kinks only where
  * a clamp turns over (`closePathKinks`), and each piece is bisected like the perps
  * solver does. That is O(expiries² · log contracts) evaluations, whatever the size.
@@ -785,11 +826,11 @@ function searchClosePath(
 
 /**
  * Interval bounds over `u ∈ [0, last]` for `searchClosePath`: the ends, `u = 1`,
- * and every root of the requirement's clamps. Net delta and both PnL sums are
+ * and every root of the requirement's clamps. Net exposure and both PnL sums are
  * affine in `u`, so each root is read off the line through the ends:
  *
- *   - stress `max(|netDelta + buy|, |netDelta − sell|)` turns at `netDelta = −buy`,
- *     at `netDelta = sell`, and where the legs swap, `netDelta = (sell − buy) / 2`;
+ *   - stress `max(|net + buy|, |net − sell|)` on exposures turns at `net = −buy`,
+ *     at `net = sell`, and where the legs swap, `net = (sell − buy) / 2`;
  *   - the MM clamp turns where the portfolio's unrealized PnL crosses zero, the IM
  *     clamp where the futures venue's does (the perp is not touched).
  *
@@ -810,11 +851,11 @@ function closePathKinks(
     bounds.add(1n);
     const first = at(0n);
     const end = at(last);
-    const order = orderDeltaWad(first, params);
+    const order = orderExposure(first, params, currentPrice);
     const lines: [bigint, bigint, bigint[]][] = [
       [
-        netDeltaWad(first, params),
-        netDeltaWad(end, params),
+        netExposure(first, params, currentPrice),
+        netExposure(end, params, currentPrice),
         [-order.buy, order.sell, (order.sell - order.buy) / 2n],
       ],
       [
@@ -1033,15 +1074,15 @@ export function solvePerpCloseToTarget(
 /**
  * Closed quantities at which the margin requirement stops being linear, so that
  * each `[bounds[i], bounds[i+1]]` interval is safe to bisect. Closing changes net
- * delta affinely, `netDelta(q) = netDelta(0) − sign(netQty) · q · WAD / qtyScale`, and
+ * exposure affinely, `net(q) = net(0) − sign(netQty) · q · mark / qtyScale`, and
  * everything else in the requirement is either affine in `q` (both venues' signed
  * PnL, the realized PnL credited to the balance) or untouched by the close (fill
  * loss, funding). The kinks are therefore the points where one of the requirement's
  * two clamps turns over:
  *
- *   - The stress term `max(|netDelta + buy|, |netDelta − sell|)`: the two absolute
- *     values turn at `netDelta = −buy` and `netDelta = sell`, and the outer `max`
- *     switches legs where they meet, at `netDelta = (sell − buy) / 2`.
+ *   - The stress term `max(|net + buy|, |net − sell|)` on exposures: the two absolute
+ *     values turn at `net = −buy` and `net = sell`, and the outer `max` switches legs
+ *     where they meet, at `net = (sell − buy) / 2`.
  *   - The MM clamp on the portfolio-wide unrealized PnL, `max(0, −(perpPnl(q) + F))`
  *     with `F` the futures venue's PnL (constant in `q` — a perp close does not
  *     touch it).
@@ -1072,26 +1113,28 @@ function perpCloseKinks(
   const netQty = snap.perp.netQty;
   const sign = netQty > 0n ? 1n : -1n;
   const perpQtyScale = 10n ** BigInt(params.perpQuantityDecimals);
-  const perUnit = WAD / perpQtyScale;
-  const delta0 = netDeltaWad(snap, params);
-  const order = orderDeltaWad(snap, params);
-  const qtyAtDelta = (target: bigint) => (sign * (delta0 - target)) / perUnit;
-
-  const roots = [
-    qtyAtDelta(-order.buy),
-    qtyAtDelta(order.sell),
-    qtyAtDelta((order.sell - order.buy) / 2n),
-  ];
-
-  const priceDiff = currentPrice - snap.perp.entryPrice;
-  if (priceDiff !== 0n) {
-    const futuresPnl = futuresUnrealizedPnl(snap, currentPrice);
+  const mark = perpMark(snap, currentPrice);
+  const roots: bigint[] = [];
+  if (mark > 0n) {
+    // Closing q contracts moves net exposure by −sign · q · mark / scale.
+    const exposure0 = netExposure(snap, params, currentPrice);
+    const order = orderExposure(snap, params, currentPrice);
+    const qtyAtExposure = (target: bigint) =>
+      (sign * (exposure0 - target) * perpQtyScale) / mark;
     roots.push(
-      floorDiv(
-        priceDiff * netQty + futuresPnl * perpQtyScale,
-        priceDiff * sign,
-      ),
+      qtyAtExposure(-order.buy),
+      qtyAtExposure(order.sell),
+      qtyAtExposure((order.sell - order.buy) / 2n),
     );
+  }
+
+  // perpPnl(q) = (netQty − sign·q)·K / (scale·netQty), K = (mark − entry)·netQty + drift·scale;
+  // perpPnl(q) + F == 0 at q = |netQty|·(K + F·scale) / K.
+  const drift = snap.perp.pendingDrift ?? 0n;
+  const k = (mark - snap.perp.entryPrice) * netQty + drift * perpQtyScale;
+  if (k !== 0n) {
+    const futuresPnl = futuresUnrealizedPnl(snap, currentPrice);
+    roots.push(floorDiv(absNet * (k + futuresPnl * perpQtyScale), k));
   }
 
   const bounds = new Set<bigint>([0n, absNet]);

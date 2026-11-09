@@ -20,22 +20,29 @@ differently.
 
 The engine's stress model is a four-scenario (±spot, ±vol) grid. These portfolios are
 pure delta, so gamma and vega drop out and the worst case is the spot move opposing net
-delta. Resting orders are stressed as part of net delta — the worse of the buy-side and
-sell-side fills — rather than charged as a flat add-on:
+exposure: each venue reports its contracts at its own marks (perps at the glide, each
+futures expiry at its mark range, longs and bids at `low`, shorts and asks at `high`) and
+the engine shocks the sum. Resting orders are stressed as part of net exposure — the
+worse of the buy-side and sell-side fills — rather than charged as a flat add-on:
 
 ```
-margin(P) = max( stress(netDelta + buyOrderDelta),
-                 stress(netDelta - sellOrderDelta) )
+margin(P) = max( stress(netExposure + buyOrderExposure),
+                 stress(netExposure - sellOrderExposure) )
           + fillLoss(P)
           + unrealizedLoss(P)
           + fundingOwed
           + accountDebt
 ```
 
+`P` is the index. The snapshot records each mark and the index it was read at, and a
+mark moves with the index in proportion (`markAt`: `mark · P / index`), since the glide
+and the mark ranges are the index times a schedule factor. A snapshot without marks
+values every leg at the index.
+
 `fillLoss(P)` is each side's Scarf bound from the per-side quantity and price moments
-the venues store (`Σq`, `Σp·q`, `Σp²·q`): perps once, futures per expiry at that
-expiry's price. It never under-charges, so a deep order cannot hide a marketable one,
-and it is exact for a single price level.
+the venues store (`Σq`, `Σp·q`, `Σp²·q`) at that side's mark: perps once, futures per
+expiry. It never under-charges, so a deep order cannot hide a marketable one, and it is
+exact for a single price level.
 
 `accountDebt` is the account's unpaid realized loss to the insurance fund. It is
 constant in price and is included in both IM and MM until a later fund payout
@@ -55,8 +62,8 @@ venue offset a loss at another. They therefore have different kink sets. See the
 ```ts
 import { mmRequired, solveLiquidationThresholds } from "@hashpower/portfolio-margin";
 
-const required = mmRequired(snapshot, params, markPrice);
-const { liqDown, liqUp } = solveLiquidationThresholds(snapshot, params, markPrice);
+const required = mmRequired(snapshot, params, index);
+const { liqDown, liqUp } = solveLiquidationThresholds(snapshot, params, index);
 ```
 
 ## Consumers
