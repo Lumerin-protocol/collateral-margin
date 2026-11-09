@@ -252,7 +252,14 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
   const firstExpirationAt =
     latestBlock.timestamp +
     BigInt(FUTURES_EXPIRATION_INTERVAL_DAYS * 24 * 3600);
-  // initialize(hashrateOracle, liquidationMarginPercent,
+  // Marks every expiry at the index, so the keeper's single-price replica stays exact.
+  const futuresMarkOracle = await deploy(
+    publicClient,
+    owner.client,
+    artifacts.futuresMarkOracle(),
+    [hashpriceOracle],
+  );
+  // initialize(markOracle, liquidationMarginPercent,
   //            futureExpirationDatesCount, firstFutureExpirationDate)
   const futures = await deployProxy(
     publicClient,
@@ -261,7 +268,7 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     futuresArt.abi,
     "initialize",
     [
-      hashpriceOracle,
+      futuresMarkOracle,
       FUTURES_LIQUIDATION_MARGIN_PCT,
       FUTURES_FUTURE_DELIVERY_DATES_COUNT,
       firstExpirationAt,

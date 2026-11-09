@@ -143,6 +143,13 @@ export const artifacts = {
   // ── futures (sibling repo) ────────────────────────────────────────────
   futures: () =>
     readArtifact("futures", "contracts/HashPowerFutures", "HashPowerFutures"),
+  /** Futures' required mark oracle: every expiry marks at the wrapped index feed. */
+  futuresMarkOracle: () =>
+    readArtifact(
+      "futures",
+      "contracts/mocks/MarkRangeOracleMock",
+      "MarkRangeOracleMock",
+    ),
 } as const;
 
 /** Resolved repo paths — exported for diagnostic logs. */
