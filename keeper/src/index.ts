@@ -6,7 +6,6 @@ import { createChain } from "./chain.ts";
 import { ParticipantTracker } from "./discovery/tracker.ts";
 import { FuturesExpiryIndex } from "./discovery/futuresExpiryIndex.ts";
 import { CombinedParticipantSource } from "./discovery/combined.ts";
-import { WebhookIngester } from "./discovery/webhook.ts";
 import { CoordinatorQueue } from "./coordinator/queue.ts";
 import { Planner } from "./coordinator/planner.ts";
 import { CoordinatorExecutor } from "./coordinator/executor.ts";
@@ -33,10 +32,10 @@ import type { Venue } from "./venues/types.ts";
  *   3. Stand up the coordinator queue + planner + executor.
  *   4. Wire the tracker → executor edge: a newly-discovered user kicks the
  *      executor so the next sweep picks them up immediately.
- *   5. Start ParticipantTracker (events) and optionally WebhookIngester.
+ *   5. Start ParticipantTracker (events).
  *   6. Start the periodic Scheduler (safety-net sweep).
  *   7. Start the healthcheck server.
- *   8. Run a one-shot historical backfill (vault + perps + futures logs) so
+ *   8. Run a one-shot historical backfill (perps + futures logs) so
  *      the tracker is primed before the first sweep — closes the cold-start
  *      gap that the live event subscriptions can't see.
  *   9. Wait for SIGINT / SIGTERM, then stop everything in reverse order.
@@ -55,7 +54,6 @@ async function main(): Promise<void> {
       vault: config.vault.address,
       pme: config.pme.address,
       dryRun: config.keeper.dryRun,
-      discoveryMode: config.chain.discoveryMode,
     },
     "Starting collateral-margin keeper",
   );
@@ -132,11 +130,6 @@ async function main(): Promise<void> {
     notifier,
   );
 
-  let webhookIngester: WebhookIngester | undefined;
-  if (config.chain.discoveryMode !== "events") {
-    webhookIngester = new WebhookIngester(config, tracker, logger);
-  }
-
   // Optional: cash-settle futures positions at their maturity (`expirationAt`)
   // via the permissionless `Futures.settlePosition`. Off by default. Any keeper
   // signer can settle — no validator role required. See `delivery/coordinator.ts`.
@@ -207,7 +200,6 @@ async function main(): Promise<void> {
     deliveryCoordinator?.stop();
     futuresExpiryIndex.stop();
     await executor.stop();
-    if (webhookIngester !== undefined) await webhookIngester.stop();
     tracker.stop();
     process.exit(0);
   };
@@ -229,7 +221,6 @@ async function main(): Promise<void> {
   await predictor.start();
   await tracker.start();
   await futuresExpiryIndex.start();
-  if (webhookIngester !== undefined) await webhookIngester.start();
   if (deliveryCoordinator !== undefined) await deliveryCoordinator.start();
   if (backstopUnwinder !== undefined) await backstopUnwinder.start();
   await executor.start();
@@ -245,8 +236,7 @@ async function main(): Promise<void> {
   // the current head, then `runSweep` reads health for everyone we found.
   // Each newly-added user fires `tracker.onAdded`, which the predictor
   // consumes via `rebuild` — so the predictor index also gets seeded here.
-  // No backfill anchor → forward-only (only safe with webhook discovery or
-  // a prior keeper that's already populated the set out-of-band).
+  // No backfill anchor → forward-only (only safe on a brand-new deployment).
   if (config.chain.backfillFromBlock !== undefined) {
     await tracker.backfill(
       config.chain.backfillFromBlock,

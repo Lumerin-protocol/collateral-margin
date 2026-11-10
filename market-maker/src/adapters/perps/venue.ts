@@ -12,6 +12,7 @@ import type {
   VenueEvents,
   WalletContext,
 } from "../../core/adapter.ts";
+import { IM_SPOT_SHOCK_REFRESH_MS } from "../../core/adapter.ts";
 import type { NetworkClients } from "../../core/client.ts";
 import { HashPowerPerpsDEXAbi } from "perps-contracts/abi/HashPowerPerpsDEX.ts";
 import { CollateralVaultAbi } from "collateral-margin-contracts/abi/CollateralVault.ts";
@@ -26,6 +27,17 @@ import {
 import { attachTenderlyUrl } from "../../core/tenderly.ts";
 import { PerpsInstrumentAdapter } from "./instrument.ts";
 import { PerpsVenueEvents } from "./events.ts";
+
+/** `HashpriceGlideUSD.hashpriceUsd`: the index feed a glide feed is built on. */
+const hashpriceUsdAbi = [
+  {
+    type: "function",
+    name: "hashpriceUsd",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+] as const;
 
 export interface PerpsVenueOptions {
   network: NetworkClients;
@@ -74,7 +86,11 @@ export class PerpsVenueAdapter implements VenueAdapter {
   private engineAddressCache: `0x${string}` | null = null;
   private collateralTokenCache: `0x${string}` | null = null;
   private imSpotShockCache: bigint | null = null;
+  private imSpotShockReadAt = 0;
+  private imSpotShockRefreshing = false;
+  private unwatchShocks: (() => void) | null = null;
   private readonly rawOracle: RawOracleReader;
+  private readonly indexOracle: RawOracleReader;
 
   constructor(opts: PerpsVenueOptions) {
     this.wallet = opts.wallet;
@@ -99,40 +115,62 @@ export class PerpsVenueAdapter implements VenueAdapter {
 
     // Discover (oracle, divisor) on first read. Unlike futures the divisor
     // isn't precomputed on chain — derive it from oracle.decimals() and the
-    // collateral token's decimals.
+    // collateral token's decimals. Perps reads its mark here: the halving glide
+    // (`HashpriceGlideUSD`) on the CF-321 venue.
     this.rawOracle = new RawOracleReader({
       publicClient: this.publicClient,
       label: "perps",
-      resolve: async () => {
-        const { token } = await this.resolveAddresses();
-        const oracle = await this.publicClient.readContract({
-          address: this.address,
-          abi: HashPowerPerpsDEXAbi,
-          functionName: "priceOracle",
-        });
-        const [oracleDecimals, tokenDecimals] = await this.publicClient.multicall({
-          allowFailure: false,
-          contracts: [
-            {
-              address: oracle,
-              abi: chainlinkAggregatorAbi,
-              functionName: "decimals",
-            },
-            { address: token, abi: erc20Abi, functionName: "decimals" },
-          ],
-        });
-        if (tokenDecimals > oracleDecimals) {
-          throw new Error(
-            `perps: tokenDecimals (${tokenDecimals}) > oracleDecimals (${oracleDecimals})`,
-          );
-        }
-        return {
-          oracle,
-          divisor: 10n ** BigInt(oracleDecimals - tokenDecimals),
-          tokenDecimals,
-        };
-      },
+      resolve: () => this.resolveFeed(false),
     });
+    // The index behind it (`hashpriceUsd()` on the glide feed, the feed itself on a plain
+    // one): volatility and its history backfill are read from the index.
+    this.indexOracle = new RawOracleReader({
+      publicClient: this.publicClient,
+      label: "perps index",
+      resolve: () => this.resolveFeed(true),
+    });
+  }
+
+  private async resolveFeed(index: boolean) {
+    const { token } = await this.resolveAddresses();
+    const priceOracle = await this.publicClient.readContract({
+      address: this.address,
+      abi: HashPowerPerpsDEXAbi,
+      functionName: "priceOracle",
+    });
+    let oracle = priceOracle;
+    if (index) {
+      try {
+        oracle = await this.publicClient.readContract({
+          address: priceOracle,
+          abi: hashpriceUsdAbi,
+          functionName: "hashpriceUsd",
+        });
+      } catch {
+        // A plain feed: the mark is the index.
+      }
+    }
+    const [oracleDecimals, tokenDecimals] = await this.publicClient.multicall({
+      allowFailure: false,
+      contracts: [
+        {
+          address: oracle,
+          abi: chainlinkAggregatorAbi,
+          functionName: "decimals",
+        },
+        { address: token, abi: erc20Abi, functionName: "decimals" },
+      ],
+    });
+    if (tokenDecimals > oracleDecimals) {
+      throw new Error(
+        `perps: tokenDecimals (${tokenDecimals}) > oracleDecimals (${oracleDecimals})`,
+      );
+    }
+    return {
+      oracle,
+      divisor: 10n ** BigInt(oracleDecimals - tokenDecimals),
+      tokenDecimals,
+    };
   }
 
   async getInstrument(): Promise<InstrumentAdapter> {
@@ -225,16 +263,21 @@ export class PerpsVenueAdapter implements VenueAdapter {
   }
 
   /**
-   * Latest price oracle answer rebased to token decimals (no tick rounding).
-   * See `RawOracleReader` for rationale.
+   * Latest price oracle answer (the perps mark) rebased to token decimals (no tick
+   * rounding). See `RawOracleReader` for rationale.
    */
   getRawMarketPrice(): Promise<bigint> {
     return this.rawOracle.read();
   }
 
-  /** Aggregator and fixed-point scale behind `getRawMarketPrice()`. */
+  /** The index behind the perps mark, rebased like `getRawMarketPrice()`. */
+  getRawIndexPrice(): Promise<bigint> {
+    return this.indexOracle.read();
+  }
+
+  /** Aggregator and fixed-point scale behind `getRawIndexPrice()`, the feed history indexes. */
   getOracleScale(): Promise<OracleScale> {
-    return this.rawOracle.scale();
+    return this.indexOracle.scale();
   }
 
   /**
@@ -267,15 +310,60 @@ export class PerpsVenueAdapter implements VenueAdapter {
   }
 
   async fetchImSpotShock(): Promise<bigint> {
-    if (this.imSpotShockCache !== null) return this.imSpotShockCache;
+    if (
+      this.imSpotShockCache !== null &&
+      Date.now() - this.imSpotShockReadAt < IM_SPOT_SHOCK_REFRESH_MS
+    ) {
+      return this.imSpotShockCache;
+    }
     const { engine } = await this.resolveAddresses();
+    this.watchShocks(engine);
     const shock = await this.publicClient.readContract({
       address: engine,
       abi: PortfolioMarginEngineAbi,
       functionName: "imSpotShock",
     });
     this.imSpotShockCache = shock;
+    this.imSpotShockReadAt = Date.now();
     return shock;
+  }
+
+  /**
+   * The cached IM spot shock, or `null` before the first fetch. A stale value
+   * starts a background re-read, so synchronous order sizing follows `setShocks`.
+   */
+  cachedImSpotShock(): bigint | null {
+    this.refreshStaleImSpotShock();
+    return this.imSpotShockCache;
+  }
+
+  /** Take a `setShocks` IM change from the engine's `ShocksUpdated` as soon as it lands. */
+  private watchShocks(engine: `0x${string}`): void {
+    if (this.unwatchShocks !== null) return;
+    this.unwatchShocks = this.publicClient.watchContractEvent({
+      address: engine,
+      abi: PortfolioMarginEngineAbi,
+      eventName: "ShocksUpdated",
+      onLogs: (logs) => {
+        for (const log of logs) {
+          if (log.args.imSpot === undefined) continue;
+          this.imSpotShockCache = log.args.imSpot;
+          this.imSpotShockReadAt = Date.now();
+          this.logger.info({ imSpotShock: log.args.imSpot }, "imSpotShock updated from ShocksUpdated");
+        }
+      },
+    });
+  }
+
+  private refreshStaleImSpotShock(): void {
+    if (this.imSpotShockCache === null || this.imSpotShockRefreshing) return;
+    if (Date.now() - this.imSpotShockReadAt < IM_SPOT_SHOCK_REFRESH_MS) return;
+    this.imSpotShockRefreshing = true;
+    this.fetchImSpotShock()
+      .catch((err) => this.logger.warn({ err }, "imSpotShock re-read failed — keeping cached"))
+      .finally(() => {
+        this.imSpotShockRefreshing = false;
+      });
   }
 }
 

@@ -1,3 +1,4 @@
+import type pino from "pino";
 import type { Address } from "viem";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
@@ -28,14 +29,20 @@ const DEFAULT_CHUNK_SIZE = 64;
 /**
  * Reads `(balanceOf, computePortfolioIM, computePortfolioMM)` for every
  * supplied user in a single multicall (chunked when the user list is large).
+ *
+ * Each account settles on its own: an account whose reads revert (a venue's
+ * `getRiskView` failing makes the engine revert for that account) is logged at
+ * error level and left out, so it cannot hide the rest of its chunk. Callers that
+ * need the account treat the missing entry as a failure.
  */
 export async function readAccountHealthBatch(
   chain: Chain,
   config: Config,
   users: readonly Address[],
-  chunkSize: number = DEFAULT_CHUNK_SIZE,
+  opts: { chunkSize?: number; logger?: pino.Logger } = {},
 ): Promise<AccountHealth[]> {
   if (users.length === 0) return [];
+  const chunkSize = opts.chunkSize ?? DEFAULT_CHUNK_SIZE;
 
   const result: AccountHealth[] = [];
   for (let i = 0; i < users.length; i += chunkSize) {
@@ -63,13 +70,28 @@ export async function readAccountHealthBatch(
 
     const reads = await chain.publicClient.multicall({
       contracts: calls,
-      allowFailure: false,
+      allowFailure: true,
     });
 
     chunk.forEach((user, j) => {
-      const balance = reads[j * 3] as bigint;
-      const imRequired = reads[j * 3 + 1] as bigint;
-      const mmRequired = reads[j * 3 + 2] as bigint;
+      const triple = [reads[j * 3], reads[j * 3 + 1], reads[j * 3 + 2]];
+      const failed = triple.find((r) => r?.status !== "success");
+      if (failed !== undefined) {
+        opts.logger?.error(
+          {
+            user,
+            err:
+              failed?.error instanceof Error
+                ? failed.error.message
+                : String(failed?.error),
+          },
+          "account health read failed",
+        );
+        return;
+      }
+      const [balance, imRequired, mmRequired] = triple.map(
+        (r) => r?.result as bigint,
+      ) as [bigint, bigint, bigint];
       result.push({
         user,
         balance,

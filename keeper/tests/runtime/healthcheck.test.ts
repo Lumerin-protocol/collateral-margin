@@ -24,12 +24,15 @@ const STUB_CONFIG: Config = {
   chain: {
     network: "hardhat",
     rpcUrl: "http://stub",
-    discoveryMode: "events",
     backfillChunkSize: 10_000n,
   },
   vault: { address: "0x0000000000000000000000000000000000000001" },
   perps: { address: "0x0000000000000000000000000000000000000002" },
-  futures: { address: "0x0000000000000000000000000000000000000003", maxLotsPerLiquidationTx: 50 },
+  futures: {
+    address: "0x0000000000000000000000000000000000000003",
+    maxLotsPerLiquidationTx: 50,
+    solverTimeoutMs: 10_000,
+  },
   pme: { address: "0x0000000000000000000000000000000000000004" },
   oracle: {
     hashpriceUsdcAddress: "0x0000000000000000000000000000000000000005",
@@ -37,13 +40,18 @@ const STUB_CONFIG: Config = {
     priceMoveTriggerBps: 0,
   },
   keeper: {
-    privateKey: "0x" + "00".repeat(32) as `0x${string}`,
+    privateKey: `0x${"00".repeat(32)}` as `0x${string}`,
     dryRun: false,
     minProfitMargin: 0n,
   },
   alerts: { dedupeMs: 0, imWarnUtilization: 0.8, imCriticalUtilization: 0.95 },
-  triggers: { webhookPort: 0 },
-  coordinator: { maxConcurrentAccounts: 1, confirmationBlocks: 0 },
+  coordinator: {
+    maxConcurrentAccounts: 1,
+    confirmationBlocks: 0,
+    retryBackoffBaseMs: 1_000,
+    retryBackoffMaxMs: 300_000,
+    maxOrdersPerLiquidationTx: 50,
+  },
   runtime: {
     sweepIntervalMs: 60_000,
     healthPort: 0,
@@ -59,7 +67,12 @@ const STUB_CONFIG: Config = {
     bootstrapUsers: [],
     maxBatchSize: 50,
   },
-  backstop: { enabled: false, intervalMs: 60_000, maxQtyFutures: 0n, maxQtyPerps: 0n },
+  backstop: {
+    enabled: false,
+    intervalMs: 60_000,
+    maxQtyFutures: 0n,
+    maxQtyPerps: 0n,
+  },
 };
 
 interface Knobs {
@@ -121,12 +134,20 @@ function makeStubs(knobs: Knobs) {
     knobs.currentPrice !== undefined
       ? ({ current: () => knobs.currentPrice } as unknown as PriceFeed)
       : undefined;
-  return { config: STUB_CONFIG, tracker, executor, queue, predictor, priceFeed };
+  return {
+    config: STUB_CONFIG,
+    tracker,
+    executor,
+    queue,
+    predictor,
+    priceFeed,
+  };
 }
 
 /** Reads the listening port back off the underlying http.Server. */
 function portOf(hc: Healthcheck): number {
-  const srv = (hc as unknown as { server: { address(): { port: number } } }).server;
+  const srv = (hc as unknown as { server: { address(): { port: number } } })
+    .server;
   return srv.address().port;
 }
 
@@ -149,17 +170,18 @@ describe("runtime/healthcheck: snapshot", () => {
         crit: { down: "9999", up: null },
       },
     ];
-    const { config, tracker, executor, queue, predictor, priceFeed } = makeStubs({
-      executorRunning: true,
-      inflight: 0,
-      trackedList: [a, b, c],
-      queueEntries: [
-        { user: b, mmSurplus: -42_000_000n }, // most underwater → head
-        { user: c, mmSurplus: -1_000_000n },
-      ],
-      predictor: { thresholds, inflight: [c] },
-      currentPrice: 100_000_000n,
-    });
+    const { config, tracker, executor, queue, predictor, priceFeed } =
+      makeStubs({
+        executorRunning: true,
+        inflight: 0,
+        trackedList: [a, b, c],
+        queueEntries: [
+          { user: b, mmSurplus: -42_000_000n }, // most underwater → head
+          { user: c, mmSurplus: -1_000_000n },
+        ],
+        predictor: { thresholds, inflight: [c] },
+        currentPrice: 100_000_000n,
+      });
     const hc = new Healthcheck(
       config,
       SIGNER,
@@ -190,7 +212,14 @@ describe("runtime/healthcheck: snapshot", () => {
       executorRunning: false,
       inflight: 0,
     });
-    const hc = new Healthcheck(config, SIGNER, tracker, executor, queue, silentLogger);
+    const hc = new Healthcheck(
+      config,
+      SIGNER,
+      tracker,
+      executor,
+      queue,
+      silentLogger,
+    );
     const snap = hc.snapshot();
     assert.equal(snap.executorRunning, 0);
     assert.deepEqual(snap.trackedUsers, []);
@@ -249,11 +278,17 @@ describe("runtime/healthcheck: info", () => {
       executorRunning: true,
       inflight: 0,
     });
-    const hc = new Healthcheck(config, SIGNER, tracker, executor, queue, silentLogger);
+    const hc = new Healthcheck(
+      config,
+      SIGNER,
+      tracker,
+      executor,
+      queue,
+      silentLogger,
+    );
     assert.deepEqual(hc.info(), {
       version: "test",
       network: "hardhat",
-      discoveryMode: "events",
       dryRun: "false",
       deliveryEnabled: "false",
       backstopUnwindEnabled: "false",
@@ -297,9 +332,7 @@ const SERVER_THRESHOLDS: PredictedThresholds[] = [
   },
 ];
 
-async function withServer<T>(
-  fn: (port: number) => Promise<T>,
-): Promise<T> {
+async function withServer<T>(fn: (port: number) => Promise<T>): Promise<T> {
   const { config, tracker, executor, queue, predictor, priceFeed } = makeStubs({
     executorRunning: true,
     inflight: 0,
@@ -388,7 +421,14 @@ describe("runtime/healthcheck: HTTP endpoints", () => {
       executorRunning: false,
       inflight: 0,
     });
-    const hc = new Healthcheck(config, SIGNER, tracker, executor, queue, silentLogger);
+    const hc = new Healthcheck(
+      config,
+      SIGNER,
+      tracker,
+      executor,
+      queue,
+      silentLogger,
+    );
     hc.start();
     const port = portOf(hc);
     try {
@@ -414,7 +454,14 @@ describe("runtime/healthcheck: degraded executor", () => {
       executorRunning: false,
       inflight: 0,
     });
-    const hc = new Healthcheck(config, SIGNER, tracker, executor, queue, silentLogger);
+    const hc = new Healthcheck(
+      config,
+      SIGNER,
+      tracker,
+      executor,
+      queue,
+      silentLogger,
+    );
     hc.start();
     hc.markReady();
     const port = portOf(hc);
@@ -435,7 +482,14 @@ describe("runtime/healthcheck: degraded executor", () => {
       predictor: { thresholds: [], inflight: [] },
     });
     // No priceFeed provided → snapshot returns currentPrice: null.
-    const hc = new Healthcheck(config, SIGNER, tracker, executor, queue, silentLogger);
+    const hc = new Healthcheck(
+      config,
+      SIGNER,
+      tracker,
+      executor,
+      queue,
+      silentLogger,
+    );
     hc.start();
     const port = portOf(hc);
     try {

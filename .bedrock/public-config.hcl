@@ -24,12 +24,15 @@ inputs = {
   # has to register a new revision. CI deploy reads the same file.
   public_env = local.config_env
   vault_env = {
-    subgraph_url        = local.config_env["VAULT_SUBGRAPH_URL"]
-    points_subgraph_url = local.config_env["POINTS_SUBGRAPH_URL"]
-    vault_address       = local.config_env["VAULT_ADDRESS"]
-    futures_address     = local.config_env["FUTURES_ADDRESS"]
-    perps_address       = local.config_env["PERPS_ADDRESS"]
-    mm_address          = local.config_env["MM_ADDRESS"]
+    subgraph_url             = local.config_env["VAULT_SUBGRAPH_URL"]
+    points_subgraph_url      = local.config_env["POINTS_SUBGRAPH_URL"]
+    futures_subgraph_url     = local.config_env["FUTURES_SUBGRAPH_URL"]
+    derivatives_subgraph_url = local.config_env["DERIVATIVES_SUBGRAPH_URL"]
+    oracles_subgraph_url     = local.config_env["HASHPRICE_ORACLE_SUBGRAPH_URL"]
+    vault_address            = local.config_env["VAULT_ADDRESS"]
+    futures_address          = local.config_env["FUTURES_ADDRESS"]
+    perps_address            = local.config_env["PERPS_ADDRESS"]
+    mm_address               = local.config_env["MM_ADDRESS"]
   }
   # Lambda package is monitor/ itself. Absolute because terraform runs from
   # .terragrunt-cache, where path.module is not the repo.

@@ -26,17 +26,47 @@ data "aws_sns_topic" "hpdx_page" {
 }
 
 locals {
-  vault_mon_env = substr(var.account_shortname, 8, 3)
-  vault_mon_ns  = "ColMarVault"
+  vault_mon_env  = substr(var.account_shortname, 8, 3)
+  vault_mon_ns   = "ColMarVault"
   vault_mon_name = "${local.shortname}-vault-mon-${local.vault_mon_env}"
-  vault_slack_topic_arn = length(data.aws_sns_topic.hpdx_alerts) > 0 ? data.aws_sns_topic.hpdx_alerts[0].arn : ""
-  vault_page_topic_arn  = length(data.aws_sns_topic.hpdx_page) > 0 ? data.aws_sns_topic.hpdx_page[0].arn : ""
+  # The hashprice-oracle SPV keeper and its composite alarm, deployed by that repo in this account.
+  oracle_keeper_function   = "futures-oracle-update-v2"
+  oracle_alarm_arn         = "arn:aws:cloudwatch:${var.default_region}:${var.account_number}:alarm:hpo-oracle-${local.vault_mon_env}"
+  vault_slack_topic_arn    = length(data.aws_sns_topic.hpdx_alerts) > 0 ? data.aws_sns_topic.hpdx_alerts[0].arn : ""
+  vault_page_topic_arn     = length(data.aws_sns_topic.hpdx_page) > 0 ? data.aws_sns_topic.hpdx_page[0].arn : ""
   vault_critical_topic_arn = var.account_lifecycle == "prd" ? local.vault_page_topic_arn : local.vault_slack_topic_arn
   # Empty until notifications_enabled. Warning is Slack. Critical is Slack in
   # dev and the phone topic when account_lifecycle is prd.
   vault_warning_actions  = var.vault_monitoring.notifications_enabled && local.vault_slack_topic_arn != "" ? [local.vault_slack_topic_arn] : []
   vault_critical_actions = var.vault_monitoring.notifications_enabled && local.vault_critical_topic_arn != "" ? [local.vault_critical_topic_arn] : []
   vault_rpc_host         = var.account_lifecycle == "prd" ? "https://base-mainnet.g.alchemy.com/v2" : "https://base-sepolia.g.alchemy.com/v2"
+  vault_btc_rpc_url      = var.bitcoin_rpc_url != "" ? var.bitcoin_rpc_url : "https://bitcoin-mainnet.g.alchemy.com/v2/${var.alchemy_api_key}"
+  # Days before the Bitcoin halving at which a reminder fires, and its severity.
+  # 500 and 495 are temporary, to see the alarms fire (about 503 days out on 2026-10-31).
+  # 24 h price moves as a fraction of the PME MM spot shock (read on-chain, so
+  # the thresholds follow setShocks). BTC/USD is already inside hashprice USD,
+  # so its alarms are warnings.
+  price_move_alarms = {
+    "hashprice-warn" = { metric = "HashpriceChange24hPct", ratio = 0.5, severity = "warning" }
+    "hashprice-crit" = { metric = "HashpriceChange24hPct", ratio = 1, severity = "critical" }
+    "btc-warn"       = { metric = "BtcChange24hPct", ratio = 0.5, severity = "warning" }
+    "btc-crit"       = { metric = "BtcChange24hPct", ratio = 1, severity = "warning" }
+  }
+  # Feed age above which the price is treated as frozen. Hashprice updates per
+  # Bitcoin block, and hour-long gaps between blocks happen every few days.
+  price_feed_age_alarms = {
+    "hashprice" = { metric = "HashpriceFeedAgeSeconds", seconds = 7200 }
+    "btc-usd"   = { metric = "BtcUsdFeedAgeSeconds", seconds = 3600 }
+  }
+  # Subgraphs watched for lag and indexing errors beyond the vault one. Futures
+  # and derivatives feed the UI's positions and orders; the market maker reads
+  # oracles only to backfill volatility at startup.
+  watched_subgraphs = {
+    "futures"     = { title = "Futures", severity = "critical" }
+    "derivatives" = { title = "Derivatives", severity = "critical" }
+    "oracles"     = { title = "Hashprice oracle", severity = "warning" }
+  }
+  btc_halving_reminders = { "500" = "warning", "495" = "warning", "30" = "warning", "14" = "warning", "7" = "warning", "2" = "critical", "1" = "critical" }
   # The portfolio market maker is the futures_mm service.
   vault_mm_health     = var.vault_monitoring.create && var.futures_mm_service.create
   vault_mm_health_url = local.vault_mm_health ? "https://futuresmm.${local.hp_dns["exc"].name}/health/raw" : ""
@@ -158,16 +188,20 @@ resource "aws_lambda_function" "vault_mon" {
 
   environment {
     variables = {
-      VAULT_SUBGRAPH_URL  = var.vault_env.subgraph_url
-      POINTS_SUBGRAPH_URL = var.vault_env.points_subgraph_url
-      VAULT_ADDRESS       = var.vault_env.vault_address
-      FUTURES_ADDRESS     = var.vault_env.futures_address
-      PERPS_ADDRESS       = var.vault_env.perps_address
-      MM_ADDRESS          = var.vault_env.mm_address
-      MM_FUTURES_MARKETS  = tostring(var.vault_monitoring.mm_futures_markets)
-      MM_HEALTH_URL       = local.vault_mm_health_url
-      ETH_RPC_URL         = "${local.vault_rpc_host}/${var.alchemy_api_key}"
-      CW_NAMESPACE        = local.vault_mon_ns
+      VAULT_SUBGRAPH_URL            = var.vault_env.subgraph_url
+      POINTS_SUBGRAPH_URL           = var.vault_env.points_subgraph_url
+      FUTURES_SUBGRAPH_URL          = var.vault_env.futures_subgraph_url
+      DERIVATIVES_SUBGRAPH_URL      = var.vault_env.derivatives_subgraph_url
+      HASHPRICE_ORACLE_SUBGRAPH_URL = var.vault_env.oracles_subgraph_url
+      VAULT_ADDRESS                 = var.vault_env.vault_address
+      FUTURES_ADDRESS               = var.vault_env.futures_address
+      PERPS_ADDRESS                 = var.vault_env.perps_address
+      MM_ADDRESS                    = var.vault_env.mm_address
+      MM_FUTURES_MARKETS            = tostring(var.vault_monitoring.mm_futures_markets)
+      MM_HEALTH_URL                 = local.vault_mm_health_url
+      ETH_RPC_URL                   = "${local.vault_rpc_host}/${var.alchemy_api_key}"
+      BITCOIN_RPC_URL               = local.vault_btc_rpc_url
+      CW_NAMESPACE                  = local.vault_mon_ns
     }
   }
 
@@ -300,6 +334,207 @@ resource "aws_cloudwatch_metric_alarm" "vault_backstop_equity" {
   })
 }
 
+resource "aws_cloudwatch_metric_alarm" "vault_backstop_loss" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-backstop-loss-${local.vault_mon_env}"
+  alarm_description   = "Protocol backstop equity is below -${var.vault_monitoring.backstop_loss_crit_usd} USD: its parked positions are losing enough to take a real bite out of the insurance fund once they unwind or settle. Check the keeper unwinder, widen the band with setBackstopParams (past the BackstopUnwindBudgetBps budget if deleveraging is cheaper than holding), or unwind by hand, and prepare a depositInsuranceFund top-up. See docs/protocol-liquidation-exposure.md#operating-the-backstop."
+  comparison_operator = "LessThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "BackstopEquity"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Minimum"
+  threshold           = -var.vault_monitoring.backstop_loss_crit_usd
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Backstop Loss"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "vault_backstop_notional" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-backstop-notional-${local.vault_mon_env}"
+  alarm_description   = "Protocol backstop exposure at the mark (BackstopNotional, both venues) is above ${var.vault_monitoring.backstop_notional_warn_usd} USD: a large liquidation was handed to the backstop. Watch BackstopEquity, confirm the keeper unwinder is filling, and widen the band with setBackstopParams up to the BackstopUnwindBudgetBps budget if the book is not taking it. See docs/protocol-liquidation-exposure.md#operating-the-backstop. Warning only."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "BackstopNotional"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = var.vault_monitoring.backstop_notional_warn_usd
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Backstop Notional"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "vault_backstop_over_budget" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-backstop-over-budget-${local.vault_mon_env}"
+  alarm_description   = "The vault's backstop unwind band + caller fee is above the liquidation fee a venue keeps (liquidationFeeBps x (1 - liquidatorShareBps), BackstopUnwindBudgetBps). An unwind then gives away more than the liquidation earned, and anyone can profit by liquidating and unwinding against themselves (X3-R3A-2). Expected only while deliberately deleveraging; otherwise lower it with setBackstopParams. See docs/protocol-liquidation-exposure.md#operating-the-backstop. Warning only."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "BackstopUnwindOverBudgetBps"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = 0
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Backstop Over Budget"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "vault_backstop_unfilled" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-backstop-unfilled-${local.vault_mon_env}"
+  alarm_description   = "The protocol backstop has held an open leg for 6 hours: the book is not taking it inside the unwind band. Check the keeper unwinder is running, then widen the band with setBackstopParams in steps up to the BackstopUnwindBudgetBps budget (past it only to deleverage deliberately). See docs/protocol-liquidation-exposure.md#operating-the-backstop. Warning only."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 6
+  metric_name         = "BackstopOpenLegs"
+  namespace           = local.vault_mon_ns
+  period              = 3600
+  statistic           = "Minimum"
+  threshold           = 1
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Backstop Unfilled"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "btc_halving" {
+  for_each            = var.vault_monitoring.create ? local.btc_halving_reminders : {}
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-btc-halving-${each.key}d-${local.vault_mon_env}"
+  alarm_description   = "The Bitcoin halving is about ${each.key} day(s) away (BtcDaysUntilHalving, from the average block time over the last 2,016 blocks; BtcBlocksUntilHalving is exact). It halves the subsidy part of hashprice in one block, far beyond the MM shock: raise margin requirements on the published schedule (CF-321) with setShocks, and check futures expiries that straddle it. Fires once per halving; ${each.value == "critical" ? "pages on lmn" : "warning only"}."
+  comparison_operator = "LessThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "BtcDaysUntilHalving"
+  namespace           = local.vault_mon_ns
+  period              = 3600
+  statistic           = "Minimum"
+  threshold           = tonumber(each.key)
+  treat_missing_data  = "ignore"
+  alarm_actions       = each.value == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar BTC Halving ${each.key}d"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "price_move" {
+  for_each            = var.vault_monitoring.create ? local.price_move_alarms : {}
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-price-move-${each.key}-${local.vault_mon_env}"
+  alarm_description   = "${each.value.metric} moved at least ${each.value.ratio * 100}% of the MM spot shock in 24 h (|change| / MmSpotShockPct >= ${each.value.ratio}). A move the size of the MM shock puts the most levered accounts at liquidation: check the keeper is liquidating, the insurance fund and backstop exposure, and whether to raise margins with setShocks. ${each.value.severity == "critical" ? "Pages on lmn." : "Warning only."}"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  threshold           = each.value.ratio
+  treat_missing_data  = "ignore"
+  alarm_actions       = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+  ok_actions          = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+
+  metric_query {
+    id = "change"
+    metric {
+      metric_name = each.value.metric
+      namespace   = local.vault_mon_ns
+      period      = 300
+      stat        = "Average"
+    }
+  }
+
+  metric_query {
+    id = "mm"
+    metric {
+      metric_name = "MmSpotShockPct"
+      namespace   = local.vault_mon_ns
+      period      = 300
+      stat        = "Maximum"
+    }
+  }
+
+  metric_query {
+    id          = "ratio"
+    expression  = "ABS(change) / mm"
+    label       = "24 h move / MM shock"
+    return_data = true
+  }
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Price Move ${each.key}"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "price_feed_age" {
+  for_each            = var.vault_monitoring.create ? local.price_feed_age_alarms : {}
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-price-feed-age-${each.key}-${local.vault_mon_env}"
+  alarm_description   = "${each.value.metric} is above ${each.value.seconds / 60} minutes: the feed looks frozen, which hides price moves from margin and from the move alarms. Check the hashprice oracle keeper and the Chainlink BTC/USD feed. Warning only."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = each.value.metric
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Minimum"
+  threshold           = each.value.seconds
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Price Feed Age ${each.key}"
+    Capability = "Monitoring"
+  })
+}
+
+# The oracle repo's hpo-oracle page measures the same lag through the keeper's
+# own Bitcoin node, so a stuck node makes the relay look current there. This
+# one takes the tip most of Alchemy and five public explorers agree on.
+resource "aws_cloudwatch_metric_alarm" "spv_behind_bitcoin" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-spv-behind-bitcoin-${local.vault_mon_env}"
+  alarm_description   = "The hashprice oracle trails the Bitcoin tip by 2 or more blocks for 15 minutes, by the tip most of Alchemy and the public explorers agree on. If hpo-oracle-${local.vault_mon_env} is OK, the keeper's Bitcoin node is stuck and the keeper does not see the new blocks: check its logs and its BITCOIN_RPC_URL. The venues and the margin engine reject the price once it is older than MAX_ORACLE_STALENESS."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 3
+  metric_name         = "SpvBlocksBehind"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Minimum"
+  threshold           = 2
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar SPV Behind Bitcoin"
+    Capability = "Monitoring"
+  })
+}
+
 resource "aws_cloudwatch_metric_alarm" "vault_util_warn" {
   count               = var.vault_monitoring.create ? 1 : 0
   provider            = aws.use1
@@ -388,6 +623,28 @@ resource "aws_cloudwatch_metric_alarm" "vault_backing_gap" {
   })
 }
 
+resource "aws_cloudwatch_metric_alarm" "vault_unpinned_expiry" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-unpinned-expiry-${local.vault_mon_env}"
+  alarm_description   = "A tradable futures delivery slot has had no pinned date for an hour. The keeper's delivery sweep pins the next date daily (Futures.pinExpiry, permissionless) and the venue pins it on the first trade, so until then getExpirationDates shows a date that may still move clear of the halving. Check the keeper is running and its delivery sweep logs. Warning only."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 12
+  metric_name         = "UnpinnedTradableSlots"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Minimum"
+  threshold           = 1
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Unpinned Expiry"
+    Capability = "Monitoring"
+  })
+}
+
 resource "aws_cloudwatch_metric_alarm" "vault_margin_engine_unset" {
   count               = var.vault_monitoring.create ? 1 : 0
   provider            = aws.use1
@@ -428,6 +685,51 @@ resource "aws_cloudwatch_metric_alarm" "vault_check_success" {
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Vault Check Success"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "vault_partial_check" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-partial-check-${local.vault_mon_env}"
+  alarm_description   = "A best-effort read in the vault monitor (points subgraph, market maker, /health, Bitcoin node, price feeds) failed on every run for 15 minutes, so its metrics and alarms are blind. The failed checks are listed as failed= in the Lambda's ok line. Warning only."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "PartialCheckFailures"
+  namespace           = local.vault_mon_ns
+  period              = 900
+  statistic           = "Minimum"
+  threshold           = 1
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Partial Check"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "vault_mon_lambda" {
+  for_each            = var.vault_monitoring.create ? toset(["Errors", "Throttles"]) : toset([])
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-mon-lambda-${lower(each.key)}-${local.vault_mon_env}"
+  alarm_description   = "The vault monitor Lambda reported ${each.key} (a crash, timeout or out-of-memory, or a throttled invocation). A failed check alone does not count here: the handler catches it and CheckSuccess reports it. Read /aws/lambda/${local.vault_mon_name}. Warning only; CheckSuccess pages if runs stop succeeding."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = each.key
+  namespace           = "AWS/Lambda"
+  dimensions          = { FunctionName = local.vault_mon_name }
+  period              = 300
+  statistic           = "Sum"
+  threshold           = 1
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Monitor Lambda ${each.key}"
     Capability = "Monitoring"
   })
 }
@@ -496,6 +798,52 @@ resource "aws_cloudwatch_metric_alarm" "points_subgraph_behind" {
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Points Subgraph Behind"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "watched_subgraph_behind" {
+  for_each            = var.vault_monitoring.create ? local.watched_subgraphs : {}
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-${each.key}-subgraph-behind-${local.vault_mon_env}"
+  alarm_description   = "${each.value.title} subgraph is more than ${var.vault_monitoring.max_subgraph_age_minutes} minutes of blocks behind the chain head. The tag is still indexing or stalled, so the UI and anything reading it show stale data. Check goldsky subgraph log --filter error."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  metric_name         = "SubgraphBlocksBehind"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = var.vault_monitoring.max_subgraph_age_minutes * 30
+  treat_missing_data  = "ignore"
+  dimensions          = { Subgraph = each.key }
+  alarm_actions       = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+  ok_actions          = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar ${each.value.title} Subgraph Behind"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "watched_subgraph_errors" {
+  for_each            = var.vault_monitoring.create ? merge({ "points" = { title = "Points", severity = "critical" } }, local.watched_subgraphs) : {}
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-${each.key}-subgraph-errors-${local.vault_mon_env}"
+  alarm_description   = "${each.value.title} subgraph reports indexing errors (_meta.hasIndexingErrors). A handler failed; the subgraph stops or skips data. Check goldsky subgraph log --filter error, fix the mapping and redeploy."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  metric_name         = "SubgraphIndexingErrors"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
+  threshold           = 1
+  treat_missing_data  = "ignore"
+  dimensions          = { Subgraph = each.key }
+  alarm_actions       = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+  ok_actions          = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar ${each.value.title} Subgraph Errors"
     Capability = "Monitoring"
   })
 }
@@ -575,7 +923,7 @@ resource "aws_cloudwatch_metric_alarm" "keeper_errors" {
   count               = var.vault_monitoring.create && var.keeper_service.create ? 1 : 0
   provider            = aws.use1
   alarm_name          = "${local.shortname}-keeper-errors-${local.vault_mon_env}"
-  alarm_description   = "Keeper logged an error (pino level 50). Sweeps that throw skip liquidation for that cycle. Read /ecs/col-mar-keeper logs, restart if the loop is stuck, then top up any uncovered loss."
+  alarm_description   = "Keeper logged an error (pino level 50). Sweeps that throw skip liquidation for that cycle. \"account health read failed\" means the margin engine reverts for that user (a venue getRiskView fails), so the account cannot trade, withdraw or be liquidated until the venue is fixed. Read /ecs/col-mar-keeper logs, restart if the loop is stuck, then top up any uncovered loss."
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods  = 1
   metric_name         = "KeeperErrorCount"
@@ -742,7 +1090,7 @@ resource "aws_cloudwatch_metric_alarm" "book_mark_drift" {
   count               = var.vault_monitoring.create ? 1 : 0
   provider            = aws.use1
   alarm_name          = "${local.shortname}-book-mark-drift-${local.vault_mon_env}"
-  alarm_description   = "A two-sided book's mid has been more than ${var.vault_monitoring.book_drift_warn_bps} bps from the mark for 15 minutes. The market maker is leaving stale quotes that takers can trade against. Check the market-maker state panel for a quarantined market, gas throttle, or paused placements, then the market-maker log. Warning only."
+  alarm_description   = "A two-sided book's mid has been more than ${var.vault_monitoring.book_drift_warn_bps} bps from its mark for 15 minutes (perps: the halving glide; a futures date: the middle of its mark range, about half the index once it settles after the halving). The market maker is leaving stale quotes that takers can trade against, or the market disagrees with the halving schedule. Check the market-maker state panel for a quarantined market, gas throttle, or paused placements, then the market-maker log. Warning only."
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 3
   metric_name         = "BookMaxMidDriftBps"
@@ -901,6 +1249,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
   provider       = aws.use1
   dashboard_name = "${local.shortname}-vault-${local.vault_mon_env}"
 
+  # Sections in order of importance: price feed, vault, market maker, indexers, monitoring.
   dashboard_body = jsonencode({
     widgets = concat(
       [
@@ -911,20 +1260,34 @@ resource "aws_cloudwatch_dashboard" "vault" {
           width  = 24
           height = 4
           properties = {
-            title = "Alarm Status"
+            title  = "Alarm Status"
+            sortBy = "stateUpdatedTimestamp"
             alarms = concat(
+              [local.oracle_alarm_arn],
               aws_cloudwatch_metric_alarm.vault_uncovered_loss[*].arn,
               aws_cloudwatch_metric_alarm.vault_backstop_equity[*].arn,
+              aws_cloudwatch_metric_alarm.vault_backstop_loss[*].arn,
+              aws_cloudwatch_metric_alarm.vault_backstop_notional[*].arn,
+              aws_cloudwatch_metric_alarm.vault_backstop_over_budget[*].arn,
+              aws_cloudwatch_metric_alarm.vault_backstop_unfilled[*].arn,
+              [for alarm in aws_cloudwatch_metric_alarm.btc_halving : alarm.arn],
+              [for alarm in aws_cloudwatch_metric_alarm.price_move : alarm.arn],
+              [for alarm in aws_cloudwatch_metric_alarm.price_feed_age : alarm.arn],
+              aws_cloudwatch_metric_alarm.spv_behind_bitcoin[*].arn,
               aws_cloudwatch_metric_alarm.vault_util_warn[*].arn,
               aws_cloudwatch_metric_alarm.vault_util_crit[*].arn,
               aws_cloudwatch_metric_alarm.vault_halted[*].arn,
               aws_cloudwatch_metric_alarm.vault_backing_gap[*].arn,
               aws_cloudwatch_metric_alarm.vault_margin_engine_unset[*].arn,
               aws_cloudwatch_metric_alarm.vault_check_success[*].arn,
+              aws_cloudwatch_metric_alarm.vault_partial_check[*].arn,
+              [for alarm in aws_cloudwatch_metric_alarm.vault_mon_lambda : alarm.arn],
               aws_cloudwatch_metric_alarm.vault_subgraph_age[*].arn,
               aws_cloudwatch_metric_alarm.vault_subgraph_behind[*].arn,
               aws_cloudwatch_metric_alarm.points_subgraph_behind[*].arn,
               aws_cloudwatch_metric_alarm.vault_subgraph_errors[*].arn,
+              [for alarm in aws_cloudwatch_metric_alarm.watched_subgraph_behind : alarm.arn],
+              [for alarm in aws_cloudwatch_metric_alarm.watched_subgraph_errors : alarm.arn],
               aws_cloudwatch_metric_alarm.keeper_unhealthy[*].arn,
               aws_cloudwatch_metric_alarm.keeper_silent[*].arn,
               aws_cloudwatch_metric_alarm.keeper_errors[*].arn,
@@ -941,14 +1304,207 @@ resource "aws_cloudwatch_dashboard" "vault" {
               aws_cloudwatch_metric_alarm.mm_paused_new[*].arn,
               aws_cloudwatch_metric_alarm.mm_no_own_orders[*].arn,
               aws_cloudwatch_metric_alarm.mm_health_check[*].arn,
+              aws_cloudwatch_composite_alarm.futures_mm_unhealthy[*].arn,
+              aws_cloudwatch_metric_alarm.futures_mm_error_logged[*].arn,
+              aws_cloudwatch_metric_alarm.futures_mm_warnings[*].arn,
+              aws_cloudwatch_metric_alarm.futures_mm_halt[*].arn,
+              aws_cloudwatch_metric_alarm.futures_mm_no_tick[*].arn,
+              aws_cloudwatch_metric_alarm.futures_mm_tick_error[*].arn,
+              aws_cloudwatch_metric_alarm.futures_mm_cancel_fail[*].arn,
+              aws_cloudwatch_metric_alarm.futures_mm_error_rate[*].arn,
+              aws_cloudwatch_metric_alarm.futures_mm_multicall_fail[*].arn,
             )
+          }
+        },
+        {
+          type       = "text"
+          x          = 0
+          y          = 4
+          width      = 24
+          height     = 4
+          properties = { markdown = "## Price feed: nothing trades without it\n- Hashprice USD = hashprice BTC from our SPV oracle (Bitcoin headers relayed by the SPV keeper) × Chainlink BTC/USD. Margin, marks, liquidations and the market maker all read it.\n- **SPV relay delay**: Bitcoin blocks the oracle trails the tip, and minutes since the keeper's last header. **Chainlink BTC/USD**: minutes since its last update (each drop to 0 is an update) and updates per hour. On dev BTC/USD is a mock the SPV keeper updates.\n- **Price feed age**: the hashprice feed reports the older of its two inputs, so it rises when either stalls. **Moves vs MM spot shock**: a 24 h hashprice move of half the shock warns, the full shock pages." }
+        },
+        {
+          type   = "metric"
+          x      = 0
+          y      = 8
+          width  = 12
+          height = 6
+          properties = {
+            title  = "Hashprice and BTC (USD)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "HashpriceUsd", { label = "Hashprice (USD/PH/day)" }],
+              [local.vault_mon_ns, "BtcUsd", { label = "BTC (right)", yAxis = "right" }],
+            ]
+          }
+        },
+        {
+          type   = "metric"
+          x      = 12
+          y      = 8
+          width  = 12
+          height = 6
+          properties = {
+            title  = "SPV relay delay"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "SpvBlocksBehind", { label = "Blocks behind the Bitcoin tip", stat = "Maximum" }],
+              [{ expression = "spv / 60", id = "spvmin", label = "Minutes since the last header (right)", yAxis = "right" }],
+              [local.vault_mon_ns, "SpvFeedAgeSeconds", { id = "spv", stat = "Maximum", visible = false }],
+            ]
+            yAxis = { left = { min = 0 }, right = { min = 0 } }
           }
         },
         {
           type   = "metric"
           x      = 0
-          y      = 4
+          y      = 14
+          width  = 8
+          height = 6
+          properties = {
+            title  = "Chainlink BTC/USD updates"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [{ expression = "btc / 60", id = "btcmin", label = "Minutes since the last update" }],
+              [local.vault_mon_ns, "BtcUsdFeedAgeSeconds", { id = "btc", stat = "Maximum", visible = false }],
+              [local.vault_mon_ns, "BtcUsdUpdates1h", { label = "Updates in the last hour (right)", stat = "Maximum", yAxis = "right" }],
+            ]
+            yAxis = { left = { min = 0 }, right = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 8
+          y      = 14
+          width  = 8
+          height = 6
+          properties = {
+            title  = "SPV keeper (header relayer)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              ["AWS/Lambda", "Invocations", "FunctionName", local.oracle_keeper_function, { label = "Runs", stat = "Sum" }],
+              [var.vault_monitoring.oracle_metric_namespace, "oracle_job_completions", { label = "Completed", stat = "Sum" }],
+              ["AWS/Lambda", "Errors", "FunctionName", local.oracle_keeper_function, { label = "Lambda errors", stat = "Sum", color = "#d62728" }],
+              [var.vault_monitoring.oracle_metric_namespace, "oracle_lambda_errors", { label = "Logged errors", stat = "Sum", color = "#ff7f0e" }],
+              ["AWS/Lambda", "Throttles", "FunctionName", local.oracle_keeper_function, { label = "Throttles", stat = "Sum" }],
+              ["AWS/Lambda", "Duration", "FunctionName", local.oracle_keeper_function, { label = "Max duration ms (right)", stat = "Maximum", yAxis = "right" }],
+            ]
+            yAxis = { left = { min = 0 }, right = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 16
+          y      = 14
+          width  = 8
+          height = 6
+          properties = {
+            title  = "Price feed age (minutes)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [{ expression = "hp / 60", id = "hpmin", label = "Hashprice feed" }],
+              [{ expression = "btcage / 60", id = "btcagemin", label = "BTC/USD feed" }],
+              [local.vault_mon_ns, "HashpriceFeedAgeSeconds", { id = "hp", stat = "Maximum", visible = false }],
+              [local.vault_mon_ns, "BtcUsdFeedAgeSeconds", { id = "btcage", stat = "Maximum", visible = false }],
+              [var.vault_monitoring.oracle_metric_namespace, "oracle_data_age_minutes", "Environment", local.vault_mon_env, { label = "Hashprice oracle data" }],
+            ]
+            yAxis = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 0
+          y      = 20
           width  = 12
+          height = 6
+          properties = {
+            title  = "Price moves vs MM spot shock (%)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "HashpriceChange24hPct", { label = "Hashprice 24 h" }],
+              [local.vault_mon_ns, "HashpriceChange1hPct", { label = "Hashprice 1 h" }],
+              [local.vault_mon_ns, "BtcChange24hPct", { label = "BTC 24 h" }],
+              [local.vault_mon_ns, "BtcChange1hPct", { label = "BTC 1 h" }],
+              [local.vault_mon_ns, "MmSpotShockPct", { label = "MM shock", stat = "Maximum", color = "#d62728" }],
+            ]
+          }
+        },
+        {
+          type   = "metric"
+          x      = 12
+          y      = 20
+          width  = 12
+          height = 6
+          properties = {
+            title  = "Bitcoin halving and the perps glide"
+            region = var.default_region
+            period = 3600
+            view   = "singleValue"
+            metrics = [
+              [local.vault_mon_ns, "BtcDaysUntilHalving", { label = "Days", stat = "Minimum" }],
+              [local.vault_mon_ns, "BtcBlocksUntilHalving", { label = "Blocks", stat = "Minimum" }],
+              [local.vault_mon_ns, "GlideProgressPct", { label = "Glide progress %", stat = "Maximum" }],
+              [local.vault_mon_ns, "HalvingStepPct", { label = "Halving step %", stat = "Average" }],
+              [local.vault_mon_ns, "PerpsMarkDiscountPct", { label = "Perps mark below index %", stat = "Maximum" }],
+            ]
+          }
+        },
+        {
+          type   = "log"
+          x      = 0
+          y      = 26
+          width  = 24
+          height = 6
+          properties = {
+            title  = "SPV keeper recent errors and warnings"
+            region = var.default_region
+            view   = "table"
+            query  = "SOURCE '/aws/lambda/${local.oracle_keeper_function}' | fields @timestamp, msg, component, coalesce(err.message, message, '') as detail | filter level >= 40 | sort @timestamp desc | limit 50"
+          }
+        },
+        {
+          type       = "text"
+          x          = 0
+          y          = 32
+          width      = 24
+          height     = 4
+          properties = { markdown = "## Vault: solvency, liquidations and backstop\n- **Halted**: 1 while the vault is halted or the margin engine is unset. **Debt**: what the insurance fund owes after covering traders' losses; *uncovered loss* above 0 is a loss nothing covers (top up with depositInsuranceFund). **Utilization**: debt as a share of the cap; a breach halts the vault.\n- **Backing gap**: supply minus debt minus USDC held; above 0 the vault is short. **Balances available for a top-up**: insurance fund and venue fees. **Keeper**: liquidation sweeps; if they stop, nobody liquidates.\n- **Protocol backstop**: positions taken over from liquidations; equity below 0 is a loss forming. **Offload**: what an unwind may give away (band + fee); above the kept liquidation fee, unwinds cost the vault." }
+        },
+        {
+          type   = "metric"
+          x      = 0
+          y      = 36
+          width  = 6
+          height = 6
+          properties = {
+            title  = "Halted"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "Halted", { label = "Halted", stat = "Maximum" }],
+              [local.vault_mon_ns, "MarginEngineUnset", { label = "Engine unset", stat = "Maximum" }],
+            ]
+          }
+        },
+        {
+          type   = "metric"
+          x      = 6
+          y      = 36
+          width  = 9
           height = 6
           properties = {
             title  = "Debt (USDC)"
@@ -966,9 +1522,9 @@ resource "aws_cloudwatch_dashboard" "vault" {
         },
         {
           type   = "metric"
-          x      = 12
-          y      = 4
-          width  = 6
+          x      = 15
+          y      = 36
+          width  = 9
           height = 6
           properties = {
             title  = "Utilization %"
@@ -978,6 +1534,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
             metrics = [
               [local.vault_mon_ns, "InsuranceDebtUtilizationPct", { label = "Debt / cap" }],
             ]
+            yAxis = { left = { min = 0 } }
             annotations = {
               horizontal = [
                 { label = "warn", value = var.vault_monitoring.debt_util_warn_pct },
@@ -988,44 +1545,9 @@ resource "aws_cloudwatch_dashboard" "vault" {
         },
         {
           type   = "metric"
-          x      = 18
-          y      = 4
-          width  = 6
-          height = 6
-          properties = {
-            title  = "Halted"
-            region = var.default_region
-            period = 300
-            view   = "timeSeries"
-            metrics = [
-              [local.vault_mon_ns, "Halted", { label = "Halted", stat = "Maximum" }],
-              [local.vault_mon_ns, "MarginEngineUnset", { label = "Engine unset", stat = "Maximum" }],
-            ]
-          }
-        },
-        {
-          type   = "metric"
           x      = 0
-          y      = 10
+          y      = 42
           width  = 12
-          height = 6
-          properties = {
-            title  = "Balances available for a top-up (USDC)"
-            region = var.default_region
-            period = 300
-            view   = "timeSeries"
-            metrics = [
-              [local.vault_mon_ns, "InsuranceFundBalance", { label = "Insurance fund" }],
-              [local.vault_mon_ns, "FuturesFeeBalance", { label = "Futures fees" }],
-              [local.vault_mon_ns, "PerpsFeeBalance", { label = "Perps fees" }],
-            ]
-          }
-        },
-        {
-          type   = "metric"
-          x      = 12
-          y      = 10
-          width  = 6
           height = 6
           properties = {
             title  = "Backing gap (USDC)"
@@ -1041,9 +1563,28 @@ resource "aws_cloudwatch_dashboard" "vault" {
         },
         {
           type   = "metric"
-          x      = 0
-          y      = 22
+          x      = 12
+          y      = 42
           width  = 12
+          height = 6
+          properties = {
+            title  = "Balances available for a top-up (USDC)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "InsuranceFundBalance", { label = "Insurance fund" }],
+              [local.vault_mon_ns, "FuturesFeeBalance", { label = "Futures fees (right)", yAxis = "right" }],
+              [local.vault_mon_ns, "PerpsFeeBalance", { label = "Perps fees (right)", yAxis = "right" }],
+            ]
+            yAxis = { left = { min = 0 }, right = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 8
+          y      = 48
+          width  = 8
           height = 6
           properties = {
             title  = "Protocol backstop (USDC)"
@@ -1061,8 +1602,27 @@ resource "aws_cloudwatch_dashboard" "vault" {
         },
         {
           type   = "metric"
-          x      = 12
-          y      = 22
+          x      = 16
+          y      = 48
+          width  = 8
+          height = 6
+          properties = {
+            title  = "Protocol backstop exposure at the mark (USDC)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "BackstopNotional", { label = "Total", stat = "Maximum" }],
+              [{ expression = "SEARCH('{${local.vault_mon_ns},Venue} MetricName=\"BackstopNotional\"', 'Maximum', 300)", id = "venues", label = "" }],
+            ]
+            annotations = { horizontal = [{ label = "warn", value = var.vault_monitoring.backstop_notional_warn_usd }] }
+            yAxis       = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 0
+          y      = 54
           width  = 12
           height = 6
           properties = {
@@ -1072,6 +1632,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
             view   = "timeSeries"
             metrics = [
               [local.vault_mon_ns, "BackstopFuturesNetQuantity", { label = "Futures net contracts" }],
+              [{ expression = "REMOVE_EMPTY(SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BackstopFuturesNetQuantity\"', 'Average', 300))", id = "legs", label = "$${PROP('Dim.Market')}" }],
               [local.vault_mon_ns, "BackstopPerpsNetQuantity", { label = "Perps net (1e6)" }],
               [local.vault_mon_ns, "BackstopOpenLegs", { label = "Open legs", stat = "Maximum" }],
             ]
@@ -1079,29 +1640,37 @@ resource "aws_cloudwatch_dashboard" "vault" {
         },
         {
           type   = "metric"
-          x      = 18
-          y      = 10
-          width  = 6
+          x      = 12
+          y      = 54
+          width  = 12
           height = 6
           properties = {
-            title  = "Monitor health"
+            title  = "Backstop offload: unwind band + fee vs kept liquidation fee (bps)"
             region = var.default_region
             period = 300
             view   = "timeSeries"
             metrics = [
-              [local.vault_mon_ns, "CheckSuccess", { label = "Check success", stat = "Minimum" }],
-              [local.vault_mon_ns, "SubgraphIndexingErrors", { label = "Indexing errors", stat = "Maximum" }],
-              [local.vault_mon_ns, "SubgraphDataAgeSeconds", { label = "Subgraph age (s)", stat = "Maximum" }],
-              [local.vault_mon_ns, "MarketCheckSuccess", { label = "Market check success", stat = "Minimum" }],
-              [local.vault_mon_ns, "MmHealthCheckSuccess", { label = "MM health success", stat = "Minimum" }],
+              [local.vault_mon_ns, "BackstopUnwindBandBps", { label = "Band", stat = "Maximum" }],
+              [local.vault_mon_ns, "BackstopUnwindFeeBps", { label = "Caller fee", stat = "Maximum" }],
+              [local.vault_mon_ns, "BackstopUnwindOverBudgetBps", { label = "Over budget", stat = "Maximum" }],
+              [{ expression = "SEARCH('{${local.vault_mon_ns},Venue} MetricName=\"BackstopUnwindBudgetBps\"', 'Minimum', 300)", id = "budget", label = "Budget" }],
             ]
+            yAxis = { left = { min = 0 } }
           }
         },
         {
+          type       = "text"
+          x          = 0
+          y          = 66
+          width      = 24
+          height     = 4
+          properties = { markdown = "## Market maker: one MM quoting futures and perps\n- **State** and **own orders** come from its /health: running, quarantined or paused markets, seconds since its last loop. **Book levels**: price levels per side of every live book; 0 on a side means a one-sided book.\n- **Spread** and **mid drift** from the mark show stale quotes. **Position, collateral, utilization, ETH**: inventory against its caps, IM against its vault balance, and gas money.\n- **Loop**, **execution**, **warnings** and **recent errors** come from its logs." }
+        },
+        {
           type   = "metric"
-          x      = 0
-          y      = 28
-          width  = 12
+          x      = 8
+          y      = 70
+          width  = 8
           height = 6
           properties = {
             title  = "Book levels by market (bids / asks)"
@@ -1109,8 +1678,8 @@ resource "aws_cloudwatch_dashboard" "vault" {
             period = 300
             view   = "timeSeries"
             metrics = [
-              [{ expression = "SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BookBidLevels\"', 'Minimum', 300)", id = "bids", label = "bids" }],
-              [{ expression = "SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BookAskLevels\"', 'Minimum', 300)", id = "asks", label = "asks" }],
+              [{ expression = "REMOVE_EMPTY(SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BookBidLevels\"', 'Minimum', 300))", id = "bids", label = "$${PROP('Dim.Market')}-bids" }],
+              [{ expression = "REMOVE_EMPTY(SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BookAskLevels\"', 'Minimum', 300))", id = "asks", label = "$${PROP('Dim.Market')}-asks" }],
               [local.vault_mon_ns, "BookMinSideLevels", { label = "Emptiest side", stat = "Minimum", color = "#d62728" }],
             ]
             annotations = { horizontal = [{ label = "one-sided", value = 1 }] }
@@ -1119,9 +1688,44 @@ resource "aws_cloudwatch_dashboard" "vault" {
         },
         {
           type   = "metric"
-          x      = 12
-          y      = 28
-          width  = 12
+          x      = 0
+          y      = 76
+          width  = 8
+          height = 6
+          properties = {
+            title  = "Top-of-book spread (bps)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [{ expression = "REMOVE_EMPTY(SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BookSpreadBps\"', 'Maximum', 300))", id = "spread", label = "$${PROP('Dim.Market')}" }],
+            ]
+            yAxis = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 8
+          y      = 76
+          width  = 8
+          height = 6
+          properties = {
+            title  = "Book mid drift from mark (bps)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [{ expression = "REMOVE_EMPTY(SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BookMidDriftBps\"', 'Maximum', 300))", id = "drift", label = "$${PROP('Dim.Market')}" }],
+            ]
+            annotations = { horizontal = [{ label = "stale", value = var.vault_monitoring.book_drift_warn_bps }] }
+            yAxis       = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 16
+          y      = 76
+          width  = 8
           height = 6
           properties = {
             title  = "Market-maker position notional (USDC)"
@@ -1129,7 +1733,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
             period = 300
             view   = "timeSeries"
             metrics = [
-              [{ expression = "SEARCH('{${local.vault_mon_ns},Market} MetricName=\"MmPositionNotional\"', 'Maximum', 300)", id = "pos", label = "" }],
+              [{ expression = "REMOVE_EMPTY(SEARCH('{${local.vault_mon_ns},Market} MetricName=\"MmPositionNotional\"', 'Maximum', 300))", id = "pos", label = "$${PROP('Dim.Market')}" }],
             ]
             annotations = {
               horizontal = [
@@ -1143,7 +1747,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
         {
           type   = "metric"
           x      = 0
-          y      = 34
+          y      = 82
           width  = 8
           height = 6
           properties = {
@@ -1161,7 +1765,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
         {
           type   = "metric"
           x      = 8
-          y      = 34
+          y      = 82
           width  = 8
           height = 6
           properties = {
@@ -1179,7 +1783,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
         {
           type   = "metric"
           x      = 16
-          y      = 34
+          y      = 82
           width  = 8
           height = 6
           properties = {
@@ -1195,63 +1799,90 @@ resource "aws_cloudwatch_dashboard" "vault" {
           }
         },
         {
-          type   = "metric"
-          x      = 0
-          y      = 40
-          width  = 12
-          height = 6
-          properties = {
-            title  = "Top-of-book spread (bps)"
-            region = var.default_region
-            period = 300
-            view   = "timeSeries"
-            metrics = [
-              [{ expression = "SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BookSpreadBps\"', 'Maximum', 300)", id = "spread", label = "" }],
-            ]
-            yAxis = { left = { min = 0 } }
-          }
+          type       = "text"
+          x          = 0
+          y          = 100
+          width      = 24
+          height     = 2
+          properties = { markdown = "## Indexers\n- Goldsky subgraphs: blocks behind the chain head and indexing-error flags. The UI reads positions and orders from futures and derivatives; the market maker backfills volatility from the oracle subgraph." }
         },
         {
           type   = "metric"
-          x      = 12
-          y      = 40
+          x      = 0
+          y      = 102
           width  = 12
           height = 6
           properties = {
-            title  = "Book mid drift from mark (bps)"
+            title  = "Subgraph blocks behind the chain head"
             region = var.default_region
             period = 300
             view   = "timeSeries"
             metrics = [
-              [{ expression = "SEARCH('{${local.vault_mon_ns},Market} MetricName=\"BookMidDriftBps\"', 'Maximum', 300)", id = "drift", label = "" }],
+              [{ expression = "SEARCH('{${local.vault_mon_ns},Subgraph} MetricName=\"SubgraphBlocksBehind\"', 'Maximum', 300)", id = "behind", label = "" }],
             ]
-            annotations = { horizontal = [{ label = "stale", value = var.vault_monitoring.book_drift_warn_bps }] }
+            annotations = { horizontal = [{ label = "behind", value = var.vault_monitoring.max_subgraph_age_minutes * 30 }] }
             yAxis       = { left = { min = 0 } }
           }
         },
         {
           type   = "metric"
-          x      = 0
-          y      = 16
-          width  = 8
+          x      = 12
+          y      = 102
+          width  = 12
           height = 6
           properties = {
-            title  = "Oracle data age (minutes)"
+            title  = "Subgraph indexing errors and vault data age"
             region = var.default_region
             period = 300
             view   = "timeSeries"
             metrics = [
-              [var.vault_monitoring.oracle_metric_namespace, "oracle_data_age_minutes", "Environment", local.vault_mon_env, { label = "Hashprice age" }],
+              [local.vault_mon_ns, "SubgraphIndexingErrors", { label = "vault", stat = "Maximum" }],
+              [{ expression = "SEARCH('{${local.vault_mon_ns},Subgraph} MetricName=\"SubgraphIndexingErrors\"', 'Maximum', 300)", id = "errors", label = "" }],
+              [local.vault_mon_ns, "SubgraphDataAgeSeconds", { label = "Vault data age (s)", stat = "Maximum", yAxis = "right" }],
             ]
+            yAxis = { left = { min = 0 } }
+          }
+        },
+        {
+          type       = "text"
+          x          = 0
+          y          = 108
+          width      = 24
+          height     = 2
+          properties = { markdown = "## Monitoring\n- Everything here is 0 while the monitor is healthy. *Run failed or missing* at 1 means the last 5 minutes have no fresh data, so every chart above is stale; the other lines say which reads failed." }
+        },
+        {
+          type   = "metric"
+          x      = 0
+          y      = 110
+          width  = 24
+          height = 6
+          properties = {
+            title  = "Monitor failures (0 = healthy)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [{ expression = "1 - FILL(ok, 0)", id = "runfail", label = "Run failed or missing", color = "#d62728" }],
+              [{ expression = "1 - market", id = "marketfail", label = "Market check failed" }],
+              [{ expression = "1 - health", id = "healthfail", label = "MM /health failed" }],
+              [local.vault_mon_ns, "CheckSuccess", { id = "ok", stat = "Minimum", visible = false }],
+              [local.vault_mon_ns, "MarketCheckSuccess", { id = "market", stat = "Minimum", visible = false }],
+              [local.vault_mon_ns, "MmHealthCheckSuccess", { id = "health", stat = "Minimum", visible = false }],
+              [local.vault_mon_ns, "PartialCheckFailures", { label = "Failed partial checks", stat = "Maximum", color = "#d62728" }],
+              ["AWS/Lambda", "Errors", "FunctionName", local.vault_mon_name, { label = "Lambda errors", stat = "Sum" }],
+              ["AWS/Lambda", "Throttles", "FunctionName", local.vault_mon_name, { label = "Lambda throttles", stat = "Sum" }],
+            ]
+            yAxis = { left = { min = 0 } }
           }
         },
       ],
-      var.keeper_service.create ? [
+      [for widget in [
         {
           type   = "metric"
-          x      = 8
-          y      = 16
-          width  = 16
+          x      = 0
+          y      = 48
+          width  = 8
           height = 6
           properties = {
             title  = "Keeper"
@@ -1265,13 +1896,103 @@ resource "aws_cloudwatch_dashboard" "vault" {
             ]
           }
         },
-      ] : [],
+        {
+          type   = "log"
+          x      = 0
+          y      = 60
+          width  = 24
+          height = 6
+          properties = {
+            title  = "Keeper recent errors and warnings"
+            region = var.default_region
+            view   = "table"
+            query  = "SOURCE '${one(aws_cloudwatch_log_group.keeper_use1[*].name)}' | fields @timestamp, msg, coalesce(err.message, message, '') as detail | filter level >= 40 | sort @timestamp desc | limit 50"
+          }
+        },
+      ] : widget if var.keeper_service.create],
+      # The market maker (one portfolio app quoting futures and perps), from its log metric filters.
       [for widget in [
         {
           type   = "metric"
           x      = 0
-          y      = 46
-          width  = 12
+          y      = 88
+          width  = 8
+          height = 6
+          properties = {
+            title  = "Market-maker loop (5m)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.futures_mm_metric_ns, "TickCount", { label = "Ticks", stat = "Sum", color = "#2ca02c" }],
+              [local.futures_mm_metric_ns, "TickErrorCount", { label = "Tick errors", stat = "Sum", color = "#d62728" }],
+              [local.futures_mm_metric_ns, "HaltCount", { label = "HALTs", stat = "Sum", color = "#8c564b" }],
+              [local.futures_mm_metric_ns, "ErrorCount", { label = "Errors", stat = "Sum", color = "#ff7f0e" }],
+            ]
+            yAxis = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 8
+          y      = 88
+          width  = 8
+          height = 6
+          properties = {
+            title  = "Market-maker execution (5m)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.futures_mm_metric_ns, "MulticallExecuted", { label = "Multicalls executed", stat = "Sum", color = "#2ca02c" }],
+              [local.futures_mm_metric_ns, "MulticallFailed", { label = "Multicalls failed", stat = "Sum", color = "#d62728" }],
+              [local.futures_mm_metric_ns, "OrderMatched", { label = "Fills", stat = "Sum", color = "#1f77b4" }],
+              [local.futures_mm_metric_ns, "CancelAllTriggered", { label = "Cancel all", stat = "Sum", color = "#ff7f0e" }],
+              [local.futures_mm_metric_ns, "CancelAllFailed", { label = "Cancel all failed", stat = "Sum", color = "#9467bd" }],
+            ]
+            yAxis = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "metric"
+          x      = 16
+          y      = 88
+          width  = 8
+          height = 6
+          properties = {
+            title  = "Market-maker warnings and failures (5m)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.futures_mm_metric_ns, "WarnCount", { label = "Warnings", stat = "Sum", color = "#ff7f0e" }],
+              [local.futures_mm_metric_ns, "GasThrottleCount", { label = "Gas throttle", stat = "Sum", color = "#9467bd" }],
+              [local.futures_mm_metric_ns, "PriceFeedFailed", { label = "Price feed failed", stat = "Sum", color = "#d62728" }],
+              [local.futures_mm_metric_ns, "InitRetryCount", { label = "Init retries", stat = "Sum", color = "#8c564b" }],
+            ]
+            yAxis = { left = { min = 0 } }
+          }
+        },
+        {
+          type   = "log"
+          x      = 0
+          y      = 94
+          width  = 24
+          height = 6
+          properties = {
+            title  = "Market-maker recent errors and warnings"
+            region = var.default_region
+            view   = "table"
+            query  = "SOURCE '${one(aws_cloudwatch_log_group.futures_mm_use1[*].name)}' | fields @timestamp, msg, component, coalesce(err.message, message, '') as detail | filter level >= 40 | sort @timestamp desc | limit 50"
+          }
+        },
+      ] : widget if var.futures_mm_service.create],
+      [for widget in [
+        {
+          type   = "metric"
+          x      = 0
+          y      = 70
+          width  = 8
           height = 6
           properties = {
             title  = "Market-maker state (/health)"
@@ -1284,15 +2005,16 @@ resource "aws_cloudwatch_dashboard" "vault" {
               [local.vault_mon_ns, "MmThrottled", { label = "Gas throttled", stat = "Maximum" }],
               [local.vault_mon_ns, "MmPausedNew", { label = "Placements paused", stat = "Maximum" }],
               [local.vault_mon_ns, "MmMarketCount", { label = "Markets", stat = "Minimum" }],
+              [local.vault_mon_ns, "MmTickAgeSeconds", { label = "Tick age (s)", stat = "Maximum", yAxis = "right" }],
             ]
             yAxis = { left = { min = 0 } }
           }
         },
         {
           type   = "metric"
-          x      = 12
-          y      = 46
-          width  = 12
+          x      = 16
+          y      = 70
+          width  = 8
           height = 6
           properties = {
             title  = "Market-maker own orders by market"
@@ -1300,7 +2022,8 @@ resource "aws_cloudwatch_dashboard" "vault" {
             period = 300
             view   = "timeSeries"
             metrics = [
-              [{ expression = "SEARCH('{${local.vault_mon_ns},Market} MetricName=\"MmOwnOrders\"', 'Minimum', 300)", id = "orders", label = "" }],
+              [{ expression = "REMOVE_EMPTY(SEARCH('{${local.vault_mon_ns},Market} MetricName=\"MmOwnOrders\"', 'Minimum', 300))", id = "orders", label = "$${PROP('Dim.Market')}" }],
+              [local.vault_mon_ns, "MmMinOwnOrders", { label = "Fewest", stat = "Minimum", color = "#d62728" }],
             ]
             yAxis = { left = { min = 0 } }
           }

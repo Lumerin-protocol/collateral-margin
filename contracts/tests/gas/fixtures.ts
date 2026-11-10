@@ -1,6 +1,7 @@
 import type { NetworkConnection } from "hardhat/types/network";
 import { maxUint256 } from "viem";
 import {
+  DEFAULT_MARKET_PRICE,
   deployCollateralVaultProxy,
   deployPortfolioMarginEngineStack,
 } from "../fixtures.js";
@@ -28,6 +29,9 @@ export async function deployCollateralGasFixture(conn: NetworkConnection) {
   const [owner, alice, bob, venue, carol] = await conn.viem.getWalletClients();
   const { usdc, vault } = await deployCollateralVaultProxy(conn);
   const stack = await deployPortfolioMarginEngineStack(conn, vault.address);
+  // Perps reports exposure at its mark, as the venues do; the futures mock has no exposure view
+  // and is priced at the index through `getRiskView`.
+  await stack.perpsMock.write.setMarkPrice([DEFAULT_MARKET_PRICE]);
 
   await vault.write.setMarginEngine([stack.pme.address], {
     account: owner.account,

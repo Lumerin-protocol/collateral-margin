@@ -63,6 +63,7 @@ export interface OracleTrackerConfig {
  * often we poll; asking the source for that many is the whole sizing rule.
  */
 export class OracleTracker {
+  /** The instrument's mark (`getMarkPrice`, else the index): what quotes center on. */
   currentPrice = 0n;
   /**
    * Realized per-second volatility (Fraction). Units: dimensionless × s^-1/2.
@@ -161,16 +162,19 @@ export class OracleTracker {
   }
 
   async update(): Promise<void> {
-    const price = await this.instrument.getIndexPrice();
+    // Volatility from the index, which the history backfills; quotes center on the mark.
+    const index = await this.instrument.getIndexPrice();
+    const price = this.instrument.getMarkPrice ? await this.instrument.getMarkPrice() : index;
     this.currentPrice = price;
-    if (price > 0n && price !== this.lastSampledPrice) {
-      this.priceWindow.push(price, this.nowSec());
-      this.lastSampledPrice = price;
+    if (index > 0n && index !== this.lastSampledPrice) {
+      this.priceWindow.push(index, this.nowSec());
+      this.lastSampledPrice = index;
       this.volatilityPerSecond = this.priceWindow.volatilityPerSecond();
     }
     this.logger.debug(
       {
         price: price.toString(),
+        index: index.toString(),
         volatilityPerSec: fractionToNumber(this.volatilityPerSecond),
         windowFill: this.priceWindow.length,
       },

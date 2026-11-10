@@ -76,10 +76,7 @@ export class BalanceMonitor {
         "keeper signer gas balance CRITICAL — top up now or settlements/liquidations will start reverting with insufficient funds",
       );
     } else if (balance < this.config.runtime.balanceLowWei) {
-      this.logger.warn(
-        ctx,
-        "keeper signer gas balance low — top up soon",
-      );
+      this.logger.warn(ctx, "keeper signer gas balance low — top up soon");
     } else {
       this.logger.info(ctx, "keeper signer gas balance OK");
     }

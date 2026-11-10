@@ -7,7 +7,7 @@ name: Deploy Collateral Margin Keeper
 # internal ALB, Route53 keeper.{env}.hashpower.exchange, and log group.
 # This workflow builds the image, pushes to GHCR, and registers task-def
 # revisions with the public runtime config from config/<env>.env.
-# LIQUIDATOR_PRIVATE_KEY, ALCHEMY_API_KEY, and WEBHOOK_SECRET are injected
+# LIQUIDATOR_PRIVATE_KEY and ALCHEMY_API_KEY are injected
 # by ECS from Secrets Manager (valueFrom). This workflow only resolves the
 # secret ARN.
 #
@@ -21,7 +21,7 @@ name: Deploy Collateral Margin Keeper
 #                                     orchestration, not container config
 #
 # GitHub Secrets (per environment): none for the keeper process.
-#   Alchemy, the liquidator key, and WEBHOOK_SECRET live in Secrets Manager
+#   Alchemy and the liquidator key live in Secrets Manager
 #   (`col-mar-keeper-secrets-v3-<dev|lmn>`), seeded from secret.auto.tfvars.
 #
 # Repository secrets (all environments):
@@ -270,7 +270,7 @@ jobs:
           ENV_SUFFIX: ${{ needs.build.outputs.env_suffix }}
 
           # Public config comes from config/<env>.env. Computed values only
-          # here. Signer, Alchemy, and webhook come from Secrets Manager.
+          # here. Signer and Alchemy come from Secrets Manager.
           KEEPER_VERSION: ${{ needs.build.outputs.version }}
           KEEPER_DESIRED_COUNT: ${{ vars.KEEPER_DESIRED_COUNT }}
         run: |
@@ -329,8 +329,7 @@ jobs:
             .containerDefinitions[0].environment = $env[0] |
             .containerDefinitions[0].secrets = [
               {"name":"LIQUIDATOR_PRIVATE_KEY","valueFrom":($arn + ":liquidator_private_key::")},
-              {"name":"ALCHEMY_API_KEY","valueFrom":($arn + ":alchemy_api_key::")},
-              {"name":"WEBHOOK_SECRET","valueFrom":($arn + ":webhook_secret::")}
+              {"name":"ALCHEMY_API_KEY","valueFrom":($arn + ":alchemy_api_key::")}
             ] |
             del(.containerDefinitions[0].command, .containerDefinitions[0].entryPoint)
           ' new-task-def.json > final-task-def.json

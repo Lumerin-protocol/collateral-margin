@@ -65,6 +65,11 @@ function makeChain(state: StubState): Chain {
         if (functionName === "getExpirationDates") return state.activeExpiries;
         if (functionName === "expirationIntervalDays") return 1;
         if (functionName === "futureExpirationDatesCount") return 2;
+        // N28: the venue reports the date that matured last; here one interval before the window.
+        if (functionName === "deliverySchedule") {
+          const first = [...state.activeExpiries].sort((a, b) => (a < b ? -1 : 1))[0];
+          return [0n, 0n, first === undefined ? 0n : first - 86_400n];
+        }
         if (functionName === "getActiveExpirationDates") return [];
         if (functionName === "getUserPosition") {
           const user = getAddress(args?.[0] as Address);
@@ -217,9 +222,7 @@ describe("FuturesExpiryIndex", () => {
     await index.refresh();
 
     assert.equal(
-      index
-        .positionEntries()
-        .some((entry) => entry.expirationAt === PREVIOUS),
+      index.positionEntries().some((entry) => entry.expirationAt === PREVIOUS),
       true,
     );
     index.stop();
@@ -227,7 +230,11 @@ describe("FuturesExpiryIndex", () => {
 
   it("tracks the backstop's positions for settlement but never as a participant", async () => {
     const state: StubState = { activeExpiries: [ACTIVE_A], watchers: {} };
-    const index = new FuturesExpiryIndex(makeChain(state), makeConfig(), silentLogger);
+    const index = new FuturesExpiryIndex(
+      makeChain(state),
+      makeConfig(),
+      silentLogger,
+    );
     await index.start();
     const added: Address[] = [];
     index.onAdded((user) => added.push(user));
@@ -245,7 +252,11 @@ describe("FuturesExpiryIndex", () => {
       },
     ]);
 
-    assert.equal(index.has(BACKSTOP_ADDR), false, "not a liquidation candidate");
+    assert.equal(
+      index.has(BACKSTOP_ADDR),
+      false,
+      "not a liquidation candidate",
+    );
     assert.equal(added.includes(BACKSTOP_ADDR), false);
     assert.ok(
       index
@@ -261,18 +272,24 @@ describe("FuturesExpiryIndex", () => {
     const chain = makeChain(state);
     const reads: Address[] = [];
     const inner = chain.publicClient.readContract;
-    chain.publicClient.readContract = (async (call: { functionName: string; args?: readonly unknown[] }) => {
+    chain.publicClient.readContract = (async (call: {
+      functionName: string;
+      args?: readonly unknown[];
+    }) => {
       if (call.functionName === "getUserPosition") {
         const user = getAddress(call.args?.[0] as Address);
         reads.push(user);
-        if (user === BACKSTOP_ADDR) return { netQuantity: -5n, netEntryValue: 1n };
+        if (user === BACKSTOP_ADDR)
+          return { netQuantity: -5n, netEntryValue: 1n };
       }
       return inner(call as never);
     }) as typeof inner;
     const index = new FuturesExpiryIndex(chain, makeConfig(), silentLogger);
     await index.start();
 
-    state.watchers.PositionLiquidated?.([{ args: { user: USER_A, expirationAt: ACTIVE_A } }]);
+    state.watchers.PositionLiquidated?.([
+      { args: { user: USER_A, expirationAt: ACTIVE_A } },
+    ]);
     await new Promise((r) => setImmediate(r));
 
     assert.ok(reads.includes(BACKSTOP_ADDR), "backstop position reconciled");

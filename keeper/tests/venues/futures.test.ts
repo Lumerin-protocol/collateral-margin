@@ -1,7 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { Address, Hex } from "viem";
-import { FuturesVenue, expirationAtMarketId } from "../../src/venues/futures.ts";
+import {
+  FuturesVenue,
+  expirationAtMarketId,
+} from "../../src/venues/futures.ts";
 import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
 
@@ -68,7 +71,11 @@ function makeReadHandler(
 
 describe("futures venue: marketLabel", () => {
   it("renders expirationAt as an ISO date prefix", () => {
-    const venue = new FuturesVenue(makeChainStub({}), makeConfigStub(), silentLogger);
+    const venue = new FuturesVenue(
+      makeChainStub({}),
+      makeConfigStub(),
+      silentLogger,
+    );
     const id = expirationAtMarketId(DELIVERY_AT);
     assert.equal(venue.marketLabel(id), "futures 2025-08-28");
   });
@@ -91,7 +98,7 @@ describe("futures venue: readOpenOrders", () => {
   });
 
   it("hydrates each order's expirationAt as its marketId", async () => {
-    const orderIds: Hex[] = [
+    const orderIds: [Hex, Hex] = [
       "0x000000000000000000000000000000000000000000000000000000000000000a",
       "0x000000000000000000000000000000000000000000000000000000000000000b",
     ];
@@ -100,22 +107,33 @@ describe("futures venue: readOpenOrders", () => {
     const chain = makeChainStub({
       readContract: makeReadHandler(100n, [], {
         orderIdsByExpiry: {
-          [DELIVERY_AT.toString()]: [orderIds[0]!],
-          [expiryB.toString()]: [orderIds[1]!],
+          [DELIVERY_AT.toString()]: [orderIds[0]],
+          [expiryB.toString()]: [orderIds[1]],
         },
       }),
       multicall: (calls) => {
         multicallStep++;
         if (multicallStep === 1) {
           assert.equal(calls.length, 2);
-          for (const c of calls) assert.equal(c.functionName, "getUserOrdersAtExpiration");
-          return [[orderIds[0]!], [orderIds[1]!]];
+          for (const c of calls)
+            assert.equal(c.functionName, "getUserOrdersAtExpiration");
+          return [[orderIds[0]], [orderIds[1]]];
         }
         assert.equal(calls.length, 2);
         for (const c of calls) assert.equal(c.functionName, "getOrder");
         return [
-          { participant: BUYER, expirationAt: DELIVERY_AT, price: 50n, quantity: 1n },
-          { participant: BUYER, expirationAt: expiryB, price: 60n, quantity: -1n },
+          {
+            participant: BUYER,
+            expirationAt: DELIVERY_AT,
+            price: 50n,
+            quantity: 1n,
+          },
+          {
+            participant: BUYER,
+            expirationAt: expiryB,
+            price: 60n,
+            quantity: -1n,
+          },
         ];
       },
     });
@@ -146,6 +164,9 @@ describe("futures venue: readPositions", () => {
       readContract: makeReadHandler(marketPrice, [DELIVERY_AT]),
       multicall: (calls) => {
         assert.equal(calls.length, 1);
+        // Every expiry marks at the index here.
+        if (calls[0]?.functionName === "getMarkRange")
+          return [[marketPrice, marketPrice]];
         assert.equal(calls[0]?.functionName, "getUserPosition");
         return [{ netQuantity: 1n, netEntryValue: entry }];
       },
@@ -163,7 +184,10 @@ describe("futures venue: readPositions", () => {
     const marketPrice = 130n;
     const chain = makeChainStub({
       readContract: makeReadHandler(marketPrice, [DELIVERY_AT]),
-      multicall: () => [{ netQuantity: -1n, netEntryValue: -entry }],
+      multicall: (calls) =>
+        calls[0]?.functionName === "getMarkRange"
+          ? [[marketPrice, marketPrice]]
+          : [{ netQuantity: -1n, netEntryValue: -entry }],
     });
     const venue = new FuturesVenue(chain, makeConfigStub(), silentLogger);
     const [pos] = await venue.readPositions(BUYER);

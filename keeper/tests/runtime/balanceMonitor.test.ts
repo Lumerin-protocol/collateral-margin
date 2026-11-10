@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import pino from "pino";
+import type pino from "pino";
 import type { Address } from "viem";
 import { BalanceMonitor } from "../../src/runtime/balanceMonitor.ts";
 import type { Chain } from "../../src/chain.ts";
@@ -17,12 +17,15 @@ interface LogCall {
 function makeRecordingLogger(): { logger: pino.Logger; calls: LogCall[] } {
   const calls: LogCall[] = [];
   const record =
-    (level: LogCall["level"]) =>
-    (ctxOrMsg: unknown, msg?: string) => {
+    (level: LogCall["level"]) => (ctxOrMsg: unknown, msg?: string) => {
       if (typeof ctxOrMsg === "string") {
         calls.push({ level, msg: ctxOrMsg, ctx: {} });
       } else {
-        calls.push({ level, msg: msg ?? "", ctx: ctxOrMsg as Record<string, unknown> });
+        calls.push({
+          level,
+          msg: msg ?? "",
+          ctx: ctxOrMsg as Record<string, unknown>,
+        });
       }
     };
   const logger = {
@@ -141,7 +144,11 @@ describe("BalanceMonitor", () => {
     await monitor.start();
     await monitor.start(); // second start is a no-op, must NOT trigger another check
     monitor.stop();
-    assert.equal(getBalanceCount, 1, "exactly one check on boot, second start is a no-op");
+    assert.equal(
+      getBalanceCount,
+      1,
+      "exactly one check on boot, second start is a no-op",
+    );
     assert.equal(calls.length, 1);
   });
 

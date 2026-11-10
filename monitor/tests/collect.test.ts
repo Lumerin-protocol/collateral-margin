@@ -5,6 +5,7 @@
  */
 import assert from "node:assert/strict";
 import { before, describe, it } from "node:test";
+import { CloudWatchClient } from "@aws-sdk/client-cloudwatch";
 import {
   decodeFunctionData,
   encodeFunctionResult,
@@ -18,6 +19,9 @@ import {
 process.env.CW_NAMESPACE = "Test";
 process.env.VAULT_SUBGRAPH_URL = "https://vault.test/gql";
 process.env.POINTS_SUBGRAPH_URL = "https://points.test/gql";
+process.env.FUTURES_SUBGRAPH_URL = "https://futures.test/gql";
+process.env.DERIVATIVES_SUBGRAPH_URL = "https://derivatives.test/gql";
+process.env.HASHPRICE_ORACLE_SUBGRAPH_URL = "https://oracles.test/gql";
 process.env.ETH_RPC_URL = "https://rpc.test/v2/key";
 process.env.VAULT_ADDRESS = "0x0000000000000000000000000000000000000001";
 process.env.FUTURES_ADDRESS = "0x0000000000000000000000000000000000000002";
@@ -25,6 +29,7 @@ process.env.PERPS_ADDRESS = "0x0000000000000000000000000000000000000003";
 process.env.MM_ADDRESS = "0x0000000000000000000000000000000000000004";
 process.env.MM_FUTURES_MARKETS = "3";
 process.env.MM_HEALTH_URL = "https://mm.test/health/raw";
+process.env.BITCOIN_RPC_URL = "https://btc.test/v2/key";
 
 const venueAbi = parseAbi([
   "struct RiskView { int256 netPositionDelta; int256 unrealizedPnl; int256 pendingFunding; uint256 buyOrderDelta; uint256 sellOrderDelta; uint256 buyOrderFillLoss; uint256 sellOrderFillLoss; }",
@@ -36,7 +41,12 @@ const venueAbi = parseAbi([
   "function getOrderBookPrices(uint256 maxLevels) view returns (uint256[] bids, uint256[] asks)",
   "function getOrderBookPrices(uint256 expirationAt, uint256 maxLevels) view returns (uint256[] bids, uint256[] asks)",
   "function getMarketPrice() view returns (uint256)",
+  "function getMarkRange(uint256 expirationAt) view returns (uint256 low, uint256 high)",
   "function getExpirationDates() view returns (uint256[])",
+  "function liquidationFeeBps() view returns (uint16)",
+  "function liquidatorShareBps() view returns (uint16)",
+  "function deliverySchedule() view returns (uint256 currentSlot, uint256 pinnedCount, uint256 previousExpiry)",
+  "function futureExpirationDatesCount() view returns (uint8)",
 ]);
 const mmAbi = parseAbi([
   "function balanceOf(address user) view returns (uint256)",
@@ -44,8 +54,20 @@ const mmAbi = parseAbi([
   "function getEthBalance(address addr) view returns (uint256)",
 ]);
 const MARGIN_ENGINE = "0x0000000000000000000000000000000000000009";
+/** Perps' price oracle on the CF-321 venue: the halving glide. */
+const GLIDE_FEED = "0x00000000000000000000000000000000000000a7";
+const glideAbi = parseAbi([
+  "function glideProgress() view returns (uint256)",
+  "function halvingStep() view returns (uint256)",
+]);
+/** Listed futures expiries (12:00 UTC): 2026-11-25, 2026-12-25, 2027-01-24, 2027-02-23. */
+const [EXP1, EXP2, EXP3, EXP4] = [1_795_608_000n, 1_798_200_000n, 1_800_792_000n, 1_803_384_000n];
 let failMarketMaker = false;
+/** CF-321: an expiry settling after the halving, marked and quoted at about half the index. */
+let postHalvingExpiry: bigint | undefined;
 let failHealth = false;
+/** The Base RPC answers 503, as Alchemy does when it sheds load. */
+let failRpc = false;
 
 const healthResponse = () => ({
   status: "running",
@@ -53,9 +75,9 @@ const healthResponse = () => ({
   risk: { throttled: false, pauseNew: true },
   markets: [
     { id: "perps", breaker: "active", ownOrders: 20 },
-    { id: "futures:100", breaker: "quarantined", ownOrders: 0 },
-    { id: "futures:200", breaker: "degraded", ownOrders: 7 },
-    { id: "futures:300", breaker: "active", ownOrders: 12 },
+    { id: `futures:${EXP1}`, breaker: "quarantined", ownOrders: 0 },
+    { id: `futures:${EXP2}`, breaker: "degraded", ownOrders: 7 },
+    { id: `futures:${EXP3}`, breaker: "active", ownOrders: 12 },
   ],
   stats: { lastTickAt: Date.now() - 30_000 },
 });
@@ -113,6 +135,74 @@ const riskView = (unrealizedPnl: bigint, pendingFunding: bigint) => ({
   sellOrderFillLoss: 0n,
 });
 
+/** Bitcoin tip 4,000 blocks before the 1,050,000 halving, 9.5-minute blocks over the last 2,016. */
+const BTC_TIP = 1_046_000;
+const BTC_TIP_TIME = 1_900_000_000;
+const BTC_BLOCK_SECONDS = 570;
+
+/**
+ * Price feeds, answered per block: the subgraph block now, block 0 as the
+ * past (the 1 h and 24 h look-backs both clamp to it at this test height).
+ */
+const HASHPRICE_FEED = "0x00000000000000000000000000000000000000f1";
+const BTC_FEED = "0x00000000000000000000000000000000000000f2";
+/** The SPV oracle behind HashpriceUSD; its round id is the last relayed Bitcoin height. */
+const SPV_FEED = "0x00000000000000000000000000000000000000f3";
+/** Chainlink proxy round ids carry the aggregator phase in their top 16 bits. */
+const PHASE = 3n << 64n;
+const feedAbi = parseAbi([
+  "function priceOracle() view returns (address)",
+  "function btcUsdOracle() view returns (address)",
+  "function hashpriceOracle() view returns (address)",
+  "function decimals() view returns (uint8)",
+  "function latestRoundData() view returns (uint80, int256, uint256, uint256, uint80)",
+  "function mmSpotShock() view returns (uint256)",
+]);
+const FEEDS: Record<
+  string,
+  { now: bigint; past: bigint; ageSeconds: number; round: { now: bigint; past: bigint } }
+> = {
+  [HASHPRICE_FEED]: {
+    now: 3_300_000_000n,
+    past: 3_000_000_000n,
+    ageSeconds: 120,
+    round: { now: 1n, past: 1n },
+  },
+  [BTC_FEED]: {
+    now: 8_000_000_000_000n,
+    past: 7_600_000_000_000n,
+    ageSeconds: 60,
+    round: { now: PHASE + 18_005n, past: PHASE + 18_000n },
+  },
+  [SPV_FEED]: {
+    now: 41_250_000n,
+    past: 41_250_000n,
+    ageSeconds: 300,
+    round: { now: BigInt(BTC_TIP - 1), past: BigInt(BTC_TIP - 7) },
+  },
+};
+
+function feedCall(to: string, data: `0x${string}`, block: string): `0x${string}` {
+  const { functionName } = decodeFunctionData({ abi: feedAbi, data });
+  if (functionName === "btcUsdOracle")
+    return encodeFunctionResult({ abi: feedAbi, functionName, result: BTC_FEED });
+  if (functionName === "hashpriceOracle")
+    return encodeFunctionResult({ abi: feedAbi, functionName, result: SPV_FEED });
+  if (functionName === "decimals")
+    return encodeFunctionResult({ abi: feedAbi, functionName, result: 8 });
+  assert.equal(functionName, "latestRoundData");
+  const feed = FEEDS[to];
+  const latest = block === toHex(BLOCK);
+  const answer = latest ? feed.now : feed.past;
+  const round = latest ? feed.round.now : feed.round.past;
+  const updatedAt = BigInt(Math.floor(Date.now() / 1000) - feed.ageSeconds);
+  return encodeFunctionResult({
+    abi: feedAbi,
+    functionName,
+    result: [round, answer, updatedAt, updatedAt, round],
+  });
+}
+
 function ethCall(to: string, data: `0x${string}`): `0x${string}` {
   const address = to.toLowerCase();
   if (address === process.env.VAULT_ADDRESS) {
@@ -123,6 +213,21 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
       abi: mmAbi,
       functionName: "balanceOf",
       result: BigInt(u(1_800)),
+    });
+  }
+  if (address === MARGIN_ENGINE && data.startsWith(toFunctionSelector("function mmSpotShock()")))
+    return encodeFunctionResult({ abi: feedAbi, functionName: "mmSpotShock", result: 10n ** 17n });
+  if (address === process.env.FUTURES_ADDRESS && data.startsWith(toFunctionSelector("function priceOracle()")))
+    return encodeFunctionResult({ abi: feedAbi, functionName: "priceOracle", result: HASHPRICE_FEED });
+  if (address === process.env.PERPS_ADDRESS && data.startsWith(toFunctionSelector("function priceOracle()")))
+    return encodeFunctionResult({ abi: feedAbi, functionName: "priceOracle", result: GLIDE_FEED });
+  if (address === GLIDE_FEED) {
+    // 40% down the glide toward a 49.5% halving step.
+    const { functionName } = decodeFunctionData({ abi: glideAbi, data });
+    return encodeFunctionResult({
+      abi: glideAbi,
+      functionName,
+      result: functionName === "glideProgress" ? 4n * 10n ** 17n : 495n * 10n ** 15n,
     });
   }
   if (address === MARGIN_ENGINE)
@@ -165,10 +270,16 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
   switch (functionName) {
     case "getOrderBookPrices": {
       if (failMarketMaker) throw new Error("book read reverted");
-      // perps two-sided; futures 100 two-sided, 200 bids only, 300 two-sided.
+      // perps two-sided; futures EXP1 two-sided, EXP2 bids only, EXP3 two-sided.
       const expiry = isFutures ? args?.[0] : undefined;
+      if (expiry !== undefined && expiry === postHalvingExpiry)
+        return encodeFunctionResult({
+          abi: venueAbi,
+          functionName,
+          result: [[19_740_000n], [19_760_000n]],
+        });
       const bids = [39_500_000n, 39_490_000n];
-      const asks = expiry === 200n ? [] : [39_510_000n];
+      const asks = expiry === EXP2 ? [] : [39_510_000n];
       return encodeFunctionResult({
         abi: venueAbi,
         functionName,
@@ -181,11 +292,15 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
         functionName,
         result: 40_000_000n,
       });
+    case "getMarkRange": {
+      const mark = args?.[0] === postHalvingExpiry ? 19_750_000n : 40_000_000n;
+      return encodeFunctionResult({ abi: venueAbi, functionName, result: [mark, mark] });
+    }
     case "getExpirationDates":
       return encodeFunctionResult({
         abi: venueAbi,
         functionName,
-        result: [100n, 200n, 300n, 400n],
+        result: [EXP1, EXP2, EXP3, EXP4],
       });
     case "getRiskView":
       return encodeFunctionResult({
@@ -195,16 +310,34 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
           ? riskView(-15_000_000n, 0n)
           : riskView(4_000_000n, 1_000_000n),
       });
+    case "liquidationFeeBps":
+      // futures keeps 200 × 80% = 160 bps, perps 300 × 80% = 240 bps.
+      return encodeFunctionResult({
+        abi: venueAbi,
+        functionName,
+        result: isFutures ? 200 : 300,
+      });
+    case "liquidatorShareBps":
+      return encodeFunctionResult({
+        abi: venueAbi,
+        functionName,
+        result: 2_000,
+      });
+    // N28: the window [2, 5) is pinned up to slot 5 — one slot short, so one is unpinned.
+    case "deliverySchedule":
+      return encodeFunctionResult({ abi: venueAbi, functionName, result: [2n, 4n, EXP1 - 30n * 86_400n] });
+    case "futureExpirationDatesCount":
+      return encodeFunctionResult({ abi: venueAbi, functionName, result: 3 });
     case "getActiveExpirationDates":
       return encodeFunctionResult({
         abi: venueAbi,
         functionName,
-        result: [100n, 200n],
+        result: [EXP1, EXP2],
       });
     case "getUserPosition":
       if (isMm) {
-        // MM: perps +56 units; futures 100 → -9, 200 → flat, 300 → +25.
-        const byExpiry: Record<string, bigint> = { "100": -9n, "300": 25n };
+        // MM: perps +56 units; futures EXP1 → -9, EXP2 → flat, EXP3 → +25.
+        const byExpiry: Record<string, bigint> = { [String(EXP1)]: -9n, [String(EXP3)]: 25n };
         return encodeFunctionResult({
           abi: venueAbi,
           functionName,
@@ -216,12 +349,12 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
           },
         });
       }
-      // futures: expiry 100 → +2, expiry 200 → flat; perps → -7e6
+      // futures: expiry EXP1 → +2, expiry EXP2 → flat; perps → -7e6
       return encodeFunctionResult({
         abi: venueAbi,
         functionName,
         result: isFutures
-          ? { netQuantity: args?.[1] === 100n ? 2n : 0n, netEntryValue: 0n }
+          ? { netQuantity: args?.[1] === EXP1 ? 2n : 0n, netEntryValue: 0n }
           : { netQuantity: -7_000_000n, netEntryValue: 0n },
       });
     default:
@@ -248,6 +381,11 @@ function rpc(request: { id: number; method: string; params: unknown[] }) {
         { to: string; data: `0x${string}` },
         string,
       ];
+      // Price history is read at past blocks; every other read is pinned.
+      if (call.to.toLowerCase() in FEEDS) {
+        result = feedCall(call.to.toLowerCase(), call.data, block);
+        break;
+      }
       assert.equal(
         block,
         toHex(BLOCK),
@@ -273,8 +411,46 @@ function graphql(url: string) {
         },
       },
     };
+  const meta = (behindVault: number, hasIndexingErrors: boolean) => ({
+    data: {
+      _meta: { block: { number: String(BLOCK - behindVault) }, hasIndexingErrors },
+    },
+  });
+  if (url.startsWith("https://futures.test")) return meta(17, false);
+  if (url.startsWith("https://derivatives.test")) return meta(0, true);
+  if (url.startsWith("https://oracles.test")) return meta(-3, false);
   throw new Error(`unexpected url ${url}`);
 }
+
+/** The Bitcoin node's tip; a test sets it below BTC_TIP to model a stuck node. */
+let bitcoinNodeTip = BTC_TIP;
+
+function bitcoinRpc(request: { id: number; method: string; params: unknown[] }) {
+  const { id, method, params } = request;
+  let result: unknown;
+  if (method === "getblockcount") result = bitcoinNodeTip;
+  else if (method === "getblockhash") result = `hash-${params[0]}`;
+  else if (method === "getblockheader") {
+    const height = Number(String(params[0]).slice("hash-".length));
+    result = { height, time: BTC_TIP_TIME - (BTC_TIP - height) * BTC_BLOCK_SECONDS };
+  } else throw new Error(`unexpected bitcoin rpc ${method}`);
+  return { jsonrpc: "2.0", id, result, error: null };
+}
+
+/** Public explorers by host, each answering the tip in its own format. */
+const EXPLORERS: Record<string, (tip: number) => Response> = {
+  "mempool.space": (tip) => new Response(String(tip)),
+  "blockstream.info": (tip) => new Response(String(tip)),
+  "blockchain.info": (tip) => new Response(String(tip)),
+  "api.blockcypher.com": (tip) => Response.json({ name: "BTC.main", height: tip }),
+  "api.bitaps.com": (tip) => Response.json({ data: { height: tip } }),
+};
+let explorerTip = BTC_TIP;
+/** Per-host replacement answers (errors, hangs, bad heights); cleared after each test. */
+const explorerOverrides = new Map<
+  string,
+  (signal: AbortSignal | null | undefined) => Response | Promise<Response>
+>();
 
 const userAgents = new Set<string>();
 
@@ -283,11 +459,20 @@ globalThis.fetch = (async (
   init?: RequestInit,
 ) => {
   const url = String(input);
+  const host = new URL(url).hostname;
+  if (host in EXPLORERS) {
+    const override = explorerOverrides.get(host);
+    return override ? override(init?.signal) : EXPLORERS[host](explorerTip);
+  }
   if (url.startsWith("https://mm.test"))
     return failHealth
       ? new Response("busy", { status: 503 })
       : Response.json(healthResponse());
+  if (url.startsWith("https://btc.test"))
+    return Response.json(bitcoinRpc(JSON.parse(String(init?.body))));
   userAgents.add(new Headers(init?.headers).get("user-agent") ?? "");
+  if (failRpc && url.startsWith("https://rpc.test"))
+    return new Response("upstream busy", { status: 503 });
   const body = JSON.parse(String(init?.body));
   const payload = url.startsWith("https://rpc.test")
     ? Array.isArray(body)
@@ -328,10 +513,10 @@ describe("collect", () => {
   });
 
   it("batches contract reads into two multicalls per check", () => {
-    // backstop 5 + 2 legs; market maker 8 + 2 reads for each of 3 expiries
+    // backstop 13 + 2 reads for each of 2 legs; market maker 7 + 3 reads for each of 3 expiries
     assert.deepEqual(
       [...multicallSizes].sort((a, b) => a - b),
-      [2, 5, 6, 8],
+      [4, 7, 9, 13],
     );
   });
 
@@ -343,6 +528,10 @@ describe("collect", () => {
     assert.equal(value("Halted"), 0);
     assert.equal(value("MarginEngineUnset"), 0);
     assert.equal(value("CheckSuccess"), 1);
+  });
+
+  it("N28: counts tradable futures slots without a pinned delivery date", () => {
+    assert.equal(value("UnpinnedTradableSlots"), 1);
   });
 
   it("computes the backing gap at the subgraph block", () => {
@@ -361,14 +550,159 @@ describe("collect", () => {
     assert.equal(value("SubgraphIndexingErrors", "points"), 1);
   });
 
+  it("reports lag and indexing errors for the futures, derivatives and oracle subgraphs", () => {
+    // chain head is 3 blocks past the vault subgraph block
+    assert.equal(value("SubgraphBlocksBehind", "futures"), 20);
+    assert.equal(value("SubgraphIndexingErrors", "futures"), 0);
+    assert.equal(value("SubgraphBlocksBehind", "derivatives"), 3);
+    assert.equal(value("SubgraphIndexingErrors", "derivatives"), 1);
+    assert.equal(value("SubgraphBlocksBehind", "oracles"), 0);
+    assert.equal(value("SubgraphIndexingErrors", "oracles"), 0);
+  });
+
   it("derives backstop equity from balance, unrealized PnL and funding", () => {
     assert.equal(value("BackstopUnrealizedPnl"), -11); // -15 futures + 4 perps
     assert.equal(value("BackstopPendingFunding"), 1);
     assert.equal(value("BackstopEquity"), 40); // 50 - 11 + 1
     assert.equal(value("BackstopOpenLegs"), 2); // one futures expiry, one perps
     assert.equal(value("BackstopFuturesNetQuantity"), 2);
-    assert.equal(value("BackstopFuturesNetQuantity", "100"), 2);
+    assert.equal(value("BackstopFuturesNetQuantity", "fut-nov-25"), 2);
+    const leg = points.find((p) => p.MetricName === "BackstopFuturesNetQuantity" && p.Dimensions);
+    assert.equal(leg?.Dimensions?.[0]?.Name, "Market");
     assert.equal(value("BackstopPerpsNetQuantity"), -7_000_000);
+  });
+
+  it("reports backstop exposure at the mark in USDC", () => {
+    assert.equal(value("BackstopNotional", process.env.FUTURES_ADDRESS), 80); // 2 × $40
+    assert.equal(value("BackstopNotional", process.env.PERPS_ADDRESS), 280); // 7 × $40
+    assert.equal(value("BackstopNotional"), 360);
+  });
+
+  it("X3-R3A-2: flags an unwind band plus fee above the kept liquidation fee", () => {
+    assert.equal(
+      value("BackstopUnwindBudgetBps", process.env.FUTURES_ADDRESS),
+      160,
+    );
+    assert.equal(
+      value("BackstopUnwindBudgetBps", process.env.PERPS_ADDRESS),
+      240,
+    );
+    // band 200 + fee 25 against the tighter 160 bps budget
+    assert.equal(value("BackstopUnwindOverBudgetBps"), 65);
+  });
+
+  it("counts down to the next Bitcoin halving from the node's tip", () => {
+    assert.equal(value("BtcBlocksUntilHalving"), 4_000);
+    const days = value("BtcDaysUntilHalving") ?? 0;
+    assert.ok(Math.abs(days - (4_000 * BTC_BLOCK_SECONDS) / 86_400) < 1e-9, `days ${days}`);
+  });
+
+  it("reports hashprice and BTC prices, their moves, feed ages and the MM shock", () => {
+    assert.equal(value("HashpriceUsd"), 33);
+    assert.equal(value("BtcUsd"), 80_000);
+    assert.ok(Math.abs((value("HashpriceChange24hPct") ?? 0) - 10) < 1e-9);
+    assert.ok(Math.abs((value("HashpriceChange1hPct") ?? 0) - 10) < 1e-9);
+    assert.ok(Math.abs((value("BtcChange24hPct") ?? 0) - 400 / 76) < 1e-9);
+    assert.equal(value("MmSpotShockPct"), 10);
+    assert.ok(Math.abs((value("HashpriceFeedAgeSeconds") ?? 0) - 120) <= 5);
+    assert.ok(Math.abs((value("BtcUsdFeedAgeSeconds") ?? 0) - 60) <= 5);
+  });
+
+  it("reports the SPV relay delay and how often Chainlink BTC/USD updates", () => {
+    assert.equal(value("SpvBlocksBehind"), 1);
+    assert.ok(Math.abs((value("SpvFeedAgeSeconds") ?? 0) - 300) <= 5);
+    assert.equal(value("BtcUsdUpdates1h"), 5);
+  });
+
+  it("N18: measures the relay's lag against public explorers when the Bitcoin node is stuck", async () => {
+    // The keeper and this monitor share one Bitcoin provider. If its node stops at
+    // the relay's height, the relay looks current; the explorers have two more blocks.
+    const relayed = BTC_TIP - 1;
+    bitcoinNodeTip = relayed;
+    explorerTip = relayed + 2;
+    try {
+      const { collect } = await import("../src/index.ts");
+      const result = await collect();
+      const behind = result.points.find((p) => p.MetricName === "SpvBlocksBehind");
+      assert.equal(behind?.Value, 2);
+    } finally {
+      bitcoinNodeTip = BTC_TIP;
+      explorerTip = BTC_TIP;
+    }
+  });
+
+  it("outvotes one explorer reporting a wrong height", async () => {
+    explorerOverrides.set("api.blockcypher.com", () => Response.json({ height: BTC_TIP + 500 }));
+    explorerOverrides.set("blockchain.info", () => new Response("<html>busy</html>"));
+    try {
+      const { collect } = await import("../src/index.ts");
+      const result = await collect();
+      const behind = result.points.find((p) => p.MetricName === "SpvBlocksBehind");
+      assert.equal(behind?.Value, 1);
+      assert.doesNotMatch(result.summary, /failed=/);
+    } finally {
+      explorerOverrides.clear();
+    }
+  });
+
+  it("drops throttled, unresponsive and stalled explorers within the deadlines", async () => {
+    const hangUntilAborted = (signal: AbortSignal | null | undefined) =>
+      new Promise<Response>((_, reject) =>
+        signal?.addEventListener("abort", () => reject(signal.reason)),
+      );
+    // Headers arrive, then the body never finishes.
+    const stalledBody = (signal: AbortSignal | null | undefined) =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("97"));
+            signal?.addEventListener("abort", () => controller.error(signal.reason));
+          },
+        }),
+      );
+    explorerOverrides.set("api.bitaps.com", () => Response.json({ info: "ratelimit" }, { status: 429 }));
+    explorerOverrides.set("mempool.space", hangUntilAborted);
+    explorerOverrides.set("blockstream.info", stalledBody);
+    bitcoinNodeTip = BTC_TIP - 1;
+    explorerTip = BTC_TIP + 1;
+    const started = Date.now();
+    try {
+      const { collect } = await import("../src/index.ts");
+      const result = await collect();
+      const elapsed = Date.now() - started;
+      assert.ok(elapsed < 4_000, `took ${elapsed} ms`);
+      // node and two explorers left: BTC_TIP - 1, BTC_TIP + 1, BTC_TIP + 1
+      const behind = result.points.find((p) => p.MetricName === "SpvBlocksBehind");
+      assert.equal(behind?.Value, 2);
+    } finally {
+      explorerOverrides.clear();
+      bitcoinNodeTip = BTC_TIP;
+      explorerTip = BTC_TIP;
+    }
+  });
+
+  it("falls back to the Bitcoin node and reports it when every explorer fails", async () => {
+    for (const host of Object.keys(EXPLORERS))
+      explorerOverrides.set(host, () => new Response("down", { status: 503 }));
+    try {
+      const { collect } = await import("../src/index.ts");
+      const result = await collect();
+      const behind = result.points.find((p) => p.MetricName === "SpvBlocksBehind");
+      assert.equal(behind?.Value, 1);
+      assert.match(result.summary, /failed=bitcoin_explorers/);
+    } finally {
+      explorerOverrides.clear();
+    }
+  });
+
+  it("names markets perp and fut-<mon>-<dd> by the expiry's UTC date", () => {
+    const markets = new Set(
+      points
+        .filter((p) => p.MetricName === "BookBidLevels")
+        .map((p) => p.Dimensions?.[0]?.Value),
+    );
+    assert.deepEqual([...markets].sort(), ["fut-dec-25", "fut-jan-24", "fut-nov-25", "perp"]);
+    assert.equal(value("MmOwnOrders", "fut-jan-24"), 12);
   });
 
   it("tags per-venue bad debt with the venue address", () => {
@@ -380,19 +714,19 @@ describe("collect", () => {
   });
 
   it("counts book levels per market and flags the emptiest side", () => {
-    assert.equal(value("BookBidLevels", "perps"), 2);
-    assert.equal(value("BookAskLevels", "perps"), 1);
-    assert.equal(value("BookAskLevels", "futures-200"), 0);
+    assert.equal(value("BookBidLevels", "perp"), 2);
+    assert.equal(value("BookAskLevels", "perp"), 1);
+    assert.equal(value("BookAskLevels", "fut-dec-25"), 0);
     assert.equal(value("BookMinSideLevels"), 0);
     // only the nearest MM_FUTURES_MARKETS expiries are watched
-    assert.ok(!points.some((p) => p.Dimensions?.[0]?.Value === "futures-400"));
-    const spread = value("BookSpreadBps", "perps") ?? 0;
+    assert.ok(!points.some((p) => p.Dimensions?.[0]?.Value === "fut-feb-23"));
+    const spread = value("BookSpreadBps", "perp") ?? 0;
     assert.ok(Math.abs(spread - 2.53) < 0.01, `spread ${spread}`);
   });
 
   it("measures how far each book's mid sits from the mark", () => {
     // mid 39.505 against a $40 mark
-    const drift = value("BookMidDriftBps", "perps") ?? 0;
+    const drift = value("BookMidDriftBps", "perp") ?? 0;
     assert.ok(Math.abs(drift - 123.75) < 0.01, `drift ${drift}`);
     assert.ok(Math.abs((value("BookMaxMidDriftBps") ?? 0) - 123.75) < 0.01);
     // a one-sided book has no mid
@@ -400,9 +734,44 @@ describe("collect", () => {
       !points.some(
         (p) =>
           p.MetricName === "BookMidDriftBps" &&
-          p.Dimensions?.[0]?.Value === "futures-200",
+          p.Dimensions?.[0]?.Value === "fut-dec-25",
       ),
     );
+  });
+
+  it("CF-321: measures a post-halving date's mid against its own mark", async () => {
+    postHalvingExpiry = EXP3;
+    try {
+      const { collect } = await import("../src/index.ts");
+      const result = await collect();
+      // mid 19.75 against the date's 19.75 mark, not the 40 index
+      const drift = result.points.find(
+        (p) => p.MetricName === "BookMidDriftBps" && p.Dimensions?.[0]?.Value === "fut-jan-24",
+      )?.Value;
+      assert.ok(drift !== undefined && drift < 1, `drift ${drift}`);
+    } finally {
+      postHalvingExpiry = undefined;
+    }
+  });
+
+  it("CF-321: reports the glide and values each backstop leg at its own mark", async () => {
+    assert.equal(value("GlideProgressPct"), 40);
+    assert.equal(value("HalvingStepPct"), 49.5);
+    assert.equal(value("PerpsMarkDiscountPct"), 0);
+    postHalvingExpiry = EXP1;
+    try {
+      const { collect } = await import("../src/index.ts");
+      const result = await collect();
+      const notional = result.points.find(
+        (p) =>
+          p.MetricName === "BackstopNotional" &&
+          p.Dimensions?.[0]?.Value === process.env.FUTURES_ADDRESS,
+      )?.Value;
+      // the backstop's 2-contract long on a post-halving date, at its 19.75 low mark
+      assert.equal(notional, 39.5);
+    } finally {
+      postHalvingExpiry = undefined;
+    }
   });
 
   it("reports the market maker's own state from /health", () => {
@@ -415,14 +784,14 @@ describe("collect", () => {
     assert.equal(value("MmQuarantinedMarkets"), 1);
     assert.equal(value("MmMarketCount"), 4);
     assert.equal(value("MmMinOwnOrders"), 0);
-    assert.equal(value("MmOwnOrders", "perps"), 20);
-    assert.equal(value("MmOwnOrders", "futures-100"), 0);
+    assert.equal(value("MmOwnOrders", "perp"), 20);
+    assert.equal(value("MmOwnOrders", "fut-nov-25"), 0);
     assert.match(summary, /mm_status=running quarantined=1 min_own_orders=0/);
   });
 
   it("reports market-maker position notional in USDC", () => {
-    assert.equal(value("MmPositionNotional", "perps"), 2_240); // 56 × $40
-    assert.equal(value("MmPositionNotional", "futures-100"), 360); // 9 × $40
+    assert.equal(value("MmPositionNotional", "perp"), 2_240); // 56 × $40
+    assert.equal(value("MmPositionNotional", "fut-nov-25"), 360); // 9 × $40
     assert.equal(value("MmPerpsPositionNotional"), 2_240);
     assert.equal(value("MmFuturesMaxPositionNotional"), 1_000); // 25 × $40
   });
@@ -469,6 +838,47 @@ describe("collect", () => {
       assert.match(result.summary, /mm_health=failed/);
     } finally {
       failHealth = false;
+    }
+  });
+
+  it("counts best-effort reads that failed and names them in the summary", async () => {
+    assert.equal(value("PartialCheckFailures"), 0);
+    assert.doesNotMatch(summary, /failed=/);
+    failHealth = true;
+    failMarketMaker = true;
+    try {
+      const { collect } = await import("../src/index.ts");
+      const result = await collect();
+      const failures = result.points.find(
+        (p) => p.MetricName === "PartialCheckFailures",
+      );
+      assert.equal(failures?.Value, 2);
+      assert.match(result.summary, /failed=market_maker,mm_health/);
+    } finally {
+      failHealth = false;
+      failMarketMaker = false;
+    }
+  });
+});
+
+describe("handler", () => {
+  it("N13: keeps the RPC key out of the log and the response when the chain read fails", async (t) => {
+    const lines: string[] = [];
+    t.mock.method(console, "log", (line: string) => lines.push(line));
+    t.mock.method(CloudWatchClient.prototype, "send", async () => ({}));
+    failRpc = true;
+    try {
+      const { handler } = await import("../src/index.ts");
+      const response = await handler();
+      assert.equal(response.statusCode, 500);
+      const output = [...lines, response.body].join("\n");
+      assert.match(output, /check failed/);
+      assert.ok(
+        !output.includes(new URL(String(process.env.ETH_RPC_URL)).pathname),
+        `the RPC key leaked:\n${output}`,
+      );
+    } finally {
+      failRpc = false;
     }
   });
 });

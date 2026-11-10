@@ -152,6 +152,12 @@ export interface CollateralSnapshot {
 }
 
 /**
+ * How long a venue trusts its cached PME `imSpotShock`. It changes only on admin
+ * `setShocks`; re-reading this often picks that up without a restart.
+ */
+export const IM_SPOT_SHOCK_REFRESH_MS = 600_000;
+
+/**
  * Per-venue collateral + portfolio-margin facade used by core. Concrete
  * adapters implement this against {perps DEX, futures} + the shared
  * CollateralVault + PortfolioMarginEngine.
@@ -159,7 +165,7 @@ export interface CollateralSnapshot {
 export interface CollateralAccount {
   /** One-shot read of all collateral / margin signals. Multicalled on chain. */
   snapshot(): Promise<CollateralSnapshot>;
-  /** Cached spot price of the engine's IM shock factor (used for IM estimation). */
+  /** The engine's IM spot shock (used for IM estimation), cached for `IM_SPOT_SHOCK_REFRESH_MS`. */
   imSpotShock(): Promise<bigint>;
   /**
    * Deposit `amount` of the collateral token from the wallet into the vault.
@@ -335,6 +341,13 @@ export interface InstrumentAdapter {
   readonly ownOrders: OwnOrderSource;
 
   getIndexPrice(): Promise<bigint>;
+  /**
+   * The price the venue values this instrument at, on `getIndexPrice()`'s scale (no tick
+   * rounding): perps at its mark (the halving glide), a futures expiry at the middle of its
+   * mark range. Quotes center on it; volatility still comes from the index, of which it is
+   * a fixed multiple between halving events. Absent, the instrument marks at the index.
+   */
+  getMarkPrice?(): Promise<bigint>;
   /**
    * The aggregator behind `getIndexPrice()` and the fixed-point scale its
    * answers come back in. Lets consumers that mix in prices from elsewhere

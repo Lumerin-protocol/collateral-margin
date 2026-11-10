@@ -100,6 +100,14 @@ export class RawOracleReader {
     return { address: this.cache.oracle, decimals: this.cache.tokenDecimals };
   }
 
+  /** 10^(oracle decimals − token decimals): rebases any answer on this feed's scale. */
+  async divisor(): Promise<bigint> {
+    if (this.cache === null) {
+      this.cache = await this.resolve();
+    }
+    return this.cache.divisor;
+  }
+
   /**
    * The most recent price `read()` returned, or `null` before the first read.
    *

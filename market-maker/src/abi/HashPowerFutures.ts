@@ -27,6 +27,11 @@ export const HashPowerFuturesAbi = [
     "type": "error"
   },
   {
+    "inputs": [],
+    "name": "BackstopAccount",
+    "type": "error"
+  },
+  {
     "inputs": [
       {
         "internalType": "address",
@@ -129,6 +134,11 @@ export const HashPowerFuturesAbi = [
   },
   {
     "inputs": [],
+    "name": "NotHalted",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "NotInitializing",
     "type": "error"
   },
@@ -196,6 +206,11 @@ export const HashPowerFuturesAbi = [
   },
   {
     "inputs": [],
+    "name": "PositionMatured",
+    "type": "error"
+  },
+  {
+    "inputs": [],
     "name": "PositionNotExists",
     "type": "error"
   },
@@ -207,6 +222,11 @@ export const HashPowerFuturesAbi = [
   {
     "inputs": [],
     "name": "TimeInForceNotFilled",
+    "type": "error"
+  },
+  {
+    "inputs": [],
+    "name": "TradingHalted",
     "type": "error"
   },
   {
@@ -266,13 +286,56 @@ export const HashPowerFuturesAbi = [
         "type": "address"
       },
       {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "expirationAt",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "int256",
+        "name": "quantity",
+        "type": "int256"
+      },
+      {
         "indexed": false,
         "internalType": "uint256",
-        "name": "amount",
+        "name": "price",
         "type": "uint256"
       }
     ],
-    "name": "BadDebt",
+    "name": "BackstopAssigned",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "address",
+        "name": "caller",
+        "type": "address"
+      },
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "expirationAt",
+        "type": "uint256"
+      },
+      {
+        "indexed": false,
+        "internalType": "int256",
+        "name": "filledQuantity",
+        "type": "int256"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "fee",
+        "type": "uint256"
+      }
+    ],
+    "name": "BackstopUnwound",
     "type": "event"
   },
   {
@@ -364,6 +427,19 @@ export const HashPowerFuturesAbi = [
       }
     ],
     "name": "MakerFeeBpsUpdated",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": false,
+        "internalType": "address",
+        "name": "markOracle",
+        "type": "address"
+      }
+    ],
+    "name": "MarkOracleUpdated",
     "type": "event"
   },
   {
@@ -741,6 +817,19 @@ export const HashPowerFuturesAbi = [
   },
   {
     "inputs": [],
+    "name": "BACKSTOP",
+    "outputs": [
+      {
+        "internalType": "address",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "CONTRACT_SIZE_HPS_DAY",
     "outputs": [
       {
@@ -786,6 +875,32 @@ export const HashPowerFuturesAbi = [
         "internalType": "uint8",
         "name": "",
         "type": "uint8"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "MAX_ORDER_QUANTITY",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "MAX_PRICE",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -933,19 +1048,6 @@ export const HashPowerFuturesAbi = [
     "type": "function"
   },
   {
-    "inputs": [
-      {
-        "internalType": "address[]",
-        "name": "_participants",
-        "type": "address[]"
-      }
-    ],
-    "name": "dropActiveOrders",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
     "inputs": [],
     "name": "expirationIntervalDays",
     "outputs": [
@@ -969,6 +1071,42 @@ export const HashPowerFuturesAbi = [
       }
     ],
     "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address[]",
+        "name": "_users",
+        "type": "address[]"
+      },
+      {
+        "internalType": "uint256[]",
+        "name": "_expirationAts",
+        "type": "uint256[]"
+      }
+    ],
+    "name": "forceCancelOrders",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address[]",
+        "name": "_users",
+        "type": "address[]"
+      },
+      {
+        "internalType": "uint256[]",
+        "name": "_expirationAts",
+        "type": "uint256[]"
+      }
+    ],
+    "name": "forceClosePositions",
+    "outputs": [],
+    "stateMutability": "nonpayable",
     "type": "function"
   },
   {
@@ -1011,6 +1149,86 @@ export const HashPowerFuturesAbi = [
         "internalType": "uint256[]",
         "name": "",
         "type": "uint256[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "address",
+        "name": "_participant",
+        "type": "address"
+      }
+    ],
+    "name": "getExposureView",
+    "outputs": [
+      {
+        "components": [
+          {
+            "internalType": "int256",
+            "name": "netPositionExposure",
+            "type": "int256"
+          },
+          {
+            "internalType": "int256",
+            "name": "unrealizedPnl",
+            "type": "int256"
+          },
+          {
+            "internalType": "int256",
+            "name": "pendingFunding",
+            "type": "int256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "buyOrderExposure",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "sellOrderExposure",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "buyOrderFillLoss",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "sellOrderFillLoss",
+            "type": "uint256"
+          }
+        ],
+        "internalType": "struct ILinearMarket.ExposureView",
+        "name": "view_",
+        "type": "tuple"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "_expirationAt",
+        "type": "uint256"
+      }
+    ],
+    "name": "getMarkRange",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "low",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "high",
+        "type": "uint256"
       }
     ],
     "stateMutability": "view",
@@ -1099,16 +1317,26 @@ export const HashPowerFuturesAbi = [
           },
           {
             "internalType": "uint256",
-            "name": "buyValue",
+            "name": "buyPQ",
             "type": "uint256"
           },
           {
             "internalType": "uint256",
-            "name": "sellValue",
+            "name": "buyP2Q",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "sellPQ",
+            "type": "uint256"
+          },
+          {
+            "internalType": "uint256",
+            "name": "sellP2Q",
             "type": "uint256"
           }
         ],
-        "internalType": "struct HashPowerFuturesBase.OrderAggregate",
+        "internalType": "struct HashPowerFuturesBase.RestingOrderAggregate",
         "name": "",
         "type": "tuple"
       }
@@ -1344,8 +1572,8 @@ export const HashPowerFuturesAbi = [
   {
     "inputs": [
       {
-        "internalType": "contract AggregatorV3Interface",
-        "name": "_priceOracle",
+        "internalType": "contract IMarkRangeOracle",
+        "name": "_oracle",
         "type": "address"
       },
       {
@@ -1505,6 +1733,19 @@ export const HashPowerFuturesAbi = [
   },
   {
     "inputs": [],
+    "name": "markOracle",
+    "outputs": [
+      {
+        "internalType": "contract IMarkRangeOracle",
+        "name": "",
+        "type": "address"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
+    "inputs": [],
     "name": "minimumPriceIncrement",
     "outputs": [
       {
@@ -1634,19 +1875,6 @@ export const HashPowerFuturesAbi = [
   {
     "inputs": [
       {
-        "internalType": "address[]",
-        "name": "_participants",
-        "type": "address[]"
-      }
-    ],
-    "name": "resetState",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
         "internalType": "uint8",
         "name": "_futureExpirationDatesCount",
         "type": "uint8"
@@ -1686,19 +1914,6 @@ export const HashPowerFuturesAbi = [
   {
     "inputs": [
       {
-        "internalType": "uint8",
-        "name": "_liquidationMarginPercent",
-        "type": "uint8"
-      }
-    ],
-    "name": "setLiquidationMarginPercent",
-    "outputs": [],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
         "internalType": "uint16",
         "name": "_bps",
         "type": "uint16"
@@ -1725,7 +1940,7 @@ export const HashPowerFuturesAbi = [
   {
     "inputs": [
       {
-        "internalType": "contract AggregatorV3Interface",
+        "internalType": "contract IMarkRangeOracle",
         "name": "_oracle",
         "type": "address"
       }
@@ -1877,6 +2092,24 @@ export const HashPowerFuturesAbi = [
       }
     ],
     "name": "transferOwnership",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "_expirationAt",
+        "type": "uint256"
+      },
+      {
+        "internalType": "uint256",
+        "name": "_qty",
+        "type": "uint256"
+      }
+    ],
+    "name": "unwindBackstop",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"

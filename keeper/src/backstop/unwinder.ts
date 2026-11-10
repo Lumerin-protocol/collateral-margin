@@ -1,4 +1,10 @@
-import type { Abi, Address } from "viem";
+import {
+  BaseError,
+  ContractFunctionRevertedError,
+  type Abi,
+  type Address,
+} from "viem";
+import { CollateralVaultAbi } from "collateral-margin-abi/CollateralVault.ts";
 import type pino from "pino";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
@@ -68,6 +74,16 @@ export interface BackstopUnwinderStats {
  *
  * Matured futures legs are left to the delivery coordinator: the venue rejects
  * them with `ExpirationDateNotAvailable`, and settlement is the correct exit.
+ * The same revert on a live date means a window shrink unlisted it; that leg
+ * also waits for settlement and is logged as a warning.
+ *
+ * Each venue and each leg fails on its own: an unexpected revert (for example
+ * `NotAuthorized` after the venue is revoked) is logged at error level and the
+ * sweep moves on, so one stuck leg cannot stop the others.
+ *
+ * Nothing is sent while the vault is halted: the venues revert `TradingHalted`,
+ * because a fill would open user positions that cannot be reduced until the
+ * halt clears.
  */
 export class BackstopUnwinder {
   private timer: NodeJS.Timeout | undefined;
@@ -130,14 +146,34 @@ export class BackstopUnwinder {
     try {
       this.stats.ticks++;
       this.stats.lastTickAt = Date.now();
+      const halted = await this.chain.publicClient.readContract({
+        address: this.config.vault.address,
+        abi: CollateralVaultAbi,
+        functionName: "halted",
+      });
+      if (halted) {
+        this.logger.debug("vault halted — backstop unwinds paused");
+        return;
+      }
       const legs: BackstopLegStats[] = [];
-      await this.tickFutures(legs);
-      await this.tickPerps(legs);
+      await this.isolate("futures", () => this.tickFutures(legs));
+      await this.isolate("perps", () => this.tickPerps(legs));
       this.stats.legs = legs;
     } catch (err) {
       this.logger.error({ err }, "backstop unwind tick failed");
     } finally {
       this.inflight = false;
+    }
+  }
+
+  private async isolate(
+    venue: "futures" | "perps",
+    run: () => Promise<void>,
+  ): Promise<void> {
+    try {
+      await run();
+    } catch (err) {
+      this.logger.error({ err, venue }, "backstop unwind venue sweep failed");
     }
   }
 
@@ -162,8 +198,7 @@ export class BackstopUnwinder {
     })) as readonly { netQuantity: bigint }[];
 
     const nowSec = BigInt(Math.floor(Date.now() / 1000));
-    for (let i = 0; i < expirationAts.length; i++) {
-      const expirationAt = expirationAts[i]!;
+    for (const [i, expirationAt] of expirationAts.entries()) {
       const net = positions[i]?.netQuantity ?? 0n;
       if (net === 0n) continue;
       legs.push({ venue: "futures", expirationAt, netQuantity: net });
@@ -180,7 +215,11 @@ export class BackstopUnwinder {
         address,
         abi: HashPowerFuturesAbi as Abi,
         args: [expirationAt, qty],
-        label: { expirationAt: expirationAt.toString(), net: net.toString(), qty: qty.toString() },
+        label: {
+          expirationAt: expirationAt.toString(),
+          net: net.toString(),
+          qty: qty.toString(),
+        },
       });
     }
   }
@@ -215,19 +254,31 @@ export class BackstopUnwinder {
     label: Record<string, string>;
   }): Promise<void> {
     const logger = this.logger.child({ venue: opts.venue, ...opts.label });
-    const result = await sendLiquidate({
-      chain: this.chain,
-      config: this.config,
-      logger,
-      address: opts.address,
-      abi: opts.abi,
-      functionName: "unwindBackstop",
-      args: opts.args,
-      feeEventName: "BackstopUnwound",
-      mapSkip: (errorName) =>
-        errorName === "TimeInForceNotFilled" ? "unfilled" : "notLiquidatable",
-      ethUsdFeed: this.ethUsdFeed,
-    });
+    let result: Awaited<ReturnType<typeof sendLiquidate<string>>>;
+    try {
+      result = await sendLiquidate({
+        chain: this.chain,
+        config: this.config,
+        logger,
+        address: opts.address,
+        abi: opts.abi,
+        functionName: "unwindBackstop",
+        args: opts.args,
+        feeEventName: "BackstopUnwound",
+        mapSkip: (errorName) =>
+          errorName === "TimeInForceNotFilled" ? "unfilled" : "notLiquidatable",
+        ethUsdFeed: this.ethUsdFeed,
+      });
+    } catch (err) {
+      if (revertName(err) === "ExpirationDateNotAvailable") {
+        logger.warn(
+          "backstop futures leg on an unlisted date — left to settlement",
+        );
+      } else {
+        logger.error({ err }, "backstop unwind failed");
+      }
+      return;
+    }
     if ("skipped" in result) {
       if (result.skipped === "unfilled") {
         this.stats.unfilled++;
@@ -239,8 +290,19 @@ export class BackstopUnwinder {
     }
     this.stats.unwinds++;
     this.stats.feeEarned += result.feeEarned;
-    logger.info({ feeEarned: result.feeEarned.toString() }, "backstop unwind confirmed");
+    logger.info(
+      { feeEarned: result.feeEarned.toString() },
+      "backstop unwind confirmed",
+    );
   }
+}
+
+function revertName(err: unknown): string | undefined {
+  if (!(err instanceof BaseError)) return undefined;
+  const revert = err.walk((e) => e instanceof ContractFunctionRevertedError);
+  return revert instanceof ContractFunctionRevertedError
+    ? revert.data?.errorName
+    : undefined;
 }
 
 function abs(x: bigint): bigint {

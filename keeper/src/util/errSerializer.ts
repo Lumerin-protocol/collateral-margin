@@ -52,7 +52,9 @@ function stackFrames(stack: unknown): string {
 }
 
 function trimHex(s: string): string {
-  return s.length <= MAX_DATA_LEN ? s : `${s.slice(0, MAX_DATA_LEN)}…<+${s.length - MAX_DATA_LEN} chars>`;
+  return s.length <= MAX_DATA_LEN
+    ? s
+    : `${s.slice(0, MAX_DATA_LEN)}…<+${s.length - MAX_DATA_LEN} chars>`;
 }
 
 export function serializeError(err: unknown): Record<string, unknown> {
@@ -88,7 +90,12 @@ export function serializeError(err: unknown): Record<string, unknown> {
   if (errorName) out.errorName = errorName;
   if (data !== undefined) out.data = data;
   if (stack) out.stack = stack;
-  for (const k of ["contractAddress", "functionName", "sender", "tenderlyUrl"] as const) {
+  for (const k of [
+    "contractAddress",
+    "functionName",
+    "sender",
+    "tenderlyUrl",
+  ] as const) {
     const v = pickString(top, k);
     if (v) out[k] = v;
   }

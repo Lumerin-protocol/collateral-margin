@@ -12,6 +12,7 @@ import type {
   VenueEvents,
   WalletContext,
 } from "../../core/adapter.ts";
+import { IM_SPOT_SHOCK_REFRESH_MS } from "../../core/adapter.ts";
 import type { NetworkClients } from "../../core/client.ts";
 import { HashPowerFuturesAbi } from "../../abi/HashPowerFutures.ts";
 import { CollateralVaultAbi } from "collateral-margin-contracts/abi/CollateralVault.ts";
@@ -22,6 +23,21 @@ import { RawOracleReader, chainlinkAggregatorAbi } from "../../core/rawOracle.ts
 import { attachTenderlyUrl } from "../../core/tenderly.ts";
 import { FuturesInstrumentAdapter } from "./instrument.ts";
 import { FuturesVenueEvents } from "./events.ts";
+
+/** `HashpriceGlideUSD.markRangeAt`: an expiry's mark range on the index feed's scale. */
+const markRangeAtAbi = [
+  {
+    type: "function",
+    name: "markRangeAt",
+    stateMutability: "view",
+    inputs: [{ name: "expiry", type: "uint256" }],
+    outputs: [
+      { name: "low", type: "uint256" },
+      { name: "high", type: "uint256" },
+      { name: "updatedAt", type: "uint256" },
+    ],
+  },
+] as const;
 
 /**
  * How the venue picks which delivery dates to quote out of the rolling window
@@ -97,6 +113,10 @@ export class FuturesVenueAdapter implements VenueAdapter {
   private collateralTokenCache: `0x${string}` | null = null;
   private marginPercentCache: bigint | null = null;
   private imSpotShockCache: bigint | null = null;
+  private markOracleCache: `0x${string}` | null = null;
+  private imSpotShockReadAt = 0;
+  private imSpotShockRefreshing = false;
+  private unwatchShocks: (() => void) | null = null;
   private readonly rawOracle: RawOracleReader;
 
   constructor(opts: FuturesVenueOptions) {
@@ -322,6 +342,31 @@ export class FuturesVenueAdapter implements VenueAdapter {
     return this.rawOracle.read();
   }
 
+  /**
+   * An expiry's mark range (`low`, `high`) from the venue's mark oracle, rebased like
+   * `getRawMarketPrice()` (no tick rounding): longs and bids are valued at `low`, shorts
+   * and asks at `high`.
+   */
+  async getRawMarkRange(expirationAt: bigint): Promise<readonly [bigint, bigint]> {
+    if (this.markOracleCache === null) {
+      this.markOracleCache = await this.publicClient.readContract({
+        address: this.address,
+        abi: HashPowerFuturesAbi,
+        functionName: "markOracle",
+      });
+    }
+    const [[low, high], divisor] = await Promise.all([
+      this.publicClient.readContract({
+        address: this.markOracleCache,
+        abi: markRangeAtAbi,
+        functionName: "markRangeAt",
+        args: [expirationAt],
+      }),
+      this.rawOracle.divisor(),
+    ]);
+    return [low / divisor, high / divisor];
+  }
+
   /** Aggregator and fixed-point scale behind `getRawMarketPrice()`. */
   getOracleScale(): Promise<OracleScale> {
     return this.rawOracle.scale();
@@ -359,20 +404,60 @@ export class FuturesVenueAdapter implements VenueAdapter {
   }
 
   async fetchImSpotShock(): Promise<bigint> {
-    if (this.imSpotShockCache !== null) return this.imSpotShockCache;
+    if (
+      this.imSpotShockCache !== null &&
+      Date.now() - this.imSpotShockReadAt < IM_SPOT_SHOCK_REFRESH_MS
+    ) {
+      return this.imSpotShockCache;
+    }
     const { engine } = await this.resolveAddresses();
+    this.watchShocks(engine);
     const shock = await this.publicClient.readContract({
       address: engine,
       abi: PortfolioMarginEngineAbi,
       functionName: "imSpotShock",
     });
     this.imSpotShockCache = shock;
+    this.imSpotShockReadAt = Date.now();
     return shock;
   }
 
-  /** The cached IM spot shock, or `null` before the first fetch. */
+  /**
+   * The cached IM spot shock, or `null` before the first fetch. A stale value
+   * starts a background re-read, so synchronous order sizing follows `setShocks`.
+   */
   cachedImSpotShock(): bigint | null {
+    this.refreshStaleImSpotShock();
     return this.imSpotShockCache;
+  }
+
+  /** Take a `setShocks` IM change from the engine's `ShocksUpdated` as soon as it lands. */
+  private watchShocks(engine: `0x${string}`): void {
+    if (this.unwatchShocks !== null) return;
+    this.unwatchShocks = this.publicClient.watchContractEvent({
+      address: engine,
+      abi: PortfolioMarginEngineAbi,
+      eventName: "ShocksUpdated",
+      onLogs: (logs) => {
+        for (const log of logs) {
+          if (log.args.imSpot === undefined) continue;
+          this.imSpotShockCache = log.args.imSpot;
+          this.imSpotShockReadAt = Date.now();
+          this.logger.info({ imSpotShock: log.args.imSpot }, "imSpotShock updated from ShocksUpdated");
+        }
+      },
+    });
+  }
+
+  private refreshStaleImSpotShock(): void {
+    if (this.imSpotShockCache === null || this.imSpotShockRefreshing) return;
+    if (Date.now() - this.imSpotShockReadAt < IM_SPOT_SHOCK_REFRESH_MS) return;
+    this.imSpotShockRefreshing = true;
+    this.fetchImSpotShock()
+      .catch((err) => this.logger.warn({ err }, "imSpotShock re-read failed — keeping cached"))
+      .finally(() => {
+        this.imSpotShockRefreshing = false;
+      });
   }
 }
 

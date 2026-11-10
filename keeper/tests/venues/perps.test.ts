@@ -97,6 +97,7 @@ describe("perps venue: readPositions", () => {
       multicall: () => [
         { netQuantity: 0n, netEntryValue: 0n },
         100n, // marketPrice
+        0n, // pendingDrift
       ],
     });
     const venue = new PerpsVenue(chain, makeConfigStub(), silentLogger);
@@ -112,6 +113,7 @@ describe("perps venue: readPositions", () => {
       multicall: () => [
         { netQuantity: qty, netEntryValue: (qty * entryPrice) / QTY_SCALE },
         marketPrice,
+        0n, // pendingDrift
       ],
     });
     const venue = new PerpsVenue(chain, makeConfigStub(), silentLogger);
@@ -129,6 +131,7 @@ describe("perps venue: readPositions", () => {
       multicall: () => [
         { netQuantity: qty, netEntryValue: (qty * entryPrice) / QTY_SCALE },
         marketPrice,
+        0n, // pendingDrift
       ],
     });
     const venue = new PerpsVenue(chain, makeConfigStub(), silentLogger);
@@ -146,6 +149,7 @@ describe("perps venue: readPositions", () => {
       multicall: () => [
         { netQuantity: qty, netEntryValue: (qty * entryPrice) / QTY_SCALE },
         marketPrice,
+        0n, // pendingDrift
       ],
     });
     const venue = new PerpsVenue(chain, makeConfigStub(), silentLogger);
@@ -158,10 +162,7 @@ describe("perps venue: readPositions", () => {
   it("computes PnL directly from net entry value without average-price rounding", async () => {
     const qty = 1_500_000n;
     const chain = makeChainStub({
-      multicall: () => [
-        { netQuantity: qty, netEntryValue: 151n },
-        100n,
-      ],
+      multicall: () => [{ netQuantity: qty, netEntryValue: 151n }, 100n, 0n],
     });
     const venue = new PerpsVenue(chain, makeConfigStub(), silentLogger);
     const [pos] = await venue.readPositions(USER);
@@ -175,6 +176,7 @@ describe("perps venue: readPositions", () => {
       multicall: () => [
         { netQuantity: 1n * QTY_SCALE, netEntryValue: 100n },
         100n,
+        0n, // pendingDrift
       ],
     });
     const venue = new PerpsVenue(chain, makeConfigStub(), silentLogger);
