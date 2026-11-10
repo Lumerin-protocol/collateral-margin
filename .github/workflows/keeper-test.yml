@@ -90,7 +90,7 @@ jobs:
           repository: Lumerin-protocol/derivatives-marketplace
           # feat/cf-321-hashprice-schedule tip: the glide feed, drift funding and the
           # exposure view the keeper snapshot and the CF-321 integration tests read.
-          ref: 6437343154a71de83af57209b35f4cfe72b79595
+          ref: 20868e892956ae94bf65729183ba2e9478f3c941
           path: perps
 
       - name: Checkout futures-marketplace
@@ -99,7 +99,7 @@ jobs:
           repository: Lumerin-protocol/futures-marketplace
           # feat/cf-321-hashprice-schedule tip: the mark oracle, mark ranges, the N28
           # delivery schedule and the FuturesBookLib artifact the stack links.
-          ref: 17ffa5d99ba2a5c0de26a36c475d386afaab2082
+          ref: dac7ad6034d73cd14c33d56770e34f1841f4f390
           path: futures-marketplace
 
       - name: Install perps contracts dependencies
