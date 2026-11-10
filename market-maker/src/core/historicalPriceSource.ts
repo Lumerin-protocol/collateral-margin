@@ -90,12 +90,13 @@ export class HashpriceOracleSubgraphSource implements HistoricalPriceSource {
     // number gets rejected with `Invalid value provided for argument "since":
     // Int(Number(...))`. Verified against the goldsky gateway with
     // introspection + a probe.
-    // `hashpriceMeta` carries the aggregator the subgraph indexed and the
+    // `hashpriceMetaV2` carries the aggregator the subgraph indexed and the
     // decimals it stores `price` in. Both are needed to line the series up
     // with live oracle reads, so they travel with it in one round trip.
+    // (The deprecated `hashpriceMetas` can name a graft base's feeds.)
     const query = `
       query HashpriceHistory($since: Timestamp!, $first: Int!) {
-        hashpriceMetas(first: 1) {
+        hashpriceMetaV2(id: "0") {
           hashpriceUsdAddress
           hashpriceUsdDecimals
         }
@@ -127,7 +128,7 @@ export class HashpriceOracleSubgraphSource implements HistoricalPriceSource {
     }
     const json = (await res.json()) as {
       data?: {
-        hashpriceMetas?: Array<{ hashpriceUsdAddress: string; hashpriceUsdDecimals: string | number }>;
+        hashpriceMetaV2?: { hashpriceUsdAddress: string; hashpriceUsdDecimals: string | number } | null;
         hashpriceUsds?: Array<{ timestamp: string | number; price: string }>;
       };
       errors?: Array<{ message: string }>;
@@ -138,11 +139,11 @@ export class HashpriceOracleSubgraphSource implements HistoricalPriceSource {
       );
     }
 
-    const meta = json.data?.hashpriceMetas?.[0];
+    const meta = json.data?.hashpriceMetaV2;
     if (!meta) {
       // Without the meta row the series cannot declare its feed or scale, and
       // guessing either is what this whole path exists to avoid.
-      throw new Error(`hashprice-subgraph: no HashpriceMeta row at ${this.url}`);
+      throw new Error(`hashprice-subgraph: no HashpriceMetaV2 row at ${this.url}`);
     }
 
     const rows = json.data?.hashpriceUsds ?? [];
