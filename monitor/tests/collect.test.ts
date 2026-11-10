@@ -45,6 +45,8 @@ const venueAbi = parseAbi([
   "function getExpirationDates() view returns (uint256[])",
   "function liquidationFeeBps() view returns (uint16)",
   "function liquidatorShareBps() view returns (uint16)",
+  "function deliverySchedule() view returns (uint256 currentSlot, uint256 pinnedCount, uint256 previousExpiry)",
+  "function futureExpirationDatesCount() view returns (uint8)",
 ]);
 const mmAbi = parseAbi([
   "function balanceOf(address user) view returns (uint256)",
@@ -321,6 +323,11 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
         functionName,
         result: 2_000,
       });
+    // N28: the window [2, 5) is pinned up to slot 5 — one slot short, so one is unpinned.
+    case "deliverySchedule":
+      return encodeFunctionResult({ abi: venueAbi, functionName, result: [2n, 4n, EXP1 - 30n * 86_400n] });
+    case "futureExpirationDatesCount":
+      return encodeFunctionResult({ abi: venueAbi, functionName, result: 3 });
     case "getActiveExpirationDates":
       return encodeFunctionResult({
         abi: venueAbi,
@@ -506,10 +513,10 @@ describe("collect", () => {
   });
 
   it("batches contract reads into two multicalls per check", () => {
-    // backstop 11 + 2 reads for each of 2 legs; market maker 7 + 3 reads for each of 3 expiries
+    // backstop 13 + 2 reads for each of 2 legs; market maker 7 + 3 reads for each of 3 expiries
     assert.deepEqual(
       [...multicallSizes].sort((a, b) => a - b),
-      [4, 7, 9, 11],
+      [4, 7, 9, 13],
     );
   });
 
@@ -521,6 +528,10 @@ describe("collect", () => {
     assert.equal(value("Halted"), 0);
     assert.equal(value("MarginEngineUnset"), 0);
     assert.equal(value("CheckSuccess"), 1);
+  });
+
+  it("N28: counts tradable futures slots without a pinned delivery date", () => {
+    assert.equal(value("UnpinnedTradableSlots"), 1);
   });
 
   it("computes the backing gap at the subgraph block", () => {

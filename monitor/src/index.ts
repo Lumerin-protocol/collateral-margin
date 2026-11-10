@@ -242,6 +242,7 @@ export async function collect(): Promise<{
     metric("PerpsFeeBalance", usdc(vault.perpsFeeBalance)),
     metric("BackingGap", gap),
     metric("MarginEngineUnset", vault.marginEngineUnset ? 1 : 0, "Count"),
+    metric("UnpinnedTradableSlots", backstop.unpinnedTradableSlots, "Count"),
     metric("SubgraphDataAgeSeconds", age, "Seconds"),
     metric("SubgraphIndexingErrors", vault.indexingErrors ? 1 : 0, "Count"),
     metric("CheckSuccess", 1, "Count"),

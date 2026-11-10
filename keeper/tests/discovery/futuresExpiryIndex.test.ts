@@ -65,6 +65,11 @@ function makeChain(state: StubState): Chain {
         if (functionName === "getExpirationDates") return state.activeExpiries;
         if (functionName === "expirationIntervalDays") return 1;
         if (functionName === "futureExpirationDatesCount") return 2;
+        // N28: the venue reports the date that matured last; here one interval before the window.
+        if (functionName === "deliverySchedule") {
+          const first = [...state.activeExpiries].sort((a, b) => (a < b ? -1 : 1))[0];
+          return [0n, 0n, first === undefined ? 0n : first - 86_400n];
+        }
         if (functionName === "getActiveExpirationDates") return [];
         if (functionName === "getUserPosition") {
           const user = getAddress(args?.[0] as Address);

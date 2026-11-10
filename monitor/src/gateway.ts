@@ -157,6 +157,12 @@ export interface ChainState {
   perpsMark: bigint;
   /** Liquidation fee each venue keeps after the liquidator's share, in bps of notional. */
   unwindBudgetBps: { venue: Address; bps: number }[];
+  /**
+   * Futures delivery slots inside the tradable window whose date is not pinned yet (N28). The
+   * keeper pins them daily and the venue pins on the first trade, so anything above 0 for long
+   * means the keeper's delivery sweep is not running.
+   */
+  unpinnedTradableSlots: number;
 }
 
 export async function readChainState(
@@ -174,6 +180,8 @@ export async function readChainState(
     "function liquidatorShareBps() view returns (uint16)",
     "function getMarketPrice() view returns (uint256)",
     "function getMarkRange(uint256 expirationAt) view returns (uint256 low, uint256 high)",
+    "function deliverySchedule() view returns (uint256 currentSlot, uint256 pinnedCount, uint256 previousExpiry)",
+    "function futureExpirationDatesCount() view returns (uint8)",
   ]);
   const futures = { ...at, abi, address: FUTURES_ADDRESS };
   const perps = { ...at, abi, address: PERPS_ADDRESS };
@@ -190,6 +198,8 @@ export async function readChainState(
     perpsLiquidatorShare,
     futuresMark,
     perpsMark,
+    schedule,
+    expiryCount,
   ] = await chain.multicall({
       ...at,
       multicallAddress: MULTICALL3,
@@ -227,8 +237,13 @@ export async function readChainState(
         { ...perps, functionName: "liquidatorShareBps" },
         { ...futures, functionName: "getMarketPrice" },
         { ...perps, functionName: "getMarketPrice" },
+        { ...futures, functionName: "deliverySchedule" },
+        { ...futures, functionName: "futureExpirationDatesCount" },
       ],
     });
+  const [currentSlot, pinnedCount] = schedule;
+  const lastTradable = currentSlot + BigInt(expiryCount) - 1n;
+  const unpinnedTradableSlots = pinnedCount > lastTradable ? 0 : Number(lastTradable - pinnedCount + 1n);
 
   const legReads = (await chain.multicall({
     ...at,
@@ -260,6 +275,7 @@ export async function readChainState(
     perpsNet: perpsPosition.netQuantity,
     futuresMark,
     perpsMark,
+    unpinnedTradableSlots,
     unwindBudgetBps: [
       {
         venue: FUTURES_ADDRESS,

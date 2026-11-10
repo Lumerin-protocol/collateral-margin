@@ -149,6 +149,11 @@ export const HashPowerFuturesAbi = [
   },
   {
     inputs: [],
+    name: "NothingToPin",
+    type: "error",
+  },
+  {
+    inputs: [],
     name: "OracleStale",
     type: "error",
   },
@@ -336,6 +341,37 @@ export const HashPowerFuturesAbi = [
       },
     ],
     name: "BackstopUnwound",
+    type: "event",
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: true,
+        internalType: "uint256",
+        name: "slot",
+        type: "uint256",
+      },
+      {
+        indexed: false,
+        internalType: "uint256",
+        name: "expiry",
+        type: "uint256",
+      },
+      {
+        indexed: false,
+        internalType: "uint256",
+        name: "halvingEta",
+        type: "uint256",
+      },
+      {
+        indexed: false,
+        internalType: "bool",
+        name: "shifted",
+        type: "bool",
+      },
+    ],
+    name: "ExpiryPinned",
     type: "event",
   },
   {
@@ -921,6 +957,19 @@ export const HashPowerFuturesAbi = [
   },
   {
     inputs: [],
+    name: "NO_GO_HALF_WIDTH",
+    outputs: [
+      {
+        internalType: "uint256",
+        name: "",
+        type: "uint256",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
     name: "QUANTITY_DECIMALS",
     outputs: [
       {
@@ -1045,6 +1094,29 @@ export const HashPowerFuturesAbi = [
     name: "createOrders",
     outputs: [],
     stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "deliverySchedule",
+    outputs: [
+      {
+        internalType: "uint256",
+        name: "currentSlot",
+        type: "uint256",
+      },
+      {
+        internalType: "uint256",
+        name: "pinnedCount",
+        type: "uint256",
+      },
+      {
+        internalType: "uint256",
+        name: "previousExpiry",
+        type: "uint256",
+      },
+    ],
+    stateMutability: "view",
     type: "function",
   },
   {
@@ -1768,6 +1840,24 @@ export const HashPowerFuturesAbi = [
       },
     ],
     stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "pinExpiry",
+    outputs: [
+      {
+        internalType: "uint256",
+        name: "slot",
+        type: "uint256",
+      },
+      {
+        internalType: "uint256",
+        name: "expiry",
+        type: "uint256",
+      },
+    ],
+    stateMutability: "nonpayable",
     type: "function",
   },
   {

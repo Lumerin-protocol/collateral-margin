@@ -209,7 +209,9 @@ export class FuturesExpiryIndex implements ParticipantSource {
 
     const intervalSec = window.intervalDays * 86_400n;
     const earliestExpiry = window.targets.reduce((a, b) => (a < b ? a : b));
-    const lifetimeSec = intervalSec * BigInt(Math.max(1, window.expiryCount));
+    // One interval of slack: a date moved clear of a halving (N28) can be listed up to half an
+    // interval earlier than its grid position suggests.
+    const lifetimeSec = intervalSec * BigInt(Math.max(1, window.expiryCount) + 1);
     const fromTimestamp =
       earliestExpiry > lifetimeSec ? earliestExpiry - lifetimeSec : 0n;
     const head = await this.chain.publicClient.getBlockNumber();
@@ -232,7 +234,7 @@ export class FuturesExpiryIndex implements ParticipantSource {
   }
 
   private async refreshWindow(): Promise<ExpiryWindow> {
-    const [rawExpiries, intervalDays, expiryCount] = await Promise.all([
+    const [rawExpiries, intervalDays, expiryCount, schedule] = await Promise.all([
       this.chain.publicClient.readContract({
         address: this.config.futures.address,
         abi: HashPowerFuturesAbi,
@@ -248,16 +250,19 @@ export class FuturesExpiryIndex implements ParticipantSource {
         abi: HashPowerFuturesAbi,
         functionName: "futureExpirationDatesCount",
       }) as Promise<number>,
+      this.chain.publicClient.readContract({
+        address: this.config.futures.address,
+        abi: HashPowerFuturesAbi,
+        functionName: "deliverySchedule",
+      }) as Promise<readonly [bigint, bigint, bigint]>,
     ]);
     const active = [...rawExpiries].sort((a, b) =>
       a < b ? -1 : a > b ? 1 : 0,
     );
-    const intervalSec = BigInt(intervalDays) * 86_400n;
-    const firstActive = active[0];
-    const previous =
-      firstActive !== undefined && firstActive >= intervalSec
-        ? firstActive - intervalSec
-        : undefined;
+    // The date that matured last comes from the venue's schedule: a date moved clear of a
+    // halving (N28) leaves the previous one 15 or 45 days back, not one interval.
+    const [, , previousExpiry] = schedule;
+    const previous = previousExpiry === 0n ? undefined : previousExpiry;
     const targets = previous === undefined ? active : [previous, ...active];
 
     this.previousExpiry = previous;

@@ -623,6 +623,28 @@ resource "aws_cloudwatch_metric_alarm" "vault_backing_gap" {
   })
 }
 
+resource "aws_cloudwatch_metric_alarm" "vault_unpinned_expiry" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-unpinned-expiry-${local.vault_mon_env}"
+  alarm_description   = "A tradable futures delivery slot has had no pinned date for an hour. The keeper's delivery sweep pins the next date daily (Futures.pinExpiry, permissionless) and the venue pins it on the first trade, so until then getExpirationDates shows a date that may still move clear of the halving. Check the keeper is running and its delivery sweep logs. Warning only."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 12
+  metric_name         = "UnpinnedTradableSlots"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Minimum"
+  threshold           = 1
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Unpinned Expiry"
+    Capability = "Monitoring"
+  })
+}
+
 resource "aws_cloudwatch_metric_alarm" "vault_margin_engine_unset" {
   count               = var.vault_monitoring.create ? 1 : 0
   provider            = aws.use1

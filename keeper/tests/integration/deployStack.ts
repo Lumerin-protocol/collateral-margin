@@ -17,7 +17,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { hardhat } from "viem/chains";
-import { artifacts, type CompiledArtifact } from "./artifacts.ts";
+import { artifacts, type CompiledArtifact, linkArtifact } from "./artifacts.ts";
 
 /**
  * Programmatic deployment of the full collateral-margin stack against a
@@ -243,9 +243,18 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
 
   // ── Futures (UUPS proxy, takes vault in constructor) ──────────────────
   const futuresArt = artifacts.futures();
-  const futuresImpl = await deploy(publicClient, owner.client, futuresArt, [
-    vault,
-  ]);
+  const futuresBookLib = await deploy(
+    publicClient,
+    owner.client,
+    artifacts.futuresBookLib(),
+    [],
+  );
+  const futuresImpl = await deploy(
+    publicClient,
+    owner.client,
+    linkArtifact(futuresArt, { FuturesBookLib: futuresBookLib }),
+    [vault],
+  );
   const latestBlock = await publicClient.getBlock();
   // First expiry sits one interval out from now (the duration constant is gone —
   // hashpower settles per-day, so only the expiry spacing schedules the book).
