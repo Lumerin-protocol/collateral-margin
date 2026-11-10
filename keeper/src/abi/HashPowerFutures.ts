@@ -1274,7 +1274,7 @@ export const HashPowerFuturesAbi = [
             type: "uint256",
           },
         ],
-        internalType: "struct ILinearMarketExposure.ExposureView",
+        internalType: "struct ILinearMarket.ExposureView",
         name: "view_",
         type: "tuple",
       },

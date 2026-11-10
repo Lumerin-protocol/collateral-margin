@@ -2,10 +2,10 @@
 pragma solidity ^0.8.20;
 
 import { ICollateralVault } from "../interfaces/ICollateralVault.sol";
-import { ILinearMarketExposure } from "../interfaces/ILinearMarketExposure.sol";
+import { ILinearMarket } from "../interfaces/ILinearMarket.sol";
 
 /// @title PerpsDEXMock — Minimal mock of HashPowerPerpsDEX for options integration tests
-contract PerpsDEXMock is ILinearMarketExposure {
+contract PerpsDEXMock is ILinearMarket {
     struct Position {
         int256 netQuantity;
         int256 netEntryValue;

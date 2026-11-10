@@ -11,7 +11,6 @@ import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {AggregatorV3Interface} from "./interfaces/AggregatorV3Interface.sol";
 import {ICollateralVault} from "./interfaces/ICollateralVault.sol";
 import {ILinearMarket} from "./interfaces/ILinearMarket.sol";
-import {ILinearMarketExposure} from "./interfaces/ILinearMarketExposure.sol";
 import {IOptionsEnginePortfolioView} from "./interfaces/IOptionsEnginePortfolioView.sol";
 import {IPortfolioMarginEngine} from "./interfaces/IPortfolioMarginEngine.sol";
 import {Versionable} from "./interfaces/Versionable.sol";
@@ -31,7 +30,7 @@ import {MathLib as M, WAD} from "./libs/MathLib.sol";
 ///                            + accountDebt
 ///         (sums over all registered linear markets)
 ///
-///         Exposure is value at each market's own mark (`ILinearMarketExposure`), so a market
+///         Exposure is value at each market's own mark (`ILinearMarket.getExposureView`), so a market
 ///         whose mark is not the index (one anticipating a scheduled step) is stressed at what
 ///         its contracts are worth; options delta is valued at the index. Stress shocks exposure
 ///         by the spot shock: stress(E) = |E| × shock, plus the options gamma and vega terms.
@@ -502,8 +501,8 @@ contract PortfolioMarginEngine is
             address market = linearMarkets.at(i);
             int256 unrealizedPnl;
             int256 pendingFunding;
-            try ILinearMarketExposure(market).getExposureView(user) returns (
-                ILinearMarketExposure.ExposureView memory account
+            try ILinearMarket(market).getExposureView(user) returns (
+                ILinearMarket.ExposureView memory account
             ) {
                 agg.netExposure += M.toWad(account.netPositionExposure, collateralDecimals);
                 agg.buyOrderExposure += M.toWad(account.buyOrderExposure, collateralDecimals);
