@@ -88,16 +88,18 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: Lumerin-protocol/derivatives-marketplace
-          # fix/hemi-audit: the CF-007 moments aggregate the keeper snapshot reads.
-          ref: 207a1f0724fcc4b6c1d9b9d38b8771b4a815886f
+          # feat/cf-321-hashprice-schedule tip: the glide feed, drift funding and the
+          # exposure view the keeper snapshot and the CF-321 integration tests read.
+          ref: 6437343154a71de83af57209b35f4cfe72b79595
           path: perps
 
       - name: Checkout futures-marketplace
         uses: actions/checkout@v5
         with:
           repository: Lumerin-protocol/futures-marketplace
-          # fix/hemi-audit: the CF-007 per-expiry moments aggregate the keeper reads.
-          ref: 52cea6cb5aca0f8a52e4630d950559ccc05a958e
+          # feat/cf-321-hashprice-schedule tip: the mark oracle, mark ranges, the N28
+          # delivery schedule and the FuturesBookLib artifact the stack links.
+          ref: 17ffa5d99ba2a5c0de26a36c475d386afaab2082
           path: futures-marketplace
 
       - name: Install perps contracts dependencies
