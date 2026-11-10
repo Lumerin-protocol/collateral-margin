@@ -91,7 +91,7 @@ into the fund with `depositInsuranceFund`. It reverts while halted, like every w
 
 ## Resume
 
-Only the Safe can resume. `contracts/scripts/vault-halt.ts` prints the debt state and sends the transaction when the deployer is the owner, otherwise it prints Safe calldata.
+Only the Safe can resume. `contracts/scripts/vault-resume.ts` prints the debt state and sends the transaction when the deployer is the owner, otherwise it prints Safe calldata.
 
 1. Find what tripped it. A `CAP` halt's `VaultHaltEvent` transaction is the payout that crossed the cap. Join the venue events in that transaction. An `OWNER` halt is explained by the incident notes. `NO_MARGIN_ENGINE` means the engine was cleared while debt was outstanding.
 2. If it looks like a bug or a bad price, follow the incident playbook before resuming.
@@ -107,7 +107,7 @@ While halted, no new trade can be initiated and no collateral can leave the vaul
 
 Levers:
 
-- Halt trading and withdrawals: `vault.halt()`, or `vault-halt.ts halt`. Use it for bugs that do not push the debt past the cap.
+- Halt trading and withdrawals: `vault.halt()`, or `vault-halt.ts`. Use it for bugs that do not push the debt past the cap.
 - Stop a suspect venue: `vault.setAuthorizedCaller(venue, false)`. Every money movement on that venue then reverts. Do this immediately when the suspected bug is in liquidation, settlement, funding, or the oracle those paths use.
 - Fix the price: `setOracle` on the venue and on the margin engine.
 - Fix the code: upgrade the venue with `update-futures.ts` or `update-perps.ts`.

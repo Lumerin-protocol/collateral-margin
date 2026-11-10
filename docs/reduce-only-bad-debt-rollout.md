@@ -93,7 +93,7 @@ Run this inside the backstop migration window from [protocol-liquidation-exposur
 2. In the migration's step 2, halt and upgrade the vault from the Safe:
 
    ```bash
-   pnpm hardhat --env prd run scripts/vault-halt.ts -- halt        # in collateral-margin/contracts
+   pnpm hardhat --env prd run scripts/vault-halt.ts                # in collateral-margin/contracts
    pnpm hardhat --env prd run scripts/update-collateral-vault.ts
    ```
 
