@@ -29,6 +29,7 @@ import {
   readBlockNumber,
   readBlockTimestamp,
   readChainState,
+  readGlide,
   readMarketMaker,
   readMarketMakerHealth,
   readPointsMeta,
@@ -97,6 +98,7 @@ export async function collect(): Promise<{
     publicTips,
     prices,
     subgraphMetas,
+    glide,
   ] = await Promise.all([
       readChainState(at, vault.collateralToken),
       // Goldsky leaves _meta.block.timestamp null; the age alarm needs the real one.
@@ -152,6 +154,12 @@ export async function collect(): Promise<{
             ),
           ),
       ),
+      // Best-effort: the glide display must not fail the vault debt check.
+      readGlide(at).catch((error) => {
+        failed.push("glide");
+        log(`glide check failed: ${describeError(error)}`);
+        return null;
+      }),
     ]);
   const head = Number(headBlock);
 
@@ -180,10 +188,11 @@ export async function collect(): Promise<{
     0n,
   );
   const abs = (n: bigint) => (n < 0n ? -n : n);
-  // Gross exposure at the mark: futures legs at different expiries do not offset.
-  const futuresNotional =
-    backstop.futuresLegs.reduce((sum, leg) => sum + abs(leg.net), 0n) *
-    backstop.futuresMark;
+  // Gross exposure, each leg at its own mark: futures legs at different expiries do not offset.
+  const futuresNotional = backstop.futuresLegs.reduce(
+    (sum, leg) => sum + abs(leg.net) * leg.mark,
+    0n,
+  );
   const perpsNotional =
     (abs(backstop.perpsNet) * backstop.perpsMark) / 1_000_000n;
 
@@ -233,6 +242,7 @@ export async function collect(): Promise<{
     metric("PerpsFeeBalance", usdc(vault.perpsFeeBalance)),
     metric("BackingGap", gap),
     metric("MarginEngineUnset", vault.marginEngineUnset ? 1 : 0, "Count"),
+    metric("UnpinnedTradableSlots", backstop.unpinnedTradableSlots, "Count"),
     metric("SubgraphDataAgeSeconds", age, "Seconds"),
     metric("SubgraphIndexingErrors", vault.indexingErrors ? 1 : 0, "Count"),
     metric("CheckSuccess", 1, "Count"),
@@ -309,6 +319,20 @@ export async function collect(): Promise<{
   }
 
   if (bitcoinTip) points.push(...halvingMetrics(bitcoinTip));
+  if (glide) {
+    // WAD → percent. The glide runs over the last week before the halving; perps' mark
+    // sits that share of the step below the index.
+    points.push(
+      metric("GlideProgressPct", Number(glide.progress) / 1e16),
+      metric("HalvingStepPct", Number(glide.step) / 1e16),
+      metric(
+        "PerpsMarkDiscountPct",
+        backstop.futuresMark > 0n
+          ? (1 - Number(backstop.perpsMark) / Number(backstop.futuresMark)) * 100
+          : 0,
+      ),
+    );
+  }
   if (prices) {
     points.push(
       ...feedMetrics("Hashprice", "HashpriceFeedAgeSeconds", prices.hashprice),

@@ -174,6 +174,11 @@ function buildHarness({
                 sellPQ: 0n,
                 sellP2Q: 0n,
               };
+            // Every leg marks at the index, so the replica's marks follow the price exactly.
+            case "getMarketPrice":
+              return oracleAnswer / 100n;
+            case "getPendingDrift":
+              return 0n;
             case "getActiveExpirationDates":
               return [];
             case "getExpirationDates":

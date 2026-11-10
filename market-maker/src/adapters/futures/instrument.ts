@@ -40,6 +40,8 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
 
   private tickCache: bigint | null = null;
   private marginPercentCache: bigint | null = null;
+  /** This expiry's mark range from the latest `getMarkPrice()`. */
+  private markRangeCache: readonly [bigint, bigint] | null = null;
 
   constructor(venue: FuturesVenueAdapter, expirationAt: bigint, logger: pino.Logger) {
     this.venue = venue;
@@ -59,6 +61,17 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
     // futures expiries share the same per-day hashprice oracle, so the index
     // is identical across markets; only time-to-expiry (T) differs downstream.
     return await this.venue.getRawMarketPrice();
+  }
+
+  /**
+   * The middle of this expiry's mark range: the index before the halving window, about half
+   * of it for a date settling after the halving, and inside the window the midpoint of the
+   * two outcomes (the halving about as likely to fall either side of the date).
+   */
+  async getMarkPrice(): Promise<bigint> {
+    const range = await this.venue.getRawMarkRange(this.expirationAt);
+    this.markRangeCache = range;
+    return (range[0] + range[1]) / 2n;
   }
 
   getOracleScale(): Promise<OracleScale> {
@@ -286,7 +299,9 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
   estimateOrderMargin(intent: OrderIntent): bigint {
     const shock = this.venue.cachedImSpotShock();
     if (shock === null) return 0n;
-    const mark = this.venue.cachedMarketPrice();
+    // The venue values a bid at the expiry's low mark and an ask at its high.
+    const range = this.markRangeCache;
+    const mark = range ? (intent.side === "buy" ? range[0] : range[1]) : this.venue.cachedMarketPrice();
     if (mark === null) return 0n;
 
     const stress = (mark * intent.size * shock) / 10n ** 18n;

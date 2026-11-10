@@ -24,6 +24,21 @@ import { attachTenderlyUrl } from "../../core/tenderly.ts";
 import { FuturesInstrumentAdapter } from "./instrument.ts";
 import { FuturesVenueEvents } from "./events.ts";
 
+/** `HashpriceGlideUSD.markRangeAt`: an expiry's mark range on the index feed's scale. */
+const markRangeAtAbi = [
+  {
+    type: "function",
+    name: "markRangeAt",
+    stateMutability: "view",
+    inputs: [{ name: "expiry", type: "uint256" }],
+    outputs: [
+      { name: "low", type: "uint256" },
+      { name: "high", type: "uint256" },
+      { name: "updatedAt", type: "uint256" },
+    ],
+  },
+] as const;
+
 /**
  * How the venue picks which delivery dates to quote out of the rolling window
  * returned by `getExpirationDates()` (ordered nearest-first).
@@ -98,6 +113,7 @@ export class FuturesVenueAdapter implements VenueAdapter {
   private collateralTokenCache: `0x${string}` | null = null;
   private marginPercentCache: bigint | null = null;
   private imSpotShockCache: bigint | null = null;
+  private markOracleCache: `0x${string}` | null = null;
   private imSpotShockReadAt = 0;
   private imSpotShockRefreshing = false;
   private unwatchShocks: (() => void) | null = null;
@@ -324,6 +340,31 @@ export class FuturesVenueAdapter implements VenueAdapter {
    */
   getRawMarketPrice(): Promise<bigint> {
     return this.rawOracle.read();
+  }
+
+  /**
+   * An expiry's mark range (`low`, `high`) from the venue's mark oracle, rebased like
+   * `getRawMarketPrice()` (no tick rounding): longs and bids are valued at `low`, shorts
+   * and asks at `high`.
+   */
+  async getRawMarkRange(expirationAt: bigint): Promise<readonly [bigint, bigint]> {
+    if (this.markOracleCache === null) {
+      this.markOracleCache = await this.publicClient.readContract({
+        address: this.address,
+        abi: HashPowerFuturesAbi,
+        functionName: "markOracle",
+      });
+    }
+    const [[low, high], divisor] = await Promise.all([
+      this.publicClient.readContract({
+        address: this.markOracleCache,
+        abi: markRangeAtAbi,
+        functionName: "markRangeAt",
+        args: [expirationAt],
+      }),
+      this.rawOracle.divisor(),
+    ]);
+    return [low / divisor, high / divisor];
   }
 
   /** Aggregator and fixed-point scale behind `getRawMarketPrice()`. */

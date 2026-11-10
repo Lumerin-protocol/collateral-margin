@@ -41,11 +41,16 @@ export class PerpsInstrumentAdapter implements InstrumentAdapter {
   }
 
   async getIndexPrice(): Promise<bigint> {
+    // The index behind the perps mark, unrounded: volatility and its backfill.
+    return await this.venue.getRawIndexPrice();
+  }
+
+  async getMarkPrice(): Promise<bigint> {
     // Read the raw oracle answer rebased to token decimals — `HashPowerPerpsDEX.getMarketPrice`
     // would round to the nearest tick, which collapses our reservation-price
     // shift onto a tick boundary and forces a 2-tick min spread. The unrounded
     // mid lets `roundDownToTick(r) → bidMid` and `roundUpToTick(r) → askMid`
-    // produce a 1-tick spread naturally.
+    // produce a 1-tick spread naturally. On the CF-321 venue it is the halving glide.
     return await this.venue.getRawMarketPrice();
   }
 

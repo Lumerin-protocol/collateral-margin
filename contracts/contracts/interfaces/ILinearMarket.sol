@@ -16,6 +16,15 @@ import {ICollateralVault} from "./ICollateralVault.sol";
 ///         Each product does its own quantity→delta scaling internally (perps divide
 ///         out quantity decimals; futures count one delta unit per contract) so the
 ///         PME never needs product-specific constants.
+///
+///         Exposure convention (`getExposureView`, which supersedes `getRiskView` for the
+///         engine): signed value at the market's own mark, in token decimals, so that
+///             PnL of an index move by a fraction x (WAD) = exposure × x / WAD,
+///         exact while the mark moves in proportion to the index. A mark need not be the index
+///         the engine stresses (it can anticipate a scheduled step in the index), so the market
+///         reports what its contracts are worth at its mark and the engine shocks that by a
+///         percentage: the market needs no index, the engine no mark. With mark = index the
+///         exposure equals `delta × index`, the engine's requirement through `getRiskView`.
 interface ILinearMarket {
     /// @notice The collateral vault this market settles into.
     /// @dev Read by `PortfolioMarginEngine.addLinearMarket` to pin a market to the
@@ -63,8 +72,34 @@ interface ILinearMarket {
         uint256 sellOrderFillLoss;
     }
 
+    /// @param netPositionExposure Σ signed contracts × mark over active positions (token
+    ///        decimals). Positive = net long.
+    /// @param unrealizedPnl As `RiskView.unrealizedPnl`.
+    /// @param pendingFunding As `RiskView.pendingFunding`.
+    /// @param buyOrderExposure Exposure the account would add if every resting bid filled:
+    ///        Σ|q| over bids × the mark of the contract bought, unsigned (token decimals).
+    /// @param sellOrderExposure The same over asks, unsigned; the engine subtracts it.
+    /// @param buyOrderFillLoss As `RiskView.buyOrderFillLoss`.
+    /// @param sellOrderFillLoss As `RiskView.sellOrderFillLoss`.
+    struct ExposureView {
+        int256 netPositionExposure;
+        int256 unrealizedPnl;
+        int256 pendingFunding;
+        uint256 buyOrderExposure;
+        uint256 sellOrderExposure;
+        uint256 buyOrderFillLoss;
+        uint256 sellOrderFillLoss;
+    }
+
+    /// @notice All per-user margin inputs at the market's mark (see ExposureView).
+    /// @dev The engine reads this first. A market without it reverts with no data, and the
+    ///      engine then reads `getRiskView` and values its deltas at the index.
+    function getExposureView(address user) external view returns (ExposureView memory);
+
     /// @notice Batched read of the user's margin inputs (see RiskView).
-    /// @dev Deliberately a new selector rather than an extension of the former
+    /// @dev Deprecated for margin: the engine reads `getExposureView`, and this only for a
+    ///      market without it, valuing its deltas at the index.
+    ///      Deliberately a new selector rather than an extension of the former
     ///      `getAccountView`. Engine and markets are independently upgraded UUPS
     ///      proxies; the old four-word decoder reading this seven-word tuple would
     ///      silently take `pendingFunding` as the old `orderMargin` instead of

@@ -19,9 +19,9 @@ const ONE_LOT_QTY = LOT_QTY;
 const WAD = 10n ** 18n;
 
 describe("PortfolioMarginEngine", () => {
-  it("reports version 2.6.0", async () => {
+  it("reports version 2.6.1", async () => {
     const { pme } = await networkHelpers.loadFixture(deployPortfolioMarginEngineFixture);
-    assert.equal(await pme.read.VERSION(), "2.6.0");
+    assert.equal(await pme.read.VERSION(), "2.6.1");
   });
 
   describe("no positions", () => {

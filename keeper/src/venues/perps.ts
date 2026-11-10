@@ -86,31 +86,40 @@ export class PerpsVenue implements Venue {
   async readPositions(user: Address): Promise<VenuePosition[]> {
     // Single-market netted position. The signed entry value lets us derive PnL
     // directly without reconstructing a rounded average entry price.
-    const [position, marketPrice] = await this.chain.publicClient.multicall({
-      contracts: [
-        {
-          address: this.config.perps.address,
-          abi: PerpsPositionAbi,
-          functionName: "getUserPosition" as const,
-          args: [user] as const,
-        },
-        {
-          address: this.config.perps.address,
-          abi: HashPowerPerpsDEXAbi,
-          functionName: "getMarketPrice" as const,
-        },
-      ] as const,
-      allowFailure: false,
-    });
+    const [position, marketPrice, pendingDrift] =
+      await this.chain.publicClient.multicall({
+        contracts: [
+          {
+            address: this.config.perps.address,
+            abi: PerpsPositionAbi,
+            functionName: "getUserPosition" as const,
+            args: [user] as const,
+          },
+          {
+            address: this.config.perps.address,
+            abi: HashPowerPerpsDEXAbi,
+            functionName: "getMarketPrice" as const,
+          },
+          {
+            address: this.config.perps.address,
+            abi: HashPowerPerpsDEXAbi,
+            functionName: "getPendingDrift" as const,
+            args: [user] as const,
+          },
+        ] as const,
+        allowFailure: false,
+      });
 
     if (position.netQuantity === 0n) return [];
 
     const absQty = abs(position.netQuantity);
     const isLong = position.netQuantity > 0n;
-    // PnL in token decimals: mark value minus the signed entry value.
+    // PnL in token decimals, as the venue reports it: mark value minus the signed entry
+    // value, plus the glide's drift not yet folded into the entry.
     const pnl =
       (marketPrice * position.netQuantity) / QUANTITY_SCALE -
-      position.netEntryValue;
+      position.netEntryValue +
+      pendingDrift;
     const unrealizedLoss = pnl < 0n ? -pnl : 0n;
     const notional = (marketPrice * absQty) / QUANTITY_SCALE;
 
@@ -180,24 +189,24 @@ export class PerpsVenue implements Venue {
     // Size the partial close off-chain against a fresh snapshot so the account
     // lands inside the [MM, IM] band (or a full close on a deep crash).
     const params = await this.getMMParams();
-    const [snapshot, marketPrice] = await Promise.all([
-      readAccountSnapshot(
-        this.chain,
-        this.config,
-        user,
-        { params, logger: this.logger },
-        true,
-      ),
-      this.chain.publicClient.readContract({
-        address: this.config.perps.address,
-        abi: HashPowerPerpsDEXAbi,
-        functionName: "getMarketPrice",
-      }) as Promise<bigint>,
-    ]);
+    const snapshot = await readAccountSnapshot(
+      this.chain,
+      this.config,
+      user,
+      { params, logger: this.logger },
+      true,
+    );
+    // The replica prices at the index and moves the perps mark (the glide) with it.
+    if (snapshot.index === undefined) return { skipped: "nothingToClose" };
 
     // The liquidation fee (bps of the closed notional) is left out: it only lowers
     // the post-close balance, so the account lands at or under IM, never over it.
-    const closeQty = solvePerpCloseToTarget(snapshot, params, marketPrice, 0n);
+    const closeQty = solvePerpCloseToTarget(
+      snapshot,
+      params,
+      snapshot.index,
+      0n,
+    );
     if (closeQty === 0n) {
       return { skipped: "nothingToClose" };
     }

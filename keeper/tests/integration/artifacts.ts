@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { Abi, Hex } from "viem";
+import type { Abi, Address, Hex } from "viem";
 
 /**
  * Filesystem-path-based artifact loader.
@@ -28,6 +28,27 @@ import type { Abi, Hex } from "viem";
 export interface CompiledArtifact {
   abi: Abi;
   bytecode: Hex;
+  /** Hardhat link references: `{ [source]: { [library]: [{ start, length }] } }` (byte offsets). */
+  linkReferences?: Record<string, Record<string, { start: number; length: number }[]>>;
+}
+
+/** Fill an artifact's library placeholders with deployed addresses. */
+export function linkArtifact(
+  artifact: CompiledArtifact,
+  libraries: Record<string, Address>,
+): CompiledArtifact {
+  let code = artifact.bytecode.slice(2);
+  for (const refs of Object.values(artifact.linkReferences ?? {})) {
+    for (const [name, positions] of Object.entries(refs)) {
+      const address = libraries[name];
+      if (address === undefined) throw new Error(`Library ${name} is not linked`);
+      const hex = address.slice(2).toLowerCase().padStart(40, "0");
+      for (const { start, length } of positions) {
+        code = code.slice(0, start * 2) + hex + code.slice((start + length) * 2);
+      }
+    }
+  }
+  return { abi: artifact.abi, bytecode: `0x${code}` };
 }
 
 const WORKSPACE_ROOT = resolve(import.meta.dirname, "../../../..");
@@ -83,13 +104,13 @@ function readArtifact(
         `Underlying error: ${cause}`,
     );
   }
-  const parsed = JSON.parse(raw) as { abi: Abi; bytecode: Hex };
+  const parsed = JSON.parse(raw) as CompiledArtifact;
   if (parsed.bytecode === undefined || parsed.bytecode === "0x") {
     throw new Error(
       `Artifact at ${artifactPath} has no bytecode — is it an interface? (loader expected a deployable contract).`,
     );
   }
-  return { abi: parsed.abi, bytecode: parsed.bytecode };
+  return { abi: parsed.abi, bytecode: parsed.bytecode, linkReferences: parsed.linkReferences };
 }
 
 /**
@@ -143,6 +164,37 @@ export const artifacts = {
   // ── futures (sibling repo) ────────────────────────────────────────────
   futures: () =>
     readArtifact("futures", "contracts/HashPowerFutures", "HashPowerFutures"),
+  /** External library linked into `HashPowerFutures` (its off-chain order-book views). */
+  futuresBookLib: () =>
+    readArtifact("futures", "contracts/libs/FuturesBookLib", "FuturesBookLib"),
+  // ── hashprice oracle chain, as the futures build compiles it ──────────
+  hashpriceBtcMock: () =>
+    readArtifact(
+      "futures",
+      "hashprice-oracle/contracts/contracts/mocks/HashpriceBTCMock",
+      "HashpriceBTCMock",
+    ),
+  hashpriceUsd: () =>
+    readArtifact(
+      "futures",
+      "hashprice-oracle/contracts/contracts/HashpriceUSD",
+      "HashpriceUSD",
+    ),
+  hashpriceGlideUsd: () =>
+    readArtifact(
+      "futures",
+      "hashprice-oracle/contracts/contracts/HashpriceGlideUSD",
+      "HashpriceGlideUSD",
+    ),
+  priceFeedMock: () =>
+    readArtifact("futures", "contracts/mocks/PriceFeedMock", "PriceFeedMock"),
+  /** Futures' required mark oracle: every expiry marks at the wrapped index feed. */
+  futuresMarkOracle: () =>
+    readArtifact(
+      "futures",
+      "contracts/mocks/MarkRangeOracleMock",
+      "MarkRangeOracleMock",
+    ),
 } as const;
 
 /** Resolved repo paths — exported for diagnostic logs. */

@@ -28,6 +28,17 @@ import { attachTenderlyUrl } from "../../core/tenderly.ts";
 import { PerpsInstrumentAdapter } from "./instrument.ts";
 import { PerpsVenueEvents } from "./events.ts";
 
+/** `HashpriceGlideUSD.hashpriceUsd`: the index feed a glide feed is built on. */
+const hashpriceUsdAbi = [
+  {
+    type: "function",
+    name: "hashpriceUsd",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+] as const;
+
 export interface PerpsVenueOptions {
   network: NetworkClients;
   wallet: WalletContext;
@@ -79,6 +90,7 @@ export class PerpsVenueAdapter implements VenueAdapter {
   private imSpotShockRefreshing = false;
   private unwatchShocks: (() => void) | null = null;
   private readonly rawOracle: RawOracleReader;
+  private readonly indexOracle: RawOracleReader;
 
   constructor(opts: PerpsVenueOptions) {
     this.wallet = opts.wallet;
@@ -103,40 +115,62 @@ export class PerpsVenueAdapter implements VenueAdapter {
 
     // Discover (oracle, divisor) on first read. Unlike futures the divisor
     // isn't precomputed on chain — derive it from oracle.decimals() and the
-    // collateral token's decimals.
+    // collateral token's decimals. Perps reads its mark here: the halving glide
+    // (`HashpriceGlideUSD`) on the CF-321 venue.
     this.rawOracle = new RawOracleReader({
       publicClient: this.publicClient,
       label: "perps",
-      resolve: async () => {
-        const { token } = await this.resolveAddresses();
-        const oracle = await this.publicClient.readContract({
-          address: this.address,
-          abi: HashPowerPerpsDEXAbi,
-          functionName: "priceOracle",
-        });
-        const [oracleDecimals, tokenDecimals] = await this.publicClient.multicall({
-          allowFailure: false,
-          contracts: [
-            {
-              address: oracle,
-              abi: chainlinkAggregatorAbi,
-              functionName: "decimals",
-            },
-            { address: token, abi: erc20Abi, functionName: "decimals" },
-          ],
-        });
-        if (tokenDecimals > oracleDecimals) {
-          throw new Error(
-            `perps: tokenDecimals (${tokenDecimals}) > oracleDecimals (${oracleDecimals})`,
-          );
-        }
-        return {
-          oracle,
-          divisor: 10n ** BigInt(oracleDecimals - tokenDecimals),
-          tokenDecimals,
-        };
-      },
+      resolve: () => this.resolveFeed(false),
     });
+    // The index behind it (`hashpriceUsd()` on the glide feed, the feed itself on a plain
+    // one): volatility and its history backfill are read from the index.
+    this.indexOracle = new RawOracleReader({
+      publicClient: this.publicClient,
+      label: "perps index",
+      resolve: () => this.resolveFeed(true),
+    });
+  }
+
+  private async resolveFeed(index: boolean) {
+    const { token } = await this.resolveAddresses();
+    const priceOracle = await this.publicClient.readContract({
+      address: this.address,
+      abi: HashPowerPerpsDEXAbi,
+      functionName: "priceOracle",
+    });
+    let oracle = priceOracle;
+    if (index) {
+      try {
+        oracle = await this.publicClient.readContract({
+          address: priceOracle,
+          abi: hashpriceUsdAbi,
+          functionName: "hashpriceUsd",
+        });
+      } catch {
+        // A plain feed: the mark is the index.
+      }
+    }
+    const [oracleDecimals, tokenDecimals] = await this.publicClient.multicall({
+      allowFailure: false,
+      contracts: [
+        {
+          address: oracle,
+          abi: chainlinkAggregatorAbi,
+          functionName: "decimals",
+        },
+        { address: token, abi: erc20Abi, functionName: "decimals" },
+      ],
+    });
+    if (tokenDecimals > oracleDecimals) {
+      throw new Error(
+        `perps: tokenDecimals (${tokenDecimals}) > oracleDecimals (${oracleDecimals})`,
+      );
+    }
+    return {
+      oracle,
+      divisor: 10n ** BigInt(oracleDecimals - tokenDecimals),
+      tokenDecimals,
+    };
   }
 
   async getInstrument(): Promise<InstrumentAdapter> {
@@ -229,16 +263,21 @@ export class PerpsVenueAdapter implements VenueAdapter {
   }
 
   /**
-   * Latest price oracle answer rebased to token decimals (no tick rounding).
-   * See `RawOracleReader` for rationale.
+   * Latest price oracle answer (the perps mark) rebased to token decimals (no tick
+   * rounding). See `RawOracleReader` for rationale.
    */
   getRawMarketPrice(): Promise<bigint> {
     return this.rawOracle.read();
   }
 
-  /** Aggregator and fixed-point scale behind `getRawMarketPrice()`. */
+  /** The index behind the perps mark, rebased like `getRawMarketPrice()`. */
+  getRawIndexPrice(): Promise<bigint> {
+    return this.indexOracle.read();
+  }
+
+  /** Aggregator and fixed-point scale behind `getRawIndexPrice()`, the feed history indexes. */
   getOracleScale(): Promise<OracleScale> {
-    return this.rawOracle.scale();
+    return this.indexOracle.scale();
   }
 
   /**

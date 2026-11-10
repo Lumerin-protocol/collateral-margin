@@ -104,39 +104,47 @@ export class FuturesVenue implements Venue {
   }
 
   async readPositions(user: Address): Promise<VenuePosition[]> {
-    const [expirationAts, marketPrice] = await Promise.all([
-      this.chain.publicClient.readContract({
-        address: this.config.futures.address,
-        abi: HashPowerFuturesAbi,
-        functionName: "getActiveExpirationDates",
-        args: [user],
-      }) as Promise<readonly bigint[]>,
-      this.chain.publicClient.readContract({
-        address: this.config.futures.address,
-        abi: HashPowerFuturesAbi,
-        functionName: "getMarketPrice",
-      }) as Promise<bigint>,
-    ]);
+    const expirationAts = (await this.chain.publicClient.readContract({
+      address: this.config.futures.address,
+      abi: HashPowerFuturesAbi,
+      functionName: "getActiveExpirationDates",
+      args: [user],
+    })) as readonly bigint[];
 
     if (expirationAts.length === 0) return [];
 
-    const positions = await this.chain.publicClient.multicall({
-      contracts: expirationAts.map((expirationAt) => ({
-        address: this.config.futures.address,
-        abi: HashPowerFuturesAbi,
-        functionName: "getUserPosition" as const,
-        args: [user, expirationAt] as const,
-      })),
-      allowFailure: false,
-    });
+    const [positions, ranges] = await Promise.all([
+      this.chain.publicClient.multicall({
+        contracts: expirationAts.map((expirationAt) => ({
+          address: this.config.futures.address,
+          abi: HashPowerFuturesAbi,
+          functionName: "getUserPosition" as const,
+          args: [user, expirationAt] as const,
+        })),
+        allowFailure: false,
+      }),
+      this.chain.publicClient.multicall({
+        contracts: expirationAts.map((expirationAt) => ({
+          address: this.config.futures.address,
+          abi: HashPowerFuturesAbi,
+          functionName: "getMarkRange" as const,
+          args: [expirationAt] as const,
+        })),
+        allowFailure: false,
+      }),
+    ]);
 
     const out: VenuePosition[] = [];
     for (const [i, expirationAt] of expirationAts.entries()) {
       const pos = positions[i];
-      if (pos === undefined || pos.netQuantity === 0n) continue;
+      const range = ranges[i];
+      if (pos === undefined || range === undefined || pos.netQuantity === 0n)
+        continue;
 
       const absQty = pos.netQuantity < 0n ? -pos.netQuantity : pos.netQuantity;
-      const pnl = marketPrice * pos.netQuantity - pos.netEntryValue;
+      // Each expiry at its mark for the side held: a long at `low`, a short at `high`.
+      const mark = pos.netQuantity > 0n ? range[0] : range[1];
+      const pnl = mark * pos.netQuantity - pos.netEntryValue;
       const unrealizedLoss = pnl < 0n ? -pnl : 0n;
       const avgEntry = abs(pos.netEntryValue) / absQty;
       const notional = avgEntry * absQty;
@@ -182,7 +190,7 @@ export class FuturesVenue implements Venue {
 
   async reduceToTarget(user: Address): Promise<ReduceToTargetOutcome> {
     const params = await this.getMMParams();
-    const [snapshot, marketPrice, liquidationFeeBps] = await Promise.all([
+    const [snapshot, liquidationFeeBps] = await Promise.all([
       readAccountSnapshot(this.chain, this.config, user, {
         params,
         logger: this.logger,
@@ -190,20 +198,17 @@ export class FuturesVenue implements Venue {
       this.chain.publicClient.readContract({
         address: this.config.futures.address,
         abi: HashPowerFuturesAbi,
-        functionName: "getMarketPrice",
-      }) as Promise<bigint>,
-      this.chain.publicClient.readContract({
-        address: this.config.futures.address,
-        abi: HashPowerFuturesAbi,
         functionName: "liquidationFeeBps",
       }) as Promise<number>,
     ]);
+    // The replica prices at the index the snapshot's marks were read at.
+    if (snapshot.index === undefined) return { skipped: "nothingToClose" };
 
     // Matured legs are left to the delivery coordinator: the venue skips them.
     const closes = await this.solver.solve({
       snapshot,
       params,
-      currentPrice: marketPrice,
+      currentPrice: snapshot.index,
       liquidationFeeBps: BigInt(liquidationFeeBps),
       now: BigInt(Math.floor(Date.now() / 1000)),
     });

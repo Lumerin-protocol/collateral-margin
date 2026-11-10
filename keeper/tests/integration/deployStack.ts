@@ -17,7 +17,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { hardhat } from "viem/chains";
-import { artifacts, type CompiledArtifact } from "./artifacts.ts";
+import { artifacts, type CompiledArtifact, linkArtifact } from "./artifacts.ts";
 
 /**
  * Programmatic deployment of the full collateral-margin stack against a
@@ -243,16 +243,32 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
 
   // ── Futures (UUPS proxy, takes vault in constructor) ──────────────────
   const futuresArt = artifacts.futures();
-  const futuresImpl = await deploy(publicClient, owner.client, futuresArt, [
-    vault,
-  ]);
+  const futuresBookLib = await deploy(
+    publicClient,
+    owner.client,
+    artifacts.futuresBookLib(),
+    [],
+  );
+  const futuresImpl = await deploy(
+    publicClient,
+    owner.client,
+    linkArtifact(futuresArt, { FuturesBookLib: futuresBookLib }),
+    [vault],
+  );
   const latestBlock = await publicClient.getBlock();
   // First expiry sits one interval out from now (the duration constant is gone —
   // hashpower settles per-day, so only the expiry spacing schedules the book).
   const firstExpirationAt =
     latestBlock.timestamp +
     BigInt(FUTURES_EXPIRATION_INTERVAL_DAYS * 24 * 3600);
-  // initialize(hashrateOracle, liquidationMarginPercent,
+  // Marks every expiry at the index, so the keeper's single-price replica stays exact.
+  const futuresMarkOracle = await deploy(
+    publicClient,
+    owner.client,
+    artifacts.futuresMarkOracle(),
+    [hashpriceOracle],
+  );
+  // initialize(markOracle, liquidationMarginPercent,
   //            futureExpirationDatesCount, firstFutureExpirationDate)
   const futures = await deployProxy(
     publicClient,
@@ -261,7 +277,7 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     futuresArt.abi,
     "initialize",
     [
-      hashpriceOracle,
+      futuresMarkOracle,
       FUTURES_LIQUIDATION_MARGIN_PCT,
       FUTURES_FUTURE_DELIVERY_DATES_COUNT,
       firstExpirationAt,
@@ -457,9 +473,9 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
   };
 }
 
-// ── Internal helpers ────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────
 
-async function deploy(
+export async function deploy(
   pc: PublicClient,
   wc: WalletClient,
   artifact: CompiledArtifact,
@@ -495,7 +511,7 @@ async function deployProxy(
   return deploy(pc, wc, artifacts.erc1967Proxy(), [implementation, initData]);
 }
 
-async function write(
+export async function write(
   pc: PublicClient,
   wc: WalletClient,
   address: Address,

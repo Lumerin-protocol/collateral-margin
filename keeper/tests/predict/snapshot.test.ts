@@ -53,6 +53,8 @@ const EXPIRY_A = 1_756_416_000n;
 const EXPIRY_B = 1_759_008_000n;
 const BLOCK = 4_242n;
 const TOKEN_SCALE = 1_000_000n;
+/** Index answered for any mark not scripted: every leg at the index, the pre-halving case. */
+const INDEX = 50_000_000n;
 
 const PARAMS: MMParams = {
   imSpotShock: 10n ** 17n,
@@ -182,13 +184,18 @@ function makeChain(scripted: Scripted, recorded?: Recorded): Chain {
                 scripted.futuresBooks?.[expirationAt.toString()] ?? NO_ORDERS
               );
             }
-            case "getMarketPrice": {
-              const mark =
-                c.address === PERPS ? scripted.perpsMark : scripted.futuresMark;
-              if (mark === undefined)
-                throw new Error(`unscripted mark for ${c.address}`);
-              return mark;
+            case "getMarketPrice":
+              return (
+                (c.address === PERPS
+                  ? scripted.perpsMark
+                  : scripted.futuresMark) ?? INDEX
+              );
+            case "getMarkRange": {
+              const mark = scripted.futuresMark ?? INDEX;
+              return [mark, mark];
             }
+            case "getPendingDrift":
+              return 0n;
             case "getActiveExpirationDates":
               return scripted.activeExpirationAts ?? [];
             case "getExpirationDates":
@@ -268,8 +275,20 @@ describe("predict/snapshot: readAccountSnapshot", () => {
     const snap = await readAccountSnapshot(chain, makeConfig(), USER);
     assert.deepEqual(snap.perp.orders, perpOrders);
     assert.deepEqual(snap.futures.orders, [
-      { ...bookA, expirationAt: EXPIRY_A, settlementPrice: 0n },
-      { ...bookB, expirationAt: EXPIRY_B, settlementPrice: 0n },
+      {
+        ...bookA,
+        expirationAt: EXPIRY_A,
+        settlementPrice: 0n,
+        low: INDEX,
+        high: INDEX,
+      },
+      {
+        ...bookB,
+        expirationAt: EXPIRY_B,
+        settlementPrice: 0n,
+        low: INDEX,
+        high: INDEX,
+      },
     ]);
   });
 
@@ -282,7 +301,13 @@ describe("predict/snapshot: readAccountSnapshot", () => {
     });
     const snap = await readAccountSnapshot(chain, makeConfig(), USER);
     assert.deepEqual(snap.futures.orders, [
-      { ...bookB, expirationAt: EXPIRY_B, settlementPrice: 40_000_000n },
+      {
+        ...bookB,
+        expirationAt: EXPIRY_B,
+        settlementPrice: 40_000_000n,
+        low: INDEX,
+        high: INDEX,
+      },
     ]);
   });
 
@@ -422,13 +447,14 @@ describe("predict/snapshot: fill-loss check against getRiskView", () => {
     assert.equal(warnings[0]?.blockNumber, BLOCK);
   });
 
-  it("reads no marks without a check", async () => {
+  it("reads the marks for a trading account without a check too", async () => {
     const recorded: Recorded = { multicallBlocks: [], calls: [] };
     await readAccountSnapshot(
       makeChain(scripted, recorded),
       makeConfig(),
       USER,
     );
-    assert.ok(!recorded.calls.includes("getMarketPrice"));
+    assert.ok(recorded.calls.includes("getMarketPrice"));
+    assert.ok(recorded.calls.includes("getMarkRange"));
   });
 });

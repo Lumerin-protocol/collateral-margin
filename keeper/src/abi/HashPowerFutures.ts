@@ -149,6 +149,11 @@ export const HashPowerFuturesAbi = [
   },
   {
     inputs: [],
+    name: "NothingToPin",
+    type: "error",
+  },
+  {
+    inputs: [],
     name: "OracleStale",
     type: "error",
   },
@@ -342,6 +347,37 @@ export const HashPowerFuturesAbi = [
     anonymous: false,
     inputs: [
       {
+        indexed: true,
+        internalType: "uint256",
+        name: "slot",
+        type: "uint256",
+      },
+      {
+        indexed: false,
+        internalType: "uint256",
+        name: "expiry",
+        type: "uint256",
+      },
+      {
+        indexed: false,
+        internalType: "uint256",
+        name: "halvingEta",
+        type: "uint256",
+      },
+      {
+        indexed: false,
+        internalType: "bool",
+        name: "shifted",
+        type: "bool",
+      },
+    ],
+    name: "ExpiryPinned",
+    type: "event",
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
         indexed: false,
         internalType: "uint8",
         name: "newFutureExpirationDatesCount",
@@ -427,6 +463,19 @@ export const HashPowerFuturesAbi = [
       },
     ],
     name: "MakerFeeBpsUpdated",
+    type: "event",
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: false,
+        internalType: "address",
+        name: "markOracle",
+        type: "address",
+      },
+    ],
+    name: "MarkOracleUpdated",
     type: "event",
   },
   {
@@ -908,6 +957,19 @@ export const HashPowerFuturesAbi = [
   },
   {
     inputs: [],
+    name: "NO_GO_HALF_WIDTH",
+    outputs: [
+      {
+        internalType: "uint256",
+        name: "",
+        type: "uint256",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
     name: "QUANTITY_DECIMALS",
     outputs: [
       {
@@ -1036,6 +1098,29 @@ export const HashPowerFuturesAbi = [
   },
   {
     inputs: [],
+    name: "deliverySchedule",
+    outputs: [
+      {
+        internalType: "uint256",
+        name: "currentSlot",
+        type: "uint256",
+      },
+      {
+        internalType: "uint256",
+        name: "pinnedCount",
+        type: "uint256",
+      },
+      {
+        internalType: "uint256",
+        name: "previousExpiry",
+        type: "uint256",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
     name: "expirationIntervalDays",
     outputs: [
       {
@@ -1136,6 +1221,86 @@ export const HashPowerFuturesAbi = [
         internalType: "uint256[]",
         name: "",
         type: "uint256[]",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      {
+        internalType: "address",
+        name: "_participant",
+        type: "address",
+      },
+    ],
+    name: "getExposureView",
+    outputs: [
+      {
+        components: [
+          {
+            internalType: "int256",
+            name: "netPositionExposure",
+            type: "int256",
+          },
+          {
+            internalType: "int256",
+            name: "unrealizedPnl",
+            type: "int256",
+          },
+          {
+            internalType: "int256",
+            name: "pendingFunding",
+            type: "int256",
+          },
+          {
+            internalType: "uint256",
+            name: "buyOrderExposure",
+            type: "uint256",
+          },
+          {
+            internalType: "uint256",
+            name: "sellOrderExposure",
+            type: "uint256",
+          },
+          {
+            internalType: "uint256",
+            name: "buyOrderFillLoss",
+            type: "uint256",
+          },
+          {
+            internalType: "uint256",
+            name: "sellOrderFillLoss",
+            type: "uint256",
+          },
+        ],
+        internalType: "struct ILinearMarket.ExposureView",
+        name: "view_",
+        type: "tuple",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      {
+        internalType: "uint256",
+        name: "_expirationAt",
+        type: "uint256",
+      },
+    ],
+    name: "getMarkRange",
+    outputs: [
+      {
+        internalType: "uint256",
+        name: "low",
+        type: "uint256",
+      },
+      {
+        internalType: "uint256",
+        name: "high",
+        type: "uint256",
       },
     ],
     stateMutability: "view",
@@ -1479,8 +1644,8 @@ export const HashPowerFuturesAbi = [
   {
     inputs: [
       {
-        internalType: "contract AggregatorV3Interface",
-        name: "_priceOracle",
+        internalType: "contract IMarkRangeOracle",
+        name: "_oracle",
         type: "address",
       },
       {
@@ -1640,6 +1805,19 @@ export const HashPowerFuturesAbi = [
   },
   {
     inputs: [],
+    name: "markOracle",
+    outputs: [
+      {
+        internalType: "contract IMarkRangeOracle",
+        name: "",
+        type: "address",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
     name: "minimumPriceIncrement",
     outputs: [
       {
@@ -1662,6 +1840,24 @@ export const HashPowerFuturesAbi = [
       },
     ],
     stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "pinExpiry",
+    outputs: [
+      {
+        internalType: "uint256",
+        name: "slot",
+        type: "uint256",
+      },
+      {
+        internalType: "uint256",
+        name: "expiry",
+        type: "uint256",
+      },
+    ],
+    stateMutability: "nonpayable",
     type: "function",
   },
   {
@@ -1834,7 +2030,7 @@ export const HashPowerFuturesAbi = [
   {
     inputs: [
       {
-        internalType: "contract AggregatorV3Interface",
+        internalType: "contract IMarkRangeOracle",
         name: "_oracle",
         type: "address",
       },

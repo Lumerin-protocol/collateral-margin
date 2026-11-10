@@ -39,13 +39,24 @@ export interface RestingOrders {
  * expiry's own price, and sums the bounds; pooling expiries first would give a
  * different (larger) bound than the engine sees.
  */
-export interface FuturesRestingOrders extends RestingOrders {
+export interface FuturesRestingOrders extends RestingOrders, MarkRange {
   expirationAt: bigint;
   /**
    * `Futures.settlementPrice(expirationAt)`; `0` until the expiry settles. Non-zero
    * pins this expiry's fill loss at that price instead of the live mark.
    */
   settlementPrice: bigint;
+}
+
+/**
+ * A futures expiry's mark range at the snapshot (`Futures.getMarkRange`, token decimals):
+ * longs and bids are valued at `low`, shorts and asks at `high`. They differ from the index
+ * for a date settling after a halving (both about half of it) or inside the window around
+ * its estimate (`low` post-halving, `high` the index). Absent, both are the index.
+ */
+export interface MarkRange {
+  low?: bigint;
+  high?: bigint;
 }
 
 /**
@@ -67,6 +78,12 @@ export interface AccountSnapshot {
   balance: bigint;
   /** Unpaid loss owed to the insurance fund (token decimals). */
   accountDebt: bigint;
+  /**
+   * The index the marks below were read at (`HashpriceUSD` in token decimals, futures'
+   * `getMarketPrice()`). Every mark is the index times a schedule factor, so at index `P` a
+   * mark read as `m` is `m · P / index`. Absent, every leg marks at the index.
+   */
+  index?: bigint;
 
   /** Perps single netted position (zero-qty if user has no perp exposure). */
   perp: {
@@ -78,6 +95,14 @@ export interface AccountSnapshot {
     orders: RestingOrders;
     /** `max(0, getRiskView(user).pendingFunding)` snapshot (token decimals). */
     fundingOwed: bigint;
+    /** Perps `getMarketPrice()` at the snapshot: the glide on `HashpriceGlideUSD`. Absent, the index. */
+    mark?: bigint;
+    /**
+     * `getPendingDrift(user)` (token decimals, + = the user gains): the glide's scheduled
+     * decline paid to longs and not yet folded into the entry value. Part of the position's
+     * PnL, held constant in P and shared out pro rata when the position is closed.
+     */
+    pendingDrift?: bigint;
   };
 
   /**
@@ -85,28 +110,31 @@ export interface AccountSnapshot {
    * `(user, expirationAt)`: signed `netQuantity` (whole contracts) +
    * `netEntryValue` (token decimals) so unrealized PnL is
    * `mark * netQuantity - netEntryValue`, where `mark` is the expiry's pinned
-   * settlement price once it has one and the live index until then.
+   * settlement price once it has one and until then its live mark (`low` for a long,
+   * `high` for a short).
    */
   futures: {
-    positions: Array<{
-      expirationAt: bigint;
-      /** Signed whole contracts (+long / −short). */
-      netQuantity: bigint;
-      /** Token decimals; `sum(fillPrice * signedFillQty)`. */
-      netEntryValue: bigint;
-      /**
-       * `Futures.settlementPrice(expirationAt)`; `0` until the expiry settles.
-       *
-       * Non-zero means the leg is settled but not yet swept out of
-       * `participantActiveExpirationAts`, which `getRiskView` treats specially:
-       * the delta leaves `netPositionDelta` (the price is pinned, so there is no
-       * directional risk left) while the PnL stays marked at this frozen price
-       * rather than the live one. Both effects are constant in P, so a settled
-       * leg drops out of the stress term and contributes only an offset to the
-       * unrealized-PnL term.
-       */
-      settlementPrice: bigint;
-    }>;
+    positions: Array<
+      MarkRange & {
+        expirationAt: bigint;
+        /** Signed whole contracts (+long / −short). */
+        netQuantity: bigint;
+        /** Token decimals; `sum(fillPrice * signedFillQty)`. */
+        netEntryValue: bigint;
+        /**
+         * `Futures.settlementPrice(expirationAt)`; `0` until the expiry settles.
+         *
+         * Non-zero means the leg is settled but not yet swept out of
+         * `participantActiveExpirationAts`, which `getRiskView` treats specially:
+         * the delta leaves `netPositionDelta` (the price is pinned, so there is no
+         * directional risk left) while the PnL stays marked at this frozen price
+         * rather than the live one. Both effects are constant in P, so a settled
+         * leg drops out of the stress term and contributes only an offset to the
+         * unrealized-PnL term.
+         */
+        settlementPrice: bigint;
+      }
+    >;
     /** Resting futures books, one per expiry in the tradable window that has orders. */
     orders: FuturesRestingOrders[];
   };

@@ -623,6 +623,28 @@ resource "aws_cloudwatch_metric_alarm" "vault_backing_gap" {
   })
 }
 
+resource "aws_cloudwatch_metric_alarm" "vault_unpinned_expiry" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-vault-unpinned-expiry-${local.vault_mon_env}"
+  alarm_description   = "A tradable futures delivery slot has had no pinned date for an hour. The keeper's delivery sweep pins the next date daily (Futures.pinExpiry, permissionless) and the venue pins it on the first trade, so until then getExpirationDates shows a date that may still move clear of the halving. Check the keeper is running and its delivery sweep logs. Warning only."
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 12
+  metric_name         = "UnpinnedTradableSlots"
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Minimum"
+  threshold           = 1
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_warning_actions
+  ok_actions          = local.vault_warning_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Vault Unpinned Expiry"
+    Capability = "Monitoring"
+  })
+}
+
 resource "aws_cloudwatch_metric_alarm" "vault_margin_engine_unset" {
   count               = var.vault_monitoring.create ? 1 : 0
   provider            = aws.use1
@@ -1068,7 +1090,7 @@ resource "aws_cloudwatch_metric_alarm" "book_mark_drift" {
   count               = var.vault_monitoring.create ? 1 : 0
   provider            = aws.use1
   alarm_name          = "${local.shortname}-book-mark-drift-${local.vault_mon_env}"
-  alarm_description   = "A two-sided book's mid has been more than ${var.vault_monitoring.book_drift_warn_bps} bps from the mark for 15 minutes. The market maker is leaving stale quotes that takers can trade against. Check the market-maker state panel for a quarantined market, gas throttle, or paused placements, then the market-maker log. Warning only."
+  alarm_description   = "A two-sided book's mid has been more than ${var.vault_monitoring.book_drift_warn_bps} bps from its mark for 15 minutes (perps: the halving glide; a futures date: the middle of its mark range, about half the index once it settles after the halving). The market maker is leaving stale quotes that takers can trade against, or the market disagrees with the halving schedule. Check the market-maker state panel for a quarantined market, gas throttle, or paused placements, then the market-maker log. Warning only."
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = 3
   metric_name         = "BookMaxMidDriftBps"
@@ -1427,13 +1449,16 @@ resource "aws_cloudwatch_dashboard" "vault" {
           width  = 12
           height = 6
           properties = {
-            title  = "Days until the Bitcoin halving"
+            title  = "Bitcoin halving and the perps glide"
             region = var.default_region
             period = 3600
             view   = "singleValue"
             metrics = [
               [local.vault_mon_ns, "BtcDaysUntilHalving", { label = "Days", stat = "Minimum" }],
               [local.vault_mon_ns, "BtcBlocksUntilHalving", { label = "Blocks", stat = "Minimum" }],
+              [local.vault_mon_ns, "GlideProgressPct", { label = "Glide progress %", stat = "Maximum" }],
+              [local.vault_mon_ns, "HalvingStepPct", { label = "Halving step %", stat = "Average" }],
+              [local.vault_mon_ns, "PerpsMarkDiscountPct", { label = "Perps mark below index %", stat = "Maximum" }],
             ]
           }
         },

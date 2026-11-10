@@ -333,6 +333,7 @@ export class DeliveryCoordinator {
   }
 
   async sweep(): Promise<void> {
+    await this.pinDueExpiries();
     const latestBlock = await this.chain.publicClient.getBlock();
     const nowSec = latestBlock.timestamp;
     const candidates: TrackedPosition[] = [];
@@ -593,6 +594,86 @@ export class DeliveryCoordinator {
     }
   }
 
+  /**
+   * Pin the venue's next delivery date while a slot up to one past the tradable window is
+   * unpinned (N28: a date near the estimated halving is listed at the nearer edge of the no-go
+   * zone). The venue pins a due slot itself on the first trade after a roll; this only fixes the
+   * date before anyone trades it, so the UI and the market maker see the final one. One view read
+   * per sweep; a transaction about once a month.
+   */
+  async pinDueExpiries(): Promise<void> {
+    let schedule: readonly [bigint, bigint, bigint];
+    let count: number;
+    try {
+      [schedule, count] = await Promise.all([
+        this.chain.publicClient.readContract({
+          address: this.config.futures.address,
+          abi: HashPowerFuturesAbi,
+          functionName: "deliverySchedule",
+        }) as Promise<readonly [bigint, bigint, bigint]>,
+        this.chain.publicClient.readContract({
+          address: this.config.futures.address,
+          abi: HashPowerFuturesAbi,
+          functionName: "futureExpirationDatesCount",
+        }) as Promise<number>,
+      ]);
+    } catch (err) {
+      this.logger.warn({ err }, "delivery: could not read the delivery schedule");
+      return;
+    }
+    const [currentSlot, pinnedCount] = schedule;
+    // Pinnable up to one slot past the window; pin until the whole window plus one is fixed.
+    for (let pins = 0; pinnedCount + BigInt(pins) <= currentSlot + BigInt(count); pins++) {
+      type SimParams = Parameters<
+        typeof this.chain.publicClient.simulateContract
+      >[0];
+      type SimReturn = Awaited<
+        ReturnType<typeof this.chain.publicClient.simulateContract>
+      >;
+      let sim: SimReturn;
+      try {
+        sim = (await this.chain.publicClient.simulateContract({
+          address: this.config.futures.address,
+          abi: HashPowerFuturesAbi,
+          functionName: "pinExpiry",
+          account: this.chain.account,
+        } as unknown as SimParams)) as SimReturn;
+      } catch (err) {
+        // Raced by the venue (a trade pinned it) or another keeper: nothing left to pin.
+        if (decodeRecoverableRevert(err) === "NothingToPin") return;
+        throw err;
+      }
+      const [slot, expiry] = sim.result as unknown as readonly [bigint, bigint];
+      if (this.config.keeper.dryRun) {
+        this.logger.info(
+          { slot: slot.toString(), expiry: expiry.toString() },
+          "[dryRun] would call pinExpiry",
+        );
+        return;
+      }
+      type WriteParams = Parameters<
+        typeof this.chain.walletClient.writeContract
+      >[0];
+      const hash = await this.chain.walletClient.writeContract(
+        sim.request as unknown as WriteParams,
+      );
+      const receipt = await this.chain.publicClient.waitForTransactionReceipt({
+        hash,
+        confirmations: this.config.coordinator.confirmationBlocks,
+      });
+      this.logger.info(
+        {
+          slot: slot.toString(),
+          expiry: expiry.toString(),
+          hash,
+          blockNumber: receipt.blockNumber.toString(),
+          ...formatGasCost(receipt, this.ethUsdFeed),
+        },
+        "delivery: pinExpiry confirmed",
+      );
+    }
+  }
+
   private async attemptSettle(pos: TrackedPosition): Promise<void> {
     const args = [pos.user, pos.expirationAt] as const;
 
@@ -759,13 +840,15 @@ type RecoverableRevert =
   | "PositionNotExists"
   | "PositionExpirationNotStartedYet"
   | "OracleStale"
-  | "InvalidOracle";
+  | "InvalidOracle"
+  | "NothingToPin";
 
 const RECOVERABLE_REVERTS = new Set<RecoverableRevert>([
   "PositionNotExists",
   "PositionExpirationNotStartedYet",
   "OracleStale",
   "InvalidOracle",
+  "NothingToPin",
 ]);
 
 function decodeRecoverableRevert(err: unknown): RecoverableRevert | undefined {

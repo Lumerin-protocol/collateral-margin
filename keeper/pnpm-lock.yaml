@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@hashpower/portfolio-margin':
-        specifier: github:Lumerin-protocol/collateral-margin#99066995aaa6b7463d4121650a73630df168e978&path:/portfolio-margin
-        version: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/99066995aaa6b7463d4121650a73630df168e978#path:/portfolio-margin
+        specifier: github:Lumerin-protocol/collateral-margin#c61b5798c45cb1aa93ceff4f7938420fc730ea32&path:/portfolio-margin
+        version: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/c61b5798c45cb1aa93ceff4f7938420fc730ea32#path:/portfolio-margin
       amaro:
         specifier: ^1.1.9
         version: 1.1.10
@@ -18,8 +18,8 @@ importers:
         specifier: github:Lumerin-protocol/collateral-margin#1a0641f76f9d98ea2da09247eee4b9d7fc45debe&path:/contracts/abi
         version: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/1a0641f76f9d98ea2da09247eee4b9d7fc45debe#path:/contracts/abi
       derivatives-marketplace-abi:
-        specifier: github:Lumerin-protocol/derivatives-marketplace#207a1f0724fcc4b6c1d9b9d38b8771b4a815886f&path:/contracts/abi
-        version: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/207a1f0724fcc4b6c1d9b9d38b8771b4a815886f#path:/contracts/abi
+        specifier: github:Lumerin-protocol/derivatives-marketplace#8e2331ef5114528c0dac6148456d9986be9a99d8&path:/contracts/abi
+        version: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/8e2331ef5114528c0dac6148456d9986be9a99d8#path:/contracts/abi
       pino:
         specifier: ^10.3.1
         version: 10.3.1
@@ -102,9 +102,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@hashpower/portfolio-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/99066995aaa6b7463d4121650a73630df168e978#path:/portfolio-margin':
-    resolution: {gitHosted: true, integrity: sha512-fu7q/RfuxY9FtoRqUX/adQ1EJImtIG0QNGQgSnVYhP46eIQxrLx0SyBNlu1O1ZkJOBx0jdfY8udETUyiY4avZg==, path: /portfolio-margin, tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/99066995aaa6b7463d4121650a73630df168e978}
-    version: 0.5.0
+  '@hashpower/portfolio-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/c61b5798c45cb1aa93ceff4f7938420fc730ea32#path:/portfolio-margin':
+    resolution: {gitHosted: true, integrity: sha512-rWq6fT6wrdMeLcQrp7Vhl5uyzZMXaSM0uz3nzlczQAaGixGrSUYC3Uh2GaJsQoMl216O1eHBObusunlpXVjeXw==, path: /portfolio-margin, tarball: https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/c61b5798c45cb1aa93ceff4f7938420fc730ea32}
+    version: 0.6.0
     engines: {node: '>=22'}
 
   '@noble/ciphers@1.3.0':
@@ -283,8 +283,8 @@ packages:
   dateformat@4.6.3:
     resolution: {integrity: sha512-2P0p0pFGzHS5EMnhdxQi7aJN+iMheud0UhG4dlE1DLAlvL8JHjJJTX/CSm4JXwV0Ka5nGk3zC5mcb5bUQUxxMA==}
 
-  derivatives-marketplace-abi@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/207a1f0724fcc4b6c1d9b9d38b8771b4a815886f#path:/contracts/abi:
-    resolution: {gitHosted: true, integrity: sha512-7S+6Dd1G2CgJn9GrdIv+jUTyV72+uGrCPZozlL5kyZ69oKdSmCRSiDz4Kd5XisoqZN3OC/xBFcmoOhEr2ptGEA==, path: /contracts/abi, tarball: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/207a1f0724fcc4b6c1d9b9d38b8771b4a815886f}
+  derivatives-marketplace-abi@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/8e2331ef5114528c0dac6148456d9986be9a99d8#path:/contracts/abi:
+    resolution: {gitHosted: true, integrity: sha512-Z451l9+l6se/1FUcd35WLMyiR0o2iYwrAtzCljh3KLaaK5DohtKdsknnL96YWK4qEXBSnxrhYHDsbQJUPx39hA==, path: /contracts/abi, tarball: https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/8e2331ef5114528c0dac6148456d9986be9a99d8}
     version: 0.0.0
 
   end-of-stream@1.4.5:
@@ -451,7 +451,7 @@ snapshots:
   '@biomejs/cli-win32-x64@2.4.13':
     optional: true
 
-  '@hashpower/portfolio-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/99066995aaa6b7463d4121650a73630df168e978#path:/portfolio-margin': {}
+  '@hashpower/portfolio-margin@https://codeload.github.com/Lumerin-protocol/collateral-margin/tar.gz/c61b5798c45cb1aa93ceff4f7938420fc730ea32#path:/portfolio-margin': {}
 
   '@noble/ciphers@1.3.0': {}
 
@@ -554,7 +554,7 @@ snapshots:
 
   dateformat@4.6.3: {}
 
-  derivatives-marketplace-abi@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/207a1f0724fcc4b6c1d9b9d38b8771b4a815886f#path:/contracts/abi: {}
+  derivatives-marketplace-abi@https://codeload.github.com/Lumerin-protocol/derivatives-marketplace/tar.gz/8e2331ef5114528c0dac6148456d9986be9a99d8#path:/contracts/abi: {}
 
   end-of-stream@1.4.5:
     dependencies:
