@@ -42,8 +42,6 @@ import type pino from "pino";
 import type { InstrumentAdapter, OrderIntent } from "./adapter.ts";
 import type { CollateralTracker } from "./collateralTracker.ts";
 import type { InventoryManager } from "./inventoryManager.ts";
-import type { GasTracker } from "./gasTracker.ts";
-import type { OracleTracker } from "./oracleTracker.ts";
 import { RollingBudget, bigAbs } from "./math.ts";
 import type { ErrorInfo } from "./errors.ts";
 
@@ -80,23 +78,17 @@ export class RiskManager {
    */
   private readonly inventory: InventoryManager | null;
   private readonly collateral: CollateralTracker;
-  private readonly gas: GasTracker;
-  private readonly oracle: OracleTracker;
   private readonly logger: pino.Logger;
 
   constructor(
     cfg: RiskManagerConfig,
     inventory: InventoryManager | null,
     collateral: CollateralTracker,
-    gas: GasTracker,
-    oracle: OracleTracker,
     logger: pino.Logger,
   ) {
     this.cfg = cfg;
     this.inventory = inventory;
     this.collateral = collateral;
-    this.gas = gas;
-    this.oracle = oracle;
     this.logger = logger.child({ component: "risk" });
     this.gasHourlyBudget = new RollingBudget(60 * 60 * 1000);
     this.gasDailyBudget = new RollingBudget(24 * 60 * 60 * 1000);

@@ -9,8 +9,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { perpsRootSchema } from "../src/apps/perps/config.ts";
-import { futuresRootSchema } from "../src/apps/futures/config.ts";
 import { portfolioRootSchema } from "../src/apps/portfolio/config.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -82,8 +80,6 @@ function relaxForEnvInterpolation(node: unknown): unknown {
 }
 
 const targets = [
-  { name: "perps", schema: perpsRootSchema, title: "Titan Market Maker - Perps config" },
-  { name: "futures", schema: futuresRootSchema, title: "Titan Market Maker - Futures config" },
   { name: "portfolio", schema: portfolioRootSchema, title: "Titan Market Maker - Portfolio config" },
 ] as const;
 
@@ -96,6 +92,5 @@ for (const t of targets) {
   };
   const path = resolve(outDir, `${t.name}.json`);
   writeFileSync(path, `${JSON.stringify(json, null, 2)}\n`, "utf8");
-  // biome-ignore lint/suspicious/noConsole: this is a CLI script
   console.log(`wrote ${path}`);
 }

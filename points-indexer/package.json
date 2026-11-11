@@ -20,7 +20,7 @@
     "test": "graph test -v 0.6.0",
     "test:integration": "hardhat test nodejs",
     "test:integration:debug": "MATCHSTICK_VERBOSE=true hardhat test nodejs",
-    "lint": "biome lint .",
+    "lint": "biome lint --error-on-warnings .",
     "graph:api": "open http://localhost:8030/graphql/playground",
     "lint:fix": "biome check --write .",
     "typecheck": "tsgo --noEmit -p integration/tsconfig.json"

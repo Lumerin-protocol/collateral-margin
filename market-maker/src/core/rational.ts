@@ -35,17 +35,15 @@ export function sqrt(x: Fraction, precisionBits = 64): Fraction {
   if (x.s < 0) throw new RangeError("sqrt: negative");
   if (x.n === 0n) return new Fraction(0n);
 
-  // x = n/d  =>  sqrt(x) ≈ floor(sqrt(n * 4^b * d)) / (2^b * d)
   // We compute as bigint to avoid any Number conversion.
   const b = BigInt(precisionBits);
   const scale = 1n << b; // 2^b
   const scaleSquared = scale * scale; // 4^b
 
-  // floor(sqrt(n * 4^b / d)) is what we want; multiply by d to get exact integer
-  // sqrt(n/d) * 2^b = sqrt(n * 4^b / d) = sqrt(n * 4^b * d) / d
-  const radicand = x.n * scaleSquared * x.d;
-  const root = bigintSqrtFloor(radicand);
-  return new Fraction(root, scale * x.d);
+  // Keep the denominator at 2^b: carrying x.d along makes every later sum and
+  // conversion pay for its bit length.
+  const root = bigintSqrtFloor((x.n * scaleSquared) / x.d);
+  return new Fraction(root, scale);
 }
 
 /**
@@ -77,10 +75,11 @@ export function ln(x: Fraction, precisionBits = 64): Fraction {
   const y = new Fraction(n, d);
 
   const lnY = atanhSeries(y, precisionBits);
-  if (k === 0n) return lnY;
-
-  const ln2 = ln2Cached(precisionBits);
-  return lnY.add(ln2.mul(new Fraction(k)));
+  const exact = k === 0n ? lnY : lnY.add(ln2Cached(precisionBits).mul(new Fraction(k)));
+  // The series sum's denominator grows with every term; round to 2^b so sums of
+  // many logs (realized variance) stay small.
+  const scale = 1n << BigInt(precisionBits);
+  return new Fraction(toBigint(exact, scale), scale);
 }
 
 /**

@@ -29,8 +29,6 @@ RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 RUN addgroup -S maker && adduser -S maker -G maker
 USER maker
 
-# MAKER_APP selects the entrypoint:
-#   MAKER_APP=perps   -> src/apps/perps/main.ts
-#   MAKER_APP=futures -> src/apps/futures/main.ts
+# MAKER_APP=portfolio runs src/apps/portfolio/main.ts.
 # MAKER_CONFIG points to the YAML file inside the container.
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

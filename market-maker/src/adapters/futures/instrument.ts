@@ -39,7 +39,6 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
   readonly expirationAt: bigint;
 
   private tickCache: bigint | null = null;
-  private marginPercentCache: bigint | null = null;
   /** This expiry's mark range from the latest `getMarkPrice()`. */
   private markRangeCache: readonly [bigint, bigint] | null = null;
 
@@ -96,11 +95,7 @@ export class FuturesInstrumentAdapter implements InstrumentAdapter {
 
   async getContext(): Promise<InstrumentContext> {
     // Eagerly cache both margin inputs so `estimateOrderMargin` is synchronous.
-    const [{ marginPct }] = await Promise.all([
-      this.venue.getMarginInputs(),
-      this.venue.fetchImSpotShock(),
-    ]);
-    this.marginPercentCache = marginPct;
+    await Promise.all([this.venue.getMarginInputs(), this.venue.fetchImSpotShock()]);
     return {
       expirationAt: Number(this.expirationAt),
     };

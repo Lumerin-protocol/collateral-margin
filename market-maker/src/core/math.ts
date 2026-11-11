@@ -89,11 +89,10 @@ export const bigMax = (a: bigint, b: bigint) => (a > b ? a : b);
 /**
  * Collapse a Fraction to a JS number for logging and health output.
  *
- * Diagnostic only — never use in trading math. Realized-vol Fractions carry
- * 1000+ bit numerators and denominators (`sqrt` at 48-bit precision over a
- * 60-sample window), so a naive `valueOf()` overflows both sides to Infinity
- * and yields NaN, which JSON-serialises as `null`. Simplifying first collapses
- * the magnitude before the cast.
+ * Diagnostic only — never use in trading math. A Fraction with 1000+ bit
+ * numerator and denominator overflows both sides of a naive `valueOf()` to
+ * Infinity and yields NaN, which JSON-serialises as `null`. Simplifying first
+ * collapses the magnitude before the cast.
  */
 export function fractionToNumber(value: Fraction): number {
   const v = value.simplify(1e-12);

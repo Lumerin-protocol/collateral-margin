@@ -17,7 +17,7 @@
     "pretest:integration": "pnpm node ./scripts/compile-siblings.ts",
     "test:integration": "pnpm node --test --test-force-exit --test-concurrency=1 'tests/integration/**/*.test.ts'",
     "typecheck": "tsc --noEmit",
-    "lint": "biome lint .",
+    "lint": "biome lint --error-on-warnings .",
     "docker": "docker build -t collateral-margin-keeper .",
     "lint:fix": "biome check --write ."
   },

@@ -19,8 +19,10 @@ describe("portfolio app config smoke", () => {
         PERPS_ADDRESS: "0x1234567890123456789012345678901234567890",
         FUTURES_ADDRESS: "0x2345678901234567890123456789012345678901",
         HASHPRICE_ORACLE_SUBGRAPH_URL: "https://stub.example/subgraph",
+        ETH_PRICE_FEED_ADDRESS: "0x3456789012345678901234567890123456789012",
       };
       const cfg = loadPortfolioConfig({ path, env });
+      assert.equal(cfg.risk.usdGasAccounting, e === "prd");
 
       const perps = cfg.venues.find((v) => v.kind === "perps");
       const futures = cfg.venues.find((v) => v.kind === "futures");

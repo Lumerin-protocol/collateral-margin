@@ -82,6 +82,6 @@ export function secondsToMs(input: unknown, field: string): number {
   if (fracPart.length > 3) {
     throw new ConfigError(`${field}: sub-millisecond precision not supported in "${str}"`);
   }
-  const padded = (fracPart + "000").slice(0, 3);
+  const padded = `${fracPart}000`.slice(0, 3);
   return Number(intPart) * 1000 + Number(padded);
 }

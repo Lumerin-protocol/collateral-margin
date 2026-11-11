@@ -21,7 +21,7 @@
     "node": "node --import=amaro/strip",
     "test": "pnpm node --test --test-concurrency=1 'tests/*.test.ts'",
     "typecheck": "tsc --noEmit",
-    "lint": "biome lint ."
+    "lint": "biome lint --error-on-warnings ."
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.13",
