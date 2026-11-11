@@ -10,7 +10,6 @@ function makeLogger(): never {
 
 function makeConfig(overrides: Partial<GasTrackerConfig> = {}): GasTrackerConfig {
   return {
-    ethPriceFeedMaxAgeSec: 3600,
     gasSpikeThresholdPct: 200,
     gasCapMultiplier: 2.0,
     ...overrides,
@@ -131,7 +130,7 @@ describe("GasTracker ETH price feed", () => {
   }
 
   const feedCfg = makeConfig({
-    ethPriceFeedAddress: "0x0000000000000000000000000000000000000fee",
+    ethPriceFeed: { address: "0x0000000000000000000000000000000000000fee", maxAgeSec: 3600 },
   });
 
   it("scales an 8-decimal feed answer down to 6-decimal USDC terms", async () => {
@@ -183,8 +182,7 @@ describe("GasTracker ETH price feed", () => {
     const tracker = new GasTracker(
       client,
       makeConfig({
-        ethPriceFeedAddress: "0x0000000000000000000000000000000000000fee",
-        ethPriceFeedMaxAgeSec: 3600,
+        ethPriceFeed: { address: "0x0000000000000000000000000000000000000fee", maxAgeSec: 3600 },
       }),
       makeLogger(),
     );

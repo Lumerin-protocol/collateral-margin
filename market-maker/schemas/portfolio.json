@@ -28,7 +28,8 @@
           }
         },
         "required": [
-          "ethPriceFeed"
+          "ethPriceFeed",
+          "ethPriceFeedMaxAgeSec"
         ]
       }
     }
@@ -142,8 +143,7 @@
       "type": "object",
       "required": [
         "name",
-        "rpcUrl",
-        "ethPriceFeedMaxAgeSec"
+        "rpcUrl"
       ],
       "properties": {
         "name": {
@@ -188,8 +188,7 @@
               "description": "Environment variable interpolation (resolved at startup)"
             }
           ],
-          "description": "Seconds. An ETH/USD reading older than this is rejected and the last accepted price kept. Chainlink ETH/USD on Base has a 20-minute heartbeat.",
-          "default": 3600
+          "description": "Seconds. Required while risk.usdGasAccounting is on. An ETH/USD reading older than this is rejected and the last accepted price kept. Chainlink ETH/USD on Base has a 20-minute heartbeat."
         }
       }
     },

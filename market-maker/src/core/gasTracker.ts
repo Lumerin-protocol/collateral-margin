@@ -4,12 +4,16 @@ import Fraction from "fraction.js";
 import { RollingWindow } from "./math.ts";
 
 export interface GasTrackerConfig {
-  /** Chainlink aggregator address; absent only while USD gas accounting is off, and ethPriceUsd then stays 0. */
-  ethPriceFeedAddress?: Address;
-  /** Readings older than this are rejected and the last accepted price kept. */
-  ethPriceFeedMaxAgeSec: number;
+  /** Chainlink ETH/USD aggregator; absent only while USD gas accounting is off, and ethPriceUsd then stays 0. */
+  ethPriceFeed?: EthPriceFeed;
   gasSpikeThresholdPct: number;
   gasCapMultiplier: number;
+}
+
+export interface EthPriceFeed {
+  address: Address;
+  /** Readings older than this are rejected and the last accepted price kept. */
+  maxAgeSec: number;
 }
 
 export const USD_GAS_ACCOUNTING_OFF =
@@ -76,8 +80,8 @@ export class GasTracker {
 
     this.isGasSpiking = this.gasSpikePct.compare(new Fraction(this.config.gasSpikeThresholdPct)) > 0;
 
-    if (this.config.ethPriceFeedAddress) {
-      await this.updateEthPrice(this.config.ethPriceFeedAddress);
+    if (this.config.ethPriceFeed) {
+      await this.updateEthPrice(this.config.ethPriceFeed);
     }
 
     this.logger.debug(
@@ -118,7 +122,7 @@ export class GasTracker {
 
   /** Whether gas is priced in USD; reported on /health. */
   get usdGasAccounting(): boolean {
-    return this.config.ethPriceFeedAddress !== undefined;
+    return this.config.ethPriceFeed !== undefined;
   }
 
   /** Calibrate gas estimates against a candidate transaction. Adapters provide the tx. */
@@ -134,26 +138,26 @@ export class GasTracker {
     }
   }
 
-  private async updateEthPrice(feed: Address): Promise<void> {
+  private async updateEthPrice(feed: EthPriceFeed): Promise<void> {
     try {
       const [[, answer, , updatedAt], decimals] = await this.publicClient.multicall({
         allowFailure: false,
         contracts: [
           {
-            address: feed,
+            address: feed.address,
             abi: aggregatorV3InterfaceAbi,
             functionName: "latestRoundData",
           },
           {
-            address: feed,
+            address: feed.address,
             abi: aggregatorV3InterfaceAbi,
             functionName: "decimals",
           },
         ],
       });
       const ageSec = Math.floor(Date.now() / 1000) - Number(updatedAt);
-      if (ageSec > this.config.ethPriceFeedMaxAgeSec) {
-        this.logger.warn({ ageSec, maxAgeSec: this.config.ethPriceFeedMaxAgeSec }, "ETH price feed stale; keeping last price");
+      if (ageSec > feed.maxAgeSec) {
+        this.logger.warn({ ageSec, maxAgeSec: feed.maxAgeSec }, "ETH price feed stale; keeping last price");
         return;
       }
       if (answer > 0n) {

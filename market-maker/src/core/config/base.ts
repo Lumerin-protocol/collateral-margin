@@ -7,6 +7,7 @@ import addFormats from "ajv-formats";
 import type { Address, Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { ConfigError } from "../errors.ts";
+import type { EthPriceFeed } from "../gasTracker.ts";
 import { parseUsd, secondsToMs } from "./units.ts";
 
 /** USDC base unit decimals — every USD-denominated config field uses this. */
@@ -70,12 +71,13 @@ export const networkSchema = Type.Object(
           "Chainlink ETH/USD aggregator. Required while risk.usdGasAccounting is on; empty otherwise.",
       }),
     ),
-    ethPriceFeedMaxAgeSec: Type.Integer({
-      minimum: 1,
-      default: 3600,
-      description:
-        "Seconds. An ETH/USD reading older than this is rejected and the last accepted price kept. Chainlink ETH/USD on Base has a 20-minute heartbeat.",
-    }),
+    ethPriceFeedMaxAgeSec: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        description:
+          "Seconds. Required while risk.usdGasAccounting is on. An ETH/USD reading older than this is rejected and the last accepted price kept. Chainlink ETH/USD on Base has a 20-minute heartbeat.",
+      }),
+    ),
   },
   { ...Closed, description: "Network connection settings." },
 );
@@ -442,8 +444,9 @@ export function parseOracleConfig(raw: RawOracle): ParsedOracleConfig {
 
 /**
  * Root-schema rule: unless `risk.usdGasAccounting` is explicitly false,
- * `network.ethPriceFeed` must be a non-empty address, so USD gas accounting is
- * never off by omission. No defaults inside, for `stripCombinatorDefaults`.
+ * `network.ethPriceFeed` must be a non-empty address and `network.ethPriceFeedMaxAgeSec`
+ * set, so USD gas accounting is never off by omission. No defaults inside, for
+ * `stripCombinatorDefaults`.
  */
 export const usdGasAccountingNeedsFeed = {
   if: {
@@ -454,17 +457,21 @@ export const usdGasAccountingNeedsFeed = {
   },
   else: {
     properties: {
-      network: { properties: { ethPriceFeed: { minLength: 1 } }, required: ["ethPriceFeed"] },
+      network: {
+        properties: { ethPriceFeed: { minLength: 1 } },
+        required: ["ethPriceFeed", "ethPriceFeedMaxAgeSec"],
+      },
     },
   },
 };
 
 /** The ETH/USD feed the gas tracker reads; `undefined` while USD gas accounting is off. */
 export function ethPriceFeedFor(cfg: {
-  network: { ethPriceFeed?: "" | Address };
+  network: { ethPriceFeed?: "" | Address; ethPriceFeedMaxAgeSec?: number };
   risk: { usdGasAccounting: boolean };
-}): Address | undefined {
-  return cfg.risk.usdGasAccounting && cfg.network.ethPriceFeed ? cfg.network.ethPriceFeed : undefined;
+}): EthPriceFeed | undefined {
+  const { ethPriceFeed: address, ethPriceFeedMaxAgeSec: maxAgeSec } = cfg.network;
+  return cfg.risk.usdGasAccounting && address && maxAgeSec !== undefined ? { address, maxAgeSec } : undefined;
 }
 
 export interface LoadConfigOpts<TParsed, TRaw = unknown> {

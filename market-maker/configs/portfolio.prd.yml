@@ -25,6 +25,7 @@ network:
   name: base
   rpcUrl: https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}
   ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
+  ethPriceFeedMaxAgeSec: 3600
 
 venues:
   - kind: perps
@@ -70,6 +71,7 @@ risk:
   maxDailyLossUsd: 300
   maxGasBudgetPerHourUsd: 50
   maxGasBudgetPerDayUsd: 500
+  usdGasAccounting: true
   gasSpikeThresholdPct: 200
   gasPenaltyBps: 5
   urgentRequoteThresholdTicks: 10

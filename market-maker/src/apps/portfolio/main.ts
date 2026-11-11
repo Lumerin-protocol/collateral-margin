@@ -226,8 +226,7 @@ async function main(): Promise<void> {
   const gas = new GasTracker(
     network.publicClient,
     {
-      ethPriceFeedAddress: ethPriceFeedFor(config),
-      ethPriceFeedMaxAgeSec: config.network.ethPriceFeedMaxAgeSec,
+      ethPriceFeed: ethPriceFeedFor(config),
       gasSpikeThresholdPct: config.risk.gasSpikeThresholdPct,
       gasCapMultiplier: config.gas.gasCapMultiplier,
     },

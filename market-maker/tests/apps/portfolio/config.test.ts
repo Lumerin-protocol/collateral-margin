@@ -20,6 +20,7 @@ network:
   name: arbitrum
   rpcUrl: "https://arb1.arbitrum.io/rpc"
   ethPriceFeed: "0x0000000000000000000000000000000000000fee"
+  ethPriceFeedMaxAgeSec: 3600
 venues:
   - kind: perps
     address: "0x1111111111111111111111111111111111111111"
@@ -171,7 +172,7 @@ describe("loadPortfolioConfig", () => {
   });
 
   it("N47: USD gas accounting is on by default and needs an ETH/USD feed", () => {
-    const noFeed = VALID_YAML.replace(/^ {2}ethPriceFeed:.*\n/m, "").replace(
+    const noFeed = VALID_YAML.replace(/^ {2}ethPriceFeed(MaxAgeSec)?:.*\n/gm, "").replace(
       /^ {2}usdGasAccounting:.*\n/m,
       "",
     );
