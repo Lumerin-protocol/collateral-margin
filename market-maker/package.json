@@ -15,8 +15,6 @@
     "typecheck": "tsgo --noEmit",
     "lint": "biome lint --error-on-warnings .",
     "node": "node --import=amaro/strip --conditions=typescript",
-    "perps": "pnpm node --watch src/apps/perps/main.ts",
-    "futures": "pnpm node --watch src/apps/futures/main.ts",
     "portfolio": "pnpm node --watch src/apps/portfolio/main.ts",
     "local:portfolio": "pnpm node --env-file-if-exists=../.env --env-file-if-exists=.env --watch src/apps/portfolio/main.ts --config configs/portfolio.local.yml | pino-pretty",
     "dev:portfolio": "pnpm node --env-file=../config/dev.env --env-file-if-exists=../.env --env-file-if-exists=.env --watch src/apps/portfolio/main.ts --config configs/portfolio.dev.yml | pino-pretty",

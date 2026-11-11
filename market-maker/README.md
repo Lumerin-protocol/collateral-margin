@@ -200,21 +200,9 @@ pnpm install
 ### Run
 
 ```bash
-# Local hardhat (pretty-printed logs, dry-run on by default)
-pnpm local:perps
-pnpm local:futures
-
-# base-sepolia (dev testnet)
-pnpm dev:perps
-pnpm dev:futures
-
-# base-mainnet (staging — pre-prod sizes)
-pnpm stg:perps
-pnpm stg:futures
-
-# base-mainnet (production)
-pnpm prd:perps
-pnpm prd:futures
+pnpm local:portfolio  # local hardhat
+pnpm dev:portfolio    # base-sepolia
+pnpm prd:portfolio    # base-mainnet
 ```
 
 ## Health endpoint

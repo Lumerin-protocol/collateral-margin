@@ -29,7 +29,7 @@ export interface CollateralTrackerConfig {
 
 /**
  * Wraps a venue's `CollateralAccount` and exposes the latest snapshot fields
- * as reactive properties for the rest of core (RiskManager, HealthCheck, etc).
+ * as reactive properties for the rest of core (RiskManager, PortfolioHealthCheck, etc).
  *
  * Performs an optional automatic deposit when the wallet has un-deposited
  * collateral and `autoDeposit` is enabled — replaces the legacy

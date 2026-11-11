@@ -22,8 +22,6 @@ import {
   USD_DECIMALS,
 } from "../../core/config/base.ts";
 import { parseUsd, secondsToMs } from "../../core/config/units.ts";
-import { perpsPricingSchema, perpsSizingSchema } from "../perps/config.ts";
-import { futuresPricingSchema, futuresSizingSchema } from "../futures/config.ts";
 import type { FuturesMarketSelection } from "../../adapters/futures/index.ts";
 import { ConfigError } from "../../core/errors.ts";
 
@@ -48,6 +46,143 @@ const TypeSeconds = (opts?: { minimum?: number; default?: number; description?: 
     rest as Record<string, unknown>,
   );
 };
+
+const perpsPricingSchema = Type.Object(
+  {
+    strategy: Type.Literal("effective-spread", {
+      description:
+        "Pricing strategy. Perps lock to 'effective-spread' (symmetric mid-spread).",
+    }),
+    minSpreadBps: Type.Number({
+      minimum: 0,
+      description:
+        "Floor on the half-spread in bps. Quotes never tighten below this. Note the MM prices off the unrounded oracle answer (PerpsVenue.getRawMarketPrice), so the mid normally falls between ticks and rounding alone already separates bid from ask by one tick; a non-zero floor is insurance for the rare case the mid lands exactly on a tick.",
+    }),
+    volatilityMultiplier: Type.Number({
+      minimum: 0,
+      description:
+        "Multiplier applied to realized volatility when widening the spread.",
+    }),
+    inventorySkewGamma: Type.Number({
+      minimum: 0,
+      description:
+        "Inventory skew coefficient. Quotes shift by γ × (netPos / maxPos) ticks toward unwinding.",
+    }),
+    maxSkewTicks: Type.Number({
+      minimum: 0,
+      description:
+        "Cap on absolute ticks a level can be skewed from the symmetric mid.",
+    }),
+  },
+  { ...Closed, description: "Effective-spread pricing parameters." },
+);
+
+// `baseQuantity` is venue-native (perps: hashrate base units). Bigint
+// expressed as a decimal string; numbers accepted but use strings if values
+// exceed Number.MAX_SAFE_INTEGER. Quoter distributes
+// `baseQuantity × numLevelsPerSide` across the ladder via taperRatio.
+const perpsSizingSchema = Type.Object(
+  {
+    strategy: Type.Literal("geometric-taper", {
+      description:
+        "Sizing strategy. Perps lock to 'geometric-taper' (front level largest, decays by taperRatio).",
+    }),
+    baseQuantity: Type.Union(
+      [Type.String({ pattern: "^\\d+$" }), Type.Number()],
+      {
+        description:
+          "Per-level size unit in venue-native units (perps: hashrate base). Total per-side budget is baseQuantity × numLevelsPerSide, distributed via taperRatio. Use a string for values > 2^53.",
+      },
+    ),
+    numLevelsPerSide: Type.Number({
+      minimum: 1,
+      description: "Number of price levels quoted per side.",
+    }),
+    taperRatio: Type.Number({
+      exclusiveMinimum: 0,
+      exclusiveMaximum: 1,
+      description:
+        "Geometric decay ratio in (0, 1). Each subsequent level is taperRatio × the previous.",
+    }),
+  },
+  { ...Closed, description: "Geometric-taper sizing parameters." },
+);
+
+const futuresPricingSchema = Type.Object(
+  {
+    strategy: Type.Literal("reservation-price", {
+      description:
+        "Pricing strategy. Futures lock to 'reservation-price' (Avellaneda–Stoikov inventory skew).",
+    }),
+    riskAversion: Type.Number({
+      minimum: 0,
+      description:
+        "Avellaneda–Stoikov risk aversion γ. Higher = stronger inventory skew.",
+    }),
+    marginCallTimeSec: Type.Number({
+      minimum: 0,
+      description:
+        "Seconds. Fallback time-to-margin-call when InstrumentContext.expirationAt is unavailable.",
+    }),
+    minSpreadBps: Type.Number({
+      minimum: 0,
+      description:
+        "Floor on the half-spread in bps. Quotes never tighten below this.",
+    }),
+    volatilityMultiplier: Type.Number({
+      minimum: 0,
+      description:
+        "Multiplier applied to realized volatility when widening the spread.",
+    }),
+    maxSkewTicks: Type.Number({
+      const: 0,
+      default: 0,
+      description:
+        "Pinned to 0 — under reservation-price the skew is encoded in r itself.",
+    }),
+  },
+  { ...Closed, description: "Reservation-price pricing parameters." },
+);
+
+// `baseQuantity` is venue-native (futures: contract base units). Bigint
+// expressed as a decimal string; numbers accepted but use strings if values
+// exceed Number.MAX_SAFE_INTEGER.
+const futuresSizingSchema = Type.Object(
+  {
+    strategy: Type.Literal("geometric-taper", {
+      description:
+        "Sizing strategy. Futures lock to 'geometric-taper' (front level largest, decays by taperRatio).",
+    }),
+    baseQuantity: Type.Union(
+      [Type.String({ pattern: "^\\d+$" }), Type.Number()],
+      {
+        description:
+          "Total per-side budget in venue-native units (futures: contract base units). Distributed via taperRatio. One contract ≈ 1.0 perps qty (1e6 perps base units), which is how the two venues are kept at comparable notional: futures baseQuantity × numLevelsPerSide × quoted expiries should land near the perps per-side total. Resting order count is 2 × numLevelsPerSide × quoted expiries. Use a string for values > 2^53.",
+      },
+    ),
+    numLevelsPerSide: Type.Number({
+      minimum: 1,
+      description: "Number of price levels quoted per side.",
+    }),
+    taperRatio: Type.Number({
+      exclusiveMinimum: 0,
+      exclusiveMaximum: 1,
+      description:
+        "Geometric decay ratio in (0, 1). Each subsequent level is taperRatio × the previous.",
+    }),
+    expirySizeDecay: Type.Optional(
+      Type.Number({
+        exclusiveMinimum: 0,
+        maximum: 1,
+        default: 0.6,
+        description:
+          "Per-expiry size multiplier for further delivery dates (nearest-first). " +
+          "Expiry i gets baseQuantity × expirySizeDecay^i. 1 disables. Portfolio-only effect when multiple expiries are quoted.",
+      }),
+    ),
+  },
+  { ...Closed, description: "Geometric-taper sizing parameters." },
+);
 
 const marketSelectionSchema = Type.Union(
   [
