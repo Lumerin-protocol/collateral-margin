@@ -72,7 +72,7 @@ export class GasTracker {
     this.isGasSpiking = this.gasSpikePct.compare(new Fraction(this.config.gasSpikeThresholdPct)) > 0;
 
     if (this.config.ethPriceFeedAddress) {
-      await this.updateEthPrice();
+      await this.updateEthPrice(this.config.ethPriceFeedAddress);
     }
 
     this.logger.debug(
@@ -124,18 +124,18 @@ export class GasTracker {
     }
   }
 
-  private async updateEthPrice(): Promise<void> {
+  private async updateEthPrice(feed: Address): Promise<void> {
     try {
       const [[, answer], decimals] = await this.publicClient.multicall({
         allowFailure: false,
         contracts: [
           {
-            address: this.config.ethPriceFeedAddress!,
+            address: feed,
             abi: aggregatorV3InterfaceAbi,
             functionName: "latestRoundData",
           },
           {
-            address: this.config.ethPriceFeedAddress!,
+            address: feed,
             abi: aggregatorV3InterfaceAbi,
             functionName: "decimals",
           },

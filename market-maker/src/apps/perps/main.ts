@@ -101,8 +101,6 @@ async function main(): Promise<void> {
     },
     inventory,
     collateral,
-    gas,
-    oracle,
     logger,
   );
   const book = new BookTracker(

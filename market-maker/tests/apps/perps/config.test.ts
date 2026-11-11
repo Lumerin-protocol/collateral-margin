@@ -1,3 +1,4 @@
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: literal ${VAR} tokens are the config syntax under test.
 import { describe, it, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { writeFileSync, unlinkSync, mkdtempSync } from "node:fs";

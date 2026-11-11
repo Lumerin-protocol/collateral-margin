@@ -11,7 +11,7 @@
     "test": "hardhat test",
     "test:gas": "hardhat test --network hardhat tests/gas/collateral-margin-gas.test.ts",
     "typecheck": "tsgo --noEmit",
-    "lint": "biome lint .",
+    "lint": "biome lint --error-on-warnings .",
     "clean": "rm -rf abi artifacts cache",
     "run:dev": "hardhat run --env dev",
     "run:prod": "hardhat run --env prd"

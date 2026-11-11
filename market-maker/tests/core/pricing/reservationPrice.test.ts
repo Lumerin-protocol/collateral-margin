@@ -145,6 +145,8 @@ describe("computeReservationMidQuote", () => {
     // so bid/ask should be symmetric around oracle
     assert.ok(expired.bidMid > 0n);
     assert.ok(expired.bidMid < expired.askMid);
+    assert.equal(expired.bidMid, noDelivery.bidMid);
+    assert.equal(expired.askMid, noDelivery.askMid);
   });
 
   it("bid and ask are aligned to tick", () => {

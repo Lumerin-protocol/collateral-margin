@@ -96,6 +96,5 @@ for (const t of targets) {
   };
   const path = resolve(outDir, `${t.name}.json`);
   writeFileSync(path, `${JSON.stringify(json, null, 2)}\n`, "utf8");
-  // biome-ignore lint/suspicious/noConsole: this is a CLI script
   console.log(`wrote ${path}`);
 }

@@ -1,4 +1,4 @@
-import { encodeFunctionData, erc20Abi } from "viem";
+import { erc20Abi } from "viem";
 import type { Chain, PublicClient, Transport } from "viem";
 import type pino from "pino";
 import type {
@@ -460,7 +460,7 @@ class PerpsCollateralAccount implements BatchableCollateralAccount {
       vaultAddress: vault,
       collateralToken: token,
       amount,
-      logger: this.venue["logger"],
+      logger: this.venue.getLogger(),
     });
   }
 

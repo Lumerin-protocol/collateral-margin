@@ -257,10 +257,6 @@ async function main(): Promise<void> {
     },
     null,
     collateral,
-    gas,
-    // RiskManager keeps an oracle ref for future use but never reads it;
-    // supply a throwaway so the portfolio (no single price source) type-checks.
-    undefined as unknown as OracleTracker,
     logger,
   );
 

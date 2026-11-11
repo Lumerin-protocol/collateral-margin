@@ -13,7 +13,7 @@
     "gen:schemas": "pnpm node scripts/gen-schemas.ts",
     "pretypecheck": "pnpm gen:schemas",
     "typecheck": "tsgo --noEmit",
-    "lint": "biome lint .",
+    "lint": "biome lint --error-on-warnings .",
     "node": "node --import=amaro/strip --conditions=typescript",
     "perps": "pnpm node --watch src/apps/perps/main.ts",
     "futures": "pnpm node --watch src/apps/futures/main.ts",
