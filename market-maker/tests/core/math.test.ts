@@ -1,5 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import Fraction from "fraction.js";
+import { ln } from "../../src/core/rational.ts";
 import {
   fillLossFromNotionals,
   BPS_SCALE,
@@ -222,6 +224,49 @@ describe("RollingWindow per-second volatility", () => {
     w.push(105n);
     w.push(108n);
     assert.equal(fracVal(w.volatilityPerSecond()), 0);
+  });
+
+  it("N46: a full hashprice window keeps ln and σ within 2^precisionBits denominators", () => {
+    const precisionBits = 48;
+    const bound = 1n << BigInt(precisionBits);
+    const bits = (x: bigint) => x.toString(2).length;
+    const w = new RollingWindow(60, precisionBits);
+
+    // Deterministic hashprice path around 31.748010 USDC: threshold-sized moves of
+    // 0.02–0.5% either way, updates 1–10 minutes apart.
+    let seed = 0x2545f491;
+    const next = () => {
+      seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+      return seed / 2 ** 32;
+    };
+    const prices: bigint[] = [];
+    const times: number[] = [];
+    let p = 31_748_010n;
+    let t = 1_794_400_000;
+    for (let i = 0; i < 60; i++) {
+      const move = (0.0002 + 0.0048 * next()) * (next() < 0.5 ? -1 : 1);
+      p = BigInt(Math.round(Number(p) * (1 + move)));
+      t += 60 + Math.floor(540 * next());
+      prices.push(p);
+      times.push(t);
+      w.push(p, t);
+    }
+
+    for (let i = 1; i < prices.length; i++) {
+      const r = ln(new Fraction(prices[i], prices[i - 1]), precisionBits);
+      assert.ok(r.d <= bound, `ln denominator has ${bits(r.d)} bits, over ${precisionBits}`);
+    }
+
+    const sigma = w.volatilityPerSecond();
+    assert.ok(sigma.d <= bound, `σ denominator has ${bits(sigma.d)} bits, over ${precisionBits}`);
+
+    let sumSq = 0;
+    for (let i = 1; i < prices.length; i++) {
+      sumSq += Math.log(Number(prices[i]) / Number(prices[i - 1])) ** 2;
+    }
+    const expected = Math.sqrt(sumSq / (times[times.length - 1] - times[0]));
+    const got = Number(sigma.n) / Number(sigma.d);
+    assert.ok(Math.abs(got / expected - 1) < 1e-9, `expected σ_sec=${expected}, got ${got}`);
   });
 
   it("ignores non-monotonic timestamps", () => {
