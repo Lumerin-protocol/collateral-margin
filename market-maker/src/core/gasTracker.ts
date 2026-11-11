@@ -4,11 +4,16 @@ import Fraction from "fraction.js";
 import { RollingWindow } from "./math.ts";
 
 export interface GasTrackerConfig {
-  /** Chainlink aggregator address; if absent, ethPriceUsd stays 0. */
+  /** Chainlink aggregator address; absent only while USD gas accounting is off, and ethPriceUsd then stays 0. */
   ethPriceFeedAddress?: Address;
+  /** Readings older than this are rejected and the last accepted price kept. */
+  ethPriceFeedMaxAgeSec: number;
   gasSpikeThresholdPct: number;
   gasCapMultiplier: number;
 }
+
+export const USD_GAS_ACCOUNTING_OFF =
+  "USD gas accounting is off (risk.usdGasAccounting: false): gas budgets, gas in the daily loss and the spread's gas penalty read $0";
 
 const aggregatorV3InterfaceAbi = [
   {
@@ -111,6 +116,11 @@ export class GasTracker {
     return this.currentGasPrice < cap ? cap : this.currentGasPrice;
   }
 
+  /** Whether gas is priced in USD; reported on /health. */
+  get usdGasAccounting(): boolean {
+    return this.config.ethPriceFeedAddress !== undefined;
+  }
+
   /** Calibrate gas estimates against a candidate transaction. Adapters provide the tx. */
   async calibrate(estimator: () => Promise<bigint>): Promise<void> {
     try {
@@ -126,7 +136,7 @@ export class GasTracker {
 
   private async updateEthPrice(feed: Address): Promise<void> {
     try {
-      const [[, answer], decimals] = await this.publicClient.multicall({
+      const [[, answer, , updatedAt], decimals] = await this.publicClient.multicall({
         allowFailure: false,
         contracts: [
           {
@@ -141,6 +151,11 @@ export class GasTracker {
           },
         ],
       });
+      const ageSec = Math.floor(Date.now() / 1000) - Number(updatedAt);
+      if (ageSec > this.config.ethPriceFeedMaxAgeSec) {
+        this.logger.warn({ ageSec, maxAgeSec: this.config.ethPriceFeedMaxAgeSec }, "ETH price feed stale; keeping last price");
+        return;
+      }
       if (answer > 0n) {
         this.ethPriceUsd = scaleDecimals(answer, BigInt(decimals), 6n);
       }

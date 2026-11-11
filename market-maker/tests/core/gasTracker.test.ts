@@ -10,6 +10,7 @@ function makeLogger(): never {
 
 function makeConfig(overrides: Partial<GasTrackerConfig> = {}): GasTrackerConfig {
   return {
+    ethPriceFeedMaxAgeSec: 3600,
     gasSpikeThresholdPct: 200,
     gasCapMultiplier: 2.0,
     ...overrides,
@@ -123,7 +124,8 @@ describe("GasTracker ETH price feed", () => {
       getGasPrice: async () => 1_000_000_000n,
       multicall: async () => {
         if (opts.multicallThrows) throw new Error("feed down");
-        return [[0n, opts.answer, 0n, 0n, 0n], opts.decimals];
+        const updatedAt = BigInt(Math.floor(Date.now() / 1000));
+        return [[0n, opts.answer, updatedAt, updatedAt, 0n], opts.decimals];
       },
     } as unknown as PublicClient;
   }
@@ -170,6 +172,31 @@ describe("GasTracker ETH price feed", () => {
     );
     await assert.doesNotReject(tracker.update());
     assert.equal(tracker.ethPriceUsd, 0n);
+  });
+
+  it("N47: rejects an ETH/USD reading older than the feed's max age", async () => {
+    let updatedAt = 0n;
+    const client = {
+      getGasPrice: async () => 1_000_000_000n,
+      multicall: async () => [[1n, 2000_00000000n, updatedAt, updatedAt, 1n], 8],
+    } as unknown as PublicClient;
+    const tracker = new GasTracker(
+      client,
+      makeConfig({
+        ethPriceFeedAddress: "0x0000000000000000000000000000000000000fee",
+        ethPriceFeedMaxAgeSec: 3600,
+      }),
+      makeLogger(),
+    );
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+
+    updatedAt = nowSec - 7200n;
+    await tracker.update();
+    assert.equal(tracker.ethPriceUsd, 0n);
+
+    updatedAt = nowSec - 60n;
+    await tracker.update();
+    assert.equal(tracker.ethPriceUsd, 2000_000000n);
   });
 
   it("skips the feed entirely when no address is configured", async () => {

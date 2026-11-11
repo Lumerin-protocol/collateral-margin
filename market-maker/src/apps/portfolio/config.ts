@@ -18,6 +18,7 @@ import {
   parseTimingConfig,
   riskSchema,
   timingSchema,
+  usdGasAccountingNeedsFeed,
   walletSchema,
   USD_DECIMALS,
 } from "../../core/config/base.ts";
@@ -343,6 +344,7 @@ export const portfolioRootSchema = Type.Object(
   },
   {
     ...Closed,
+    ...usdGasAccountingNeedsFeed,
     description:
       "Titan Market Maker — unified portfolio app config. One process, one signer, one shared collateral vault: perps and every selected futures expiry quote together, the TxCoordinator sequences their txs on a single nonce, and each market is isolated behind its own circuit breaker.",
   },

@@ -4,7 +4,7 @@ import yaml from "js-yaml";
 import { type StringOptions, type TUnsafe, type TSchema, Type } from "@sinclair/typebox";
 import Ajv from "ajv";
 import addFormats from "ajv-formats";
-import type { Hex } from "viem";
+import type { Address, Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { ConfigError } from "../errors.ts";
 import { parseUsd, secondsToMs } from "./units.ts";
@@ -67,9 +67,15 @@ export const networkSchema = Type.Object(
     ethPriceFeed: Type.Optional(
       Type.Union([Type.Literal(""), TypeEthAddress()], {
         description:
-          "Optional Chainlink ETH/USD aggregator. Required for USD-denominated gas budgets; leave empty for local hardhat.",
+          "Chainlink ETH/USD aggregator. Required while risk.usdGasAccounting is on; empty otherwise.",
       }),
     ),
+    ethPriceFeedMaxAgeSec: Type.Integer({
+      minimum: 1,
+      default: 3600,
+      description:
+        "Seconds. An ETH/USD reading older than this is rejected and the last accepted price kept. Chainlink ETH/USD on Base has a 20-minute heartbeat.",
+    }),
   },
   { ...Closed, description: "Network connection settings." },
 );
@@ -102,6 +108,11 @@ export const riskSchema = Type.Object(
     maxGasBudgetPerDayUsd: TypeUsdAmount({
       default: 500,
       description: "USD. Hard halt: stops requoting once daily gas spend exceeds this.",
+    }),
+    usdGasAccounting: Type.Boolean({
+      default: true,
+      description:
+        "Price gas in USD through network.ethPriceFeed, for the gas budgets, the gas share of maxDailyLossUsd and the spread's gas penalty. Off on testnets, whose gas is not a real fee market; off logs a startup warning and all three read $0. The gas-spike guard runs either way.",
     }),
     gasSpikeThresholdPct: Type.Number({
       default: 200,
@@ -294,6 +305,7 @@ export interface ParsedRiskConfig {
   maxDailyLossUsd: bigint;
   maxGasBudgetPerHourUsd: bigint;
   maxGasBudgetPerDayUsd: bigint;
+  usdGasAccounting: boolean;
   gasSpikeThresholdPct: number;
   gasPenaltyBps: number;
   urgentRequoteThresholdTicks: number;
@@ -334,6 +346,7 @@ interface RawRisk {
   maxDailyLossUsd: string | number;
   maxGasBudgetPerHourUsd: string | number;
   maxGasBudgetPerDayUsd: string | number;
+  usdGasAccounting: boolean;
   gasSpikeThresholdPct: number;
   gasPenaltyBps: number;
   urgentRequoteThresholdTicks: number;
@@ -373,6 +386,7 @@ export function parseRiskConfig(raw: RawRisk): ParsedRiskConfig {
       USD_DECIMALS,
       "risk.maxGasBudgetPerDayUsd",
     ),
+    usdGasAccounting: raw.usdGasAccounting,
     gasSpikeThresholdPct: raw.gasSpikeThresholdPct,
     gasPenaltyBps: raw.gasPenaltyBps,
     urgentRequoteThresholdTicks: raw.urgentRequoteThresholdTicks,
@@ -424,6 +438,33 @@ export function parseOracleConfig(raw: RawOracle): ParsedOracleConfig {
     historyMaxAgeSec: raw.historyMaxAgeSec,
     history: url ? { subgraphUrl: url } : undefined,
   };
+}
+
+/**
+ * Root-schema rule: unless `risk.usdGasAccounting` is explicitly false,
+ * `network.ethPriceFeed` must be a non-empty address, so USD gas accounting is
+ * never off by omission. No defaults inside, for `stripCombinatorDefaults`.
+ */
+export const usdGasAccountingNeedsFeed = {
+  if: {
+    properties: {
+      risk: { properties: { usdGasAccounting: { const: false } }, required: ["usdGasAccounting"] },
+    },
+    required: ["risk"],
+  },
+  else: {
+    properties: {
+      network: { properties: { ethPriceFeed: { minLength: 1 } }, required: ["ethPriceFeed"] },
+    },
+  },
+};
+
+/** The ETH/USD feed the gas tracker reads; `undefined` while USD gas accounting is off. */
+export function ethPriceFeedFor(cfg: {
+  network: { ethPriceFeed?: "" | Address };
+  risk: { usdGasAccounting: boolean };
+}): Address | undefined {
+  return cfg.risk.usdGasAccounting && cfg.network.ethPriceFeed ? cfg.network.ethPriceFeed : undefined;
 }
 
 export interface LoadConfigOpts<TParsed, TRaw = unknown> {

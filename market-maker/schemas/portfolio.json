@@ -2,6 +2,37 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Titan Market Maker - Portfolio config",
   "additionalProperties": false,
+  "if": {
+    "properties": {
+      "risk": {
+        "properties": {
+          "usdGasAccounting": {
+            "const": false
+          }
+        },
+        "required": [
+          "usdGasAccounting"
+        ]
+      }
+    },
+    "required": [
+      "risk"
+    ]
+  },
+  "else": {
+    "properties": {
+      "network": {
+        "properties": {
+          "ethPriceFeed": {
+            "minLength": 1
+          }
+        },
+        "required": [
+          "ethPriceFeed"
+        ]
+      }
+    }
+  },
   "description": "Titan Market Maker — unified portfolio app config. One process, one signer, one shared collateral vault: perps and every selected futures expiry quote together, the TxCoordinator sequences their txs on a single nonce, and each market is isolated behind its own circuit breaker.",
   "type": "object",
   "required": [
@@ -111,7 +142,8 @@
       "type": "object",
       "required": [
         "name",
-        "rpcUrl"
+        "rpcUrl",
+        "ethPriceFeedMaxAgeSec"
       ],
       "properties": {
         "name": {
@@ -123,7 +155,7 @@
           "type": "string"
         },
         "ethPriceFeed": {
-          "description": "Optional Chainlink ETH/USD aggregator. Required for USD-denominated gas budgets; leave empty for local hardhat.",
+          "description": "Chainlink ETH/USD aggregator. Required while risk.usdGasAccounting is on; empty otherwise.",
           "anyOf": [
             {
               "const": "",
@@ -143,6 +175,21 @@
               ]
             }
           ]
+        },
+        "ethPriceFeedMaxAgeSec": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Seconds. An ETH/USD reading older than this is rejected and the last accepted price kept. Chainlink ETH/USD on Base has a 20-minute heartbeat.",
+          "default": 3600
         }
       }
     },
@@ -677,6 +724,7 @@
         "maxDailyLossUsd",
         "maxGasBudgetPerHourUsd",
         "maxGasBudgetPerDayUsd",
+        "usdGasAccounting",
         "gasSpikeThresholdPct",
         "gasPenaltyBps",
         "urgentRequoteThresholdTicks"
@@ -819,6 +867,20 @@
               ]
             }
           ]
+        },
+        "usdGasAccounting": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string",
+              "pattern": "^\\$\\{[A-Za-z_][A-Za-z0-9_]*(:-[^}]*)?\\}$",
+              "description": "Environment variable interpolation (resolved at startup)"
+            }
+          ],
+          "description": "Price gas in USD through network.ethPriceFeed, for the gas budgets, the gas share of maxDailyLossUsd and the spread's gas penalty. Off on testnets, whose gas is not a real fee market; off logs a startup warning and all three read $0. The gas-spike guard runs either way.",
+          "default": true
         },
         "gasSpikeThresholdPct": {
           "anyOf": [

@@ -3,7 +3,7 @@ import { createNetworkClients } from "../../core/client.ts";
 import { WalletRegistry } from "../../core/wallet.ts";
 import { OracleTracker } from "../../core/oracleTracker.ts";
 import { HashpriceOracleSubgraphSource } from "../../core/historicalPriceSource.ts";
-import { GasTracker } from "../../core/gasTracker.ts";
+import { GasTracker, USD_GAS_ACCOUNTING_OFF } from "../../core/gasTracker.ts";
 import { InventoryManager } from "../../core/inventoryManager.ts";
 import { CollateralTracker } from "../../core/collateralTracker.ts";
 import { PortfolioCollateralAccount } from "../../core/portfolioCollateral.ts";
@@ -17,7 +17,7 @@ import { TxCoordinator } from "../../core/txCoordinator.ts";
 import { PortfolioHealthCheck } from "../../core/portfolioHealth.ts";
 import { runPortfolioLoop, type RollFn } from "../../core/portfolioRunner.ts";
 import { serializeError } from "../../core/errSerializer.ts";
-import { sanitiseConfig } from "../../core/config/base.ts";
+import { ethPriceFeedFor, sanitiseConfig } from "../../core/config/base.ts";
 import { createPerpsVenue } from "../../adapters/perps/index.ts";
 import { FuturesVenueAdapter } from "../../adapters/futures/index.ts";
 import type { InstrumentAdapter, VenueAdapter, WalletContext } from "../../core/adapter.ts";
@@ -226,13 +226,14 @@ async function main(): Promise<void> {
   const gas = new GasTracker(
     network.publicClient,
     {
-      ethPriceFeedAddress:
-        config.network.ethPriceFeed === "" ? undefined : config.network.ethPriceFeed,
+      ethPriceFeedAddress: ethPriceFeedFor(config),
+      ethPriceFeedMaxAgeSec: config.network.ethPriceFeedMaxAgeSec,
       gasSpikeThresholdPct: config.risk.gasSpikeThresholdPct,
       gasCapMultiplier: config.gas.gasCapMultiplier,
     },
     logger,
   );
+  if (!gas.usdGasAccounting) logger.warn(USD_GAS_ACCOUNTING_OFF);
   const collateralAccount = new PortfolioCollateralAccount(
     venueAdapters.map((v) => v.account),
     network.publicClient,
