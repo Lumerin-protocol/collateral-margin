@@ -5,5 +5,7 @@
 //
 // Pure type-space additions — AssemblyScript's compiler ignores `.d.ts` files.
 
+// biome-ignore lint/complexity/noBannedTypes: mirrors lib.es5.d.ts, which declares it on Function.
 interface CallableFunction extends Function {}
+// biome-ignore lint/complexity/noBannedTypes: mirrors lib.es5.d.ts, which declares it on Function.
 interface NewableFunction extends Function {}
