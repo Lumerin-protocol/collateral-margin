@@ -37,6 +37,30 @@ describe("handleDeposited", () => {
     setupVault();
   });
 
+  test("N44: a deposit whose mint precedes Deposited is not an insurance-debt borrow", () => {
+    const alice = userAddress(1);
+    const amount = BigInt.fromI32(100_000_000);
+
+    // Vaults before collateral-margin@b3943f8 (2026-09-28) emitted the mint Transfer first.
+    const mint = createTransferEvent(ZERO, alice, amount);
+    const evt = createDepositedEvent(alice, amount, alice);
+    evt.transaction.hash = mint.transaction.hash;
+    evt.transaction.to = mint.transaction.to;
+    evt.logIndex = mint.logIndex.plus(BigInt.fromI32(1));
+    handleTransfer(mint);
+    handleDeposited(evt);
+
+    assert.fieldEquals("Vault", "0", "insuranceDebt", "0");
+    assert.fieldEquals("Vault", "0", "insuranceDebtBorrowedTotal", "0");
+    assert.fieldEquals("Vault", "0", "timingDebt", "0");
+    assert.fieldEquals("Vault", "0", "insuranceDebtSince", "0");
+    assert.entityCount("InsuranceDebtEvent", 0);
+    assert.fieldEquals("Vault", "0", "totalDeposited", amount.toString());
+    assert.fieldEquals("VaultUser", alice.toHexString(), "balance", amount.toString());
+    assert.fieldEquals("VaultUser", alice.toHexString(), "netFromOther", "0");
+    assert.fieldEquals("VaultUser", alice.toHexString(), "netInternalIn", "0");
+  });
+
   test("user deposit creates VaultDeposit, bumps user totals, bumps vault totals", () => {
     const alice = userAddress(1);
     const amount = BigInt.fromI32(1_000_000);

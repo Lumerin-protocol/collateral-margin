@@ -60,6 +60,14 @@ type Vault @entity(immutable: false) {
   pendingDepositUser: Bytes!
   "Amount of that pending deposit."
   pendingDepositAmount: BigInt!
+  "Transaction of the last mint booked as a borrow, null once matched. Vaults before 2026-09-28 emit Deposited after its mint, which then reverses that borrow."
+  lastBorrowTx: Bytes
+  "Log index of that mint."
+  lastBorrowLogIndex: BigInt
+  "Recipient of that mint."
+  lastBorrowUser: Bytes
+  "Amount of that mint."
+  lastBorrowAmount: BigInt
 
   # Timestamps
   initializedAt: BigInt!

@@ -1,4 +1,4 @@
-import { Address, BigInt, Bytes, dataSource, log } from "@graphprotocol/graph-ts";
+import { Address, BigInt, Bytes, dataSource, log, store } from "@graphprotocol/graph-ts";
 import {
   AccountDebtAccrued,
   AccountDebtRecovered,
@@ -268,6 +268,48 @@ function noteBorrow(vault: Vault, event: Transfer, recipient: Address, amount: B
   row.blockNumber = event.block.number;
   row.transactionHash = event.transaction.hash;
   row.save();
+
+  vault.lastBorrowTx = event.transaction.hash;
+  vault.lastBorrowLogIndex = event.logIndex;
+  vault.lastBorrowUser = recipient;
+  vault.lastBorrowAmount = amount;
+}
+
+/**
+ * True when `Deposited` directly follows the mint just booked as a borrow, as vaults before
+ * 2026-09-28 emit it: that mint was this deposit, so the borrow is undone.
+ */
+function reverseBorrowForDeposit(vault: Vault, event: Deposited, recipient: Address, amount: BigInt): boolean {
+  const borrowTx = vault.lastBorrowTx;
+  const borrowLogIndex = vault.lastBorrowLogIndex;
+  const borrowUser = vault.lastBorrowUser;
+  const borrowAmount = vault.lastBorrowAmount;
+  if (borrowTx === null || borrowLogIndex === null || borrowUser === null || borrowAmount === null) {
+    return false;
+  }
+  const matches =
+    borrowTx.equals(event.transaction.hash) &&
+    borrowLogIndex.plus(BigInt.fromI32(1)).equals(event.logIndex) &&
+    borrowUser.equals(recipient) &&
+    borrowAmount.equals(amount);
+  if (!matches) return false;
+
+  const previous = vault.insuranceDebt;
+  const debtAfter = previous.minus(amount);
+  vault.insuranceDebt = debtAfter;
+  vault.insuranceDebtBorrowedTotal = vault.insuranceDebtBorrowedTotal.minus(amount);
+  noteDebtOpened(vault, previous, debtAfter, event.block.timestamp);
+  recomputeDebtSplit(vault);
+
+  const txTo = event.transaction.to;
+  bumpCategoryNet(recipient, categoryOf(txTo !== null ? (txTo as Bytes) : Bytes.empty()), amount.neg());
+  store.remove("InsuranceDebtEvent", createEventId(event.transaction.hash, borrowLogIndex).toHexString());
+
+  vault.lastBorrowTx = null;
+  vault.lastBorrowLogIndex = null;
+  vault.lastBorrowUser = null;
+  vault.lastBorrowAmount = null;
+  return true;
 }
 
 /** True when this mint is the one `Deposited` just marked. Clears the mark. */
@@ -479,9 +521,11 @@ export function handleDeposited(event: Deposited): void {
     vault.depositCount++;
   }
   bumpUserCount(vault, isNewUser);
-  vault.pendingDepositTx = event.transaction.hash;
-  vault.pendingDepositUser = recipient;
-  vault.pendingDepositAmount = amount;
+  if (!reverseBorrowForDeposit(vault, event, recipient, amount)) {
+    vault.pendingDepositTx = event.transaction.hash;
+    vault.pendingDepositUser = recipient;
+    vault.pendingDepositAmount = amount;
+  }
   vault.lastUpdatedAt = event.block.timestamp;
   vault.save();
 }
