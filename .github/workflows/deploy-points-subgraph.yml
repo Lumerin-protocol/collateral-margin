@@ -7,20 +7,29 @@ on:
       - main
       - "cicd/**"
     paths:
-      - "points-indexer/**"
+      - "points-indexer/src/**"
+      - "points-indexer/schema.graphql"
+      - "points-indexer/subgraph.template.yaml"
+      - "points-indexer/package.json"
+      - "points-indexer/pnpm-lock.yaml"
+      - "points-indexer/pnpm-workspace.yaml"
+      - "points-indexer/tsconfig.json"
       - "config/*.env"
       - "contracts/abi/Points.json"
-      - "contracts/abi/PointsRedeemer.json"
-      - ".github/workflows/deploy-points-subgraph.yml"
   pull_request:
     branches:
       - dev
       - main
     paths:
-      - "points-indexer/**"
+      - "points-indexer/src/**"
+      - "points-indexer/schema.graphql"
+      - "points-indexer/subgraph.template.yaml"
+      - "points-indexer/package.json"
+      - "points-indexer/pnpm-lock.yaml"
+      - "points-indexer/pnpm-workspace.yaml"
+      - "points-indexer/tsconfig.json"
       - "config/*.env"
       - "contracts/abi/Points.json"
-      - "contracts/abi/PointsRedeemer.json"
       - ".github/workflows/deploy-points-subgraph.yml"
   workflow_dispatch:
     inputs:

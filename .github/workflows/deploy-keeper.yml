@@ -35,9 +35,13 @@ on:
       - main
       - "cicd/**"
     paths:
-      - "keeper/**"
+      - "keeper/src/**"
+      - "keeper/package.json"
+      - "keeper/pnpm-lock.yaml"
+      - "keeper/pnpm-workspace.yaml"
+      - "keeper/tsconfig.json"
+      - "keeper/Dockerfile"
       - "config/*.env"
-      - ".github/workflows/deploy-keeper.yml"
   workflow_dispatch:
     inputs:
       environment:

@@ -7,16 +7,29 @@ on:
       - main
       - "cicd/**"
     paths:
-      - "indexer/**"
+      - "indexer/src/**"
+      - "indexer/schema.graphql"
+      - "indexer/subgraph.template.yaml"
+      - "indexer/package.json"
+      - "indexer/pnpm-lock.yaml"
+      - "indexer/pnpm-workspace.yaml"
+      - "indexer/tsconfig.json"
+      - "indexer/assembly.d.ts"
       - "config/*.env"
       - "contracts/abi/CollateralVault.json"
-      - ".github/workflows/deploy-subgraph.yml"
   pull_request:
     branches:
       - dev
       - main
     paths:
-      - "indexer/**"
+      - "indexer/src/**"
+      - "indexer/schema.graphql"
+      - "indexer/subgraph.template.yaml"
+      - "indexer/package.json"
+      - "indexer/pnpm-lock.yaml"
+      - "indexer/pnpm-workspace.yaml"
+      - "indexer/tsconfig.json"
+      - "indexer/assembly.d.ts"
       - "config/*.env"
       - "contracts/abi/CollateralVault.json"
       - ".github/workflows/deploy-subgraph.yml"

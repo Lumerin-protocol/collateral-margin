@@ -38,9 +38,15 @@ on:
       - main
       - "cicd/**"
     paths:
-      - "market-maker/**"
+      - "market-maker/src/**"
+      - "market-maker/configs/**"
+      - "market-maker/package.json"
+      - "market-maker/pnpm-lock.yaml"
+      - "market-maker/pnpm-workspace.yaml"
+      - "market-maker/tsconfig.json"
+      - "market-maker/Dockerfile"
+      - "market-maker/docker-entrypoint.sh"
       - "config/*.env"
-      - ".github/workflows/deploy-col-mar-mm.yml"
   workflow_dispatch:
     inputs:
       environment:
