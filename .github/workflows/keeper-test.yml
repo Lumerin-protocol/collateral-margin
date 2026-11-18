@@ -88,9 +88,9 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: Lumerin-protocol/derivatives-marketplace
-          # feat/cf-321-hashprice-schedule tip: the glide feed, drift funding and the
-          # exposure view the keeper snapshot and the CF-321 integration tests read.
-          ref: ae4a0242c968192704b2cc5dd099b08a55e0b0b2
+          # dev tip: the glide feed, drift funding and the exposure view the keeper
+          # snapshot and the CF-321 integration tests read, without the retired aderyn.
+          ref: ae96660d68ec8d889ada1f06a66fca50124d3749
           path: perps
 
       - name: Checkout futures-marketplace
