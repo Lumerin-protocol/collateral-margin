@@ -10,13 +10,24 @@
         "Points": "0x153F6cb4386d717AD94791E6Ee8ae37f80315972",
         "CollateralToken": "0xDd15eED84065A58c9E9ff9E95fb996be0fff22AA"
       },
-      "subgraphs": {}
+      "subgraphs": {
+        "vault": "https://api.goldsky.com/api/public/project_cmmz59uoa7b5201wthnkxbuqy/subgraphs/collateral-vault/dev-latest/gn",
+        "points": "https://api.goldsky.com/api/public/project_cmmz59uoa7b5201wthnkxbuqy/subgraphs/hpow-points/dev-latest/gn"
+      }
     },
     "mainnet": {
       "chainId": 8453,
       "network": "base",
-      "contracts": {},
-      "subgraphs": {}
+      "contracts": {
+        "CollateralVault": "0x0730422E49B76A2D36d51304ACEcbe4f444821F8",
+        "PortfolioMarginEngine": "0x5F047CCE438ae7796140506a5edf3D711034aaF3",
+        "Points": "0x52e1b275d7f925e48f74d304e6d7e8ca489de6b9",
+        "CollateralToken": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+      },
+      "subgraphs": {
+        "vault": "https://api.goldsky.com/api/public/project_cmmz5dm4l7ocp01xng61y5nwr/subgraphs/collateral-vault/lmn-latest/gn",
+        "points": "https://api.goldsky.com/api/public/project_cmmz5dm4l7ocp01xng61y5nwr/subgraphs/hpow-points/lmn-latest/gn"
+      }
     }
   }
 }
