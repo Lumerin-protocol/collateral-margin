@@ -225,6 +225,13 @@ jobs:
           echo "--- subgraph.yaml ---"
           cat subgraph.yaml
 
+      # matchstick-ts runs `graph test` without -v, which otherwise asks the GitHub API for the
+      # latest Matchstick release and fails when it is rate-limited; graph-cli trusts a cache
+      # younger than a day.
+      - name: Pin Matchstick
+        working-directory: ./indexer
+        run: echo "{\"version\":\"0.6.0\",\"timestamp\":$(date +%s000)}" > tests/.latest.json
+
       - name: Generate code, build, test
         working-directory: ./indexer
         run: |
