@@ -1,6 +1,6 @@
 {
   "name": "@hashpower/portfolio-margin",
-  "version": "0.1.0",
+  "version": "0.6.0",
   "description": "Off-chain replica of PortfolioMarginEngine margin math and liquidation-price solvers, shared by the keeper and the trading UI",
   "license": "MIT",
   "type": "module",
@@ -21,10 +21,11 @@
     "node": "node --import=amaro/strip",
     "test": "pnpm node --test --test-concurrency=1 'tests/*.test.ts'",
     "typecheck": "tsc --noEmit",
-    "lint": "biome lint ."
+    "lint": "biome lint --error-on-warnings ."
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.13",
+    "@types/node": "24.19.2",
     "amaro": "^1.1.9",
     "typescript": "^5.9.3"
   },

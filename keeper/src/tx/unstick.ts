@@ -1,5 +1,4 @@
 import type pino from "pino";
-import type { Hex } from "viem";
 import type { Chain } from "../chain.ts";
 
 /**
@@ -83,7 +82,13 @@ export async function unstickPendingNonces(
     // someone has been hammering the wallet from outside the keeper.
     // Log loud and refuse to cancel hundreds of nonces in one shot.
     logger.error(
-      { address, latestNonce, pendingNonce, stuckCount, cap: MAX_NONCES_PER_UNSTICK },
+      {
+        address,
+        latestNonce,
+        pendingNonce,
+        stuckCount,
+        cap: MAX_NONCES_PER_UNSTICK,
+      },
       "unstick: refusing to cancel more than the configured cap — investigate manually before retrying",
     );
     throw new Error(
@@ -138,11 +143,20 @@ export async function unstickPendingNonces(
       // (rate limit, malformed) we log and keep going so one bad
       // nonce doesn't block the rest.
       const message = err instanceof Error ? err.message.toLowerCase() : "";
-      if (message.includes("nonce too low") || message.includes("already known")) {
-        logger.info({ nonce, err: message }, "unstick: nonce already cleared, skipping");
+      if (
+        message.includes("nonce too low") ||
+        message.includes("already known")
+      ) {
+        logger.info(
+          { nonce, err: message },
+          "unstick: nonce already cleared, skipping",
+        );
         continue;
       }
-      logger.warn({ nonce, err }, "unstick: cancellation send failed — continuing with next nonce");
+      logger.warn(
+        { nonce, err },
+        "unstick: cancellation send failed — continuing with next nonce",
+      );
     }
   }
 
@@ -176,7 +190,10 @@ async function waitForNonceToClear(
       blockTag: "latest",
     });
     if (current >= targetNonce) {
-      logger.info({ address, latestNonce: current }, "unstick: mempool drained");
+      logger.info(
+        { address, latestNonce: current },
+        "unstick: mempool drained",
+      );
       return;
     }
     await new Promise((r) => setTimeout(r, pollMs));
@@ -229,9 +246,10 @@ export async function withUnstickRetry<T>(
  */
 export function isReplacementUnderpriced(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
-  const haystack = `${err.message ?? ""} ${(err as { details?: string }).details ?? ""} ${
-    (err as { shortMessage?: string }).shortMessage ?? ""
-  }`.toLowerCase();
+  const haystack =
+    `${err.message ?? ""} ${(err as { details?: string }).details ?? ""} ${
+      (err as { shortMessage?: string }).shortMessage ?? ""
+    }`.toLowerCase();
   return (
     haystack.includes("replacement transaction underpriced") ||
     haystack.includes("transaction underpriced")

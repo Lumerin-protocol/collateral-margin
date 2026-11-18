@@ -62,7 +62,10 @@ export async function discoverAndIndex(
  * coordinator queue from the tracker, and the executor's worker loop
  * picks `user` up from there.
  */
-export async function runOneSweep(keeper: KeeperHarness, user: Address): Promise<void> {
+export async function runOneSweep(
+  keeper: KeeperHarness,
+  user: Address,
+): Promise<void> {
   await discoverUser(keeper, user);
   await keeper.scheduler.runSweep();
 }
@@ -171,7 +174,10 @@ export async function expectPerpsClosed(
   user: Address,
   timeoutMs = 30_000,
 ): Promise<void> {
-  await waitFor(async () => (await readPerpsPosition(stack, user)).netQuantity === 0n, timeoutMs);
+  await waitFor(
+    async () => (await readPerpsPosition(stack, user)).netQuantity === 0n,
+    timeoutMs,
+  );
 }
 
 /** Resolves to true once `user` has no futures positions. */
@@ -180,7 +186,10 @@ export async function expectFuturesClosed(
   user: Address,
   timeoutMs = 30_000,
 ): Promise<void> {
-  await waitFor(async () => (await readFuturesPositionIds(stack, user)).length === 0, timeoutMs);
+  await waitFor(
+    async () => (await readFuturesPositionIds(stack, user)).length === 0,
+    timeoutMs,
+  );
 }
 
 export interface AccountMargins {
@@ -326,7 +335,10 @@ export async function readFuturesNetQuantity(
  * a single transaction/block. `label` names the batched call for diagnostics.
  * Mirrors the multicall batching invariant asserted in the delivery test.
  */
-export function assertSingleBlock(blocks: readonly bigint[], label: string): void {
+export function assertSingleBlock(
+  blocks: readonly bigint[],
+  label: string,
+): void {
   assert.ok(blocks.length > 0, `${label}: expected at least one event block`);
   const unique = new Set(blocks.map((b) => b.toString()));
   assert.equal(
@@ -362,17 +374,23 @@ export async function expectNoOpenOrders(
 //
 // Both venues index liquidations on `user` in 3.0.
 
-export const readPerpsPositionLiquidationBlock = (s: DeployedStack, u: Address) =>
-  earliestEventBlock(s, "perps", "PositionLiquidated", { user: u });
+export const readPerpsPositionLiquidationBlock = (
+  s: DeployedStack,
+  u: Address,
+) => earliestEventBlock(s, "perps", "PositionLiquidated", { user: u });
 
-export const readFuturesPositionLiquidationBlock = (s: DeployedStack, u: Address) =>
-  earliestEventBlock(s, "futures", "PositionLiquidated", { user: u });
+export const readFuturesPositionLiquidationBlock = (
+  s: DeployedStack,
+  u: Address,
+) => earliestEventBlock(s, "futures", "PositionLiquidated", { user: u });
 
 export const readPerpsOrderLiquidationBlock = (s: DeployedStack, u: Address) =>
   earliestEventBlock(s, "perps", "OrderLiquidated", { user: u });
 
-export const readFuturesOrderLiquidationBlock = (s: DeployedStack, u: Address) =>
-  earliestEventBlock(s, "futures", "OrderLiquidated", { user: u });
+export const readFuturesOrderLiquidationBlock = (
+  s: DeployedStack,
+  u: Address,
+) => earliestEventBlock(s, "futures", "OrderLiquidated", { user: u });
 
 /**
  * Earliest block at which `Futures.PositionSettled(user, expirationAt)` was
@@ -394,7 +412,8 @@ export async function readLotClosedBlock(
   let earliest: bigint | null = null;
   for (const log of logs) {
     if (log.blockNumber === null) continue;
-    if (earliest === null || log.blockNumber < earliest) earliest = log.blockNumber;
+    if (earliest === null || log.blockNumber < earliest)
+      earliest = log.blockNumber;
   }
   return earliest;
 }
@@ -415,7 +434,8 @@ async function earliestEventBlock(
   let earliest: bigint | null = null;
   for (const log of logs) {
     if (log.blockNumber === null) continue;
-    if (earliest === null || log.blockNumber < earliest) earliest = log.blockNumber;
+    if (earliest === null || log.blockNumber < earliest)
+      earliest = log.blockNumber;
   }
   return earliest;
 }
@@ -430,7 +450,9 @@ async function earliestEventBlock(
  * verify *how* the planner closed the account (orders-only vs position
  * loop vs both).
  */
-export function expectLiquidated(outcome: PlanOutcome): Extract<PlanOutcome, { kind: "liquidated" }> {
+export function expectLiquidated(
+  outcome: PlanOutcome,
+): Extract<PlanOutcome, { kind: "liquidated" }> {
   assert.equal(
     outcome.kind,
     "liquidated",
@@ -439,13 +461,25 @@ export function expectLiquidated(outcome: PlanOutcome): Extract<PlanOutcome, { k
   return outcome as Extract<PlanOutcome, { kind: "liquidated" }>;
 }
 
-export function expectHealthy(outcome: PlanOutcome): Extract<PlanOutcome, { kind: "healthy" }> {
-  assert.equal(outcome.kind, "healthy", `expected healthy outcome, got: ${formatOutcome(outcome)}`);
+export function expectHealthy(
+  outcome: PlanOutcome,
+): Extract<PlanOutcome, { kind: "healthy" }> {
+  assert.equal(
+    outcome.kind,
+    "healthy",
+    `expected healthy outcome, got: ${formatOutcome(outcome)}`,
+  );
   return outcome as Extract<PlanOutcome, { kind: "healthy" }>;
 }
 
-export function expectBadDebt(outcome: PlanOutcome): Extract<PlanOutcome, { kind: "badDebt" }> {
-  assert.equal(outcome.kind, "badDebt", `expected badDebt outcome, got: ${formatOutcome(outcome)}`);
+export function expectBadDebt(
+  outcome: PlanOutcome,
+): Extract<PlanOutcome, { kind: "badDebt" }> {
+  assert.equal(
+    outcome.kind,
+    "badDebt",
+    `expected badDebt outcome, got: ${formatOutcome(outcome)}`,
+  );
   return outcome as Extract<PlanOutcome, { kind: "badDebt" }>;
 }
 
@@ -487,7 +521,9 @@ function sleep(ms: number): Promise<void> {
  * useful diagnostics rather than `TypeError: Do not know how to serialize
  * a BigInt`.
  */
-export function formatOutcome(outcome: PlanOutcome | { kind: string; [k: string]: unknown }): string {
+export function formatOutcome(
+  outcome: PlanOutcome | { kind: string; [k: string]: unknown },
+): string {
   const parts = Object.entries(outcome).map(
     ([k, v]) => `${k}=${typeof v === "bigint" ? `${v}n` : JSON.stringify(v)}`,
   );

@@ -1,3 +1,4 @@
+// biome-ignore-all lint/suspicious/noTemplateCurlyInString: literal ${VAR} tokens are the config syntax under test.
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { Hex } from "viem";

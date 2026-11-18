@@ -17,7 +17,7 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { hardhat } from "viem/chains";
-import { artifacts, type CompiledArtifact } from "./artifacts.ts";
+import { artifacts, type CompiledArtifact, linkArtifact } from "./artifacts.ts";
 
 /**
  * Programmatic deployment of the full collateral-margin stack against a
@@ -180,14 +180,17 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
       client: createWalletClient({ account, chain: hardhat, transport }),
     } satisfies Wallet;
   });
-  // Destructure with non-null assertions — the array literal above guarantees
-  // 6 elements, but TS can't see that through `Array.prototype.map`.
-  const owner = wallets[0]!;
-  const alice = wallets[1]!;
-  const bob = wallets[2]!;
-  const liquidator = wallets[3]!;
-  const validator = wallets[4]!;
-  const dave = wallets[5]!;
+  const walletAt = (i: number): Wallet => {
+    const wallet = wallets[i];
+    if (wallet === undefined) throw new Error(`missing hardhat wallet ${i}`);
+    return wallet;
+  };
+  const owner = walletAt(0);
+  const alice = walletAt(1);
+  const bob = walletAt(2);
+  const liquidator = walletAt(3);
+  const validator = walletAt(4);
+  const dave = walletAt(5);
 
   // ── Infrastructure: Multicall3 ────────────────────────────────────────
   // Deployed first because `buildKeeper` reads its address into the chain
@@ -240,15 +243,32 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
 
   // ── Futures (UUPS proxy, takes vault in constructor) ──────────────────
   const futuresArt = artifacts.futures();
-  const futuresImpl = await deploy(publicClient, owner.client, futuresArt, [
-    vault,
-  ]);
+  const futuresBookLib = await deploy(
+    publicClient,
+    owner.client,
+    artifacts.futuresBookLib(),
+    [],
+  );
+  const futuresImpl = await deploy(
+    publicClient,
+    owner.client,
+    linkArtifact(futuresArt, { FuturesBookLib: futuresBookLib }),
+    [vault],
+  );
   const latestBlock = await publicClient.getBlock();
   // First expiry sits one interval out from now (the duration constant is gone —
   // hashpower settles per-day, so only the expiry spacing schedules the book).
   const firstExpirationAt =
-    latestBlock.timestamp + BigInt(FUTURES_EXPIRATION_INTERVAL_DAYS * 24 * 3600);
-  // initialize(hashrateOracle, liquidationMarginPercent,
+    latestBlock.timestamp +
+    BigInt(FUTURES_EXPIRATION_INTERVAL_DAYS * 24 * 3600);
+  // Marks every expiry at the index, so the keeper's single-price replica stays exact.
+  const futuresMarkOracle = await deploy(
+    publicClient,
+    owner.client,
+    artifacts.futuresMarkOracle(),
+    [hashpriceOracle],
+  );
+  // initialize(markOracle, liquidationMarginPercent,
   //            futureExpirationDatesCount, firstFutureExpirationDate)
   const futures = await deployProxy(
     publicClient,
@@ -257,7 +277,7 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     futuresArt.abi,
     "initialize",
     [
-      hashpriceOracle,
+      futuresMarkOracle,
       FUTURES_LIQUIDATION_MARGIN_PCT,
       FUTURES_FUTURE_DELIVERY_DATES_COUNT,
       firstExpirationAt,
@@ -279,7 +299,9 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
   // ── Wire PME ↔ venues ↔ vault ─────────────────────────────────────────
   // PME -> learn about each venue so portfolio MM math includes both legs,
   // and point its own spot source at the shared hashprice oracle.
-  await write(publicClient, owner.client, pme, pmeArt.abi, "addLinearMarket", [perps]);
+  await write(publicClient, owner.client, pme, pmeArt.abi, "addLinearMarket", [
+    perps,
+  ]);
   await write(publicClient, owner.client, pme, pmeArt.abi, "addLinearMarket", [
     futures,
   ]);
@@ -322,12 +344,22 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
     "setPortfolioMargin",
     [pme],
   );
-  await write(publicClient, owner.client, perps, perpsArt.abi, "setTakerFeeBps", [
-    Number(PERPS_TAKER_FEE_BPS),
-  ]);
-  await write(publicClient, owner.client, perps, perpsArt.abi, "setMakerFeeBps", [
-    Number(PERPS_MAKER_FEE_BPS),
-  ]);
+  await write(
+    publicClient,
+    owner.client,
+    perps,
+    perpsArt.abi,
+    "setTakerFeeBps",
+    [Number(PERPS_TAKER_FEE_BPS)],
+  );
+  await write(
+    publicClient,
+    owner.client,
+    perps,
+    perpsArt.abi,
+    "setMakerFeeBps",
+    [Number(PERPS_MAKER_FEE_BPS)],
+  );
   await write(
     publicClient,
     owner.client,
@@ -441,9 +473,9 @@ export async function deployStack(rpcUrl: string): Promise<DeployedStack> {
   };
 }
 
-// ── Internal helpers ────────────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────────
 
-async function deploy(
+export async function deploy(
   pc: PublicClient,
   wc: WalletClient,
   artifact: CompiledArtifact,
@@ -453,7 +485,7 @@ async function deploy(
     abi: artifact.abi,
     bytecode: artifact.bytecode,
     args: args as never,
-    account: wc.account!,
+    account: accountOf(wc),
     chain: hardhat,
   });
   const receipt = await pc.waitForTransactionReceipt({ hash });
@@ -479,7 +511,7 @@ async function deployProxy(
   return deploy(pc, wc, artifacts.erc1967Proxy(), [implementation, initData]);
 }
 
-async function write(
+export async function write(
   pc: PublicClient,
   wc: WalletClient,
   address: Address,
@@ -492,8 +524,13 @@ async function write(
     abi,
     functionName,
     args: args as never,
-    account: wc.account!,
+    account: accountOf(wc),
     chain: hardhat,
   });
   await pc.waitForTransactionReceipt({ hash });
+}
+
+function accountOf(wc: WalletClient): Account {
+  if (wc.account === undefined) throw new Error("wallet client has no account");
+  return wc.account;
 }

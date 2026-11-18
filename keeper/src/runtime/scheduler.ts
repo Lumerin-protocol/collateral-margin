@@ -83,6 +83,7 @@ export class Scheduler {
     }
     this.inflightSweep = true;
     try {
+      const prune = this.tracker.idlePruner?.();
       const users = this.tracker.list();
       if (users.length === 0) {
         // Info, not debug: dev runs at LOG_LEVEL=info, and the heartbeat
@@ -94,7 +95,12 @@ export class Scheduler {
         return;
       }
 
-      const healths = await readAccountHealthBatch(this.chain, this.config, users);
+      const healths = await readAccountHealthBatch(
+        this.chain,
+        this.config,
+        users,
+        { logger: this.logger },
+      );
       let underwater = 0;
       let warned = 0;
       let critical = 0;
@@ -124,8 +130,13 @@ export class Scheduler {
         }
       }
 
+      // No position, order or debt on any venue: nothing to liquidate. A
+      // failed health read leaves the user out of `healths`, so it is kept.
+      const pruned =
+        prune?.(healths.filter((h) => h.imRequired === 0n).map((h) => h.user)) ?? 0;
+
       this.logger.info(
-        { tracked: users.length, underwater, warned, critical },
+        { tracked: users.length, underwater, warned, critical, pruned },
         "sweep complete",
       );
 

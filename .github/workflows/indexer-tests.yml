@@ -34,7 +34,8 @@ jobs:
     name: Indexer tests
     needs: pre
     if: needs.pre.outputs.should_skip != 'true'
-    runs-on: ubuntu-latest
+    # matchstick ships no binary for Ubuntu 26, which ubuntu-latest became in 2026-10.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     steps:
@@ -89,6 +90,13 @@ jobs:
       - name: Typecheck
         working-directory: ./indexer
         run: pnpm typecheck
+
+      # matchstick-ts runs `graph test` without -v, which otherwise asks the GitHub API for the
+      # latest Matchstick release and fails when it is rate-limited; graph-cli trusts a cache
+      # younger than a day.
+      - name: Pin Matchstick
+        working-directory: ./indexer
+        run: echo "{\"version\":\"0.6.0\",\"timestamp\":$(date +%s000)}" > tests/.latest.json
 
       - name: Run matchstick unit tests
         working-directory: ./indexer

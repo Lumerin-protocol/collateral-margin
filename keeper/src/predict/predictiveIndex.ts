@@ -108,7 +108,11 @@ export class PredictiveIndex {
       for (let i = lo; i < hi; i++) {
         const entry = this.downSorted[i];
         if (entry === undefined) continue;
-        out.push({ user: entry.user, threshold: entry.threshold, direction: "down" });
+        out.push({
+          user: entry.user,
+          threshold: entry.threshold,
+          direction: "down",
+        });
       }
     } else {
       // Rising price: pick upSorted entries with threshold ∈ [prev, next].
@@ -117,7 +121,11 @@ export class PredictiveIndex {
       for (let i = lo; i < hi; i++) {
         const entry = this.upSorted[i];
         if (entry === undefined) continue;
-        out.push({ user: entry.user, threshold: entry.threshold, direction: "up" });
+        out.push({
+          user: entry.user,
+          threshold: entry.threshold,
+          direction: "up",
+        });
       }
     }
     return out;

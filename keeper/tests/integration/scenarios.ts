@@ -1,6 +1,13 @@
 import { parseUnits, type Address } from "viem";
 import { hardhat } from "viem/chains";
-import { deployStack, type DeployedStack, type Wallet } from "./deployStack.ts";
+import { artifacts } from "./artifacts.ts";
+import {
+  deploy,
+  deployStack,
+  write,
+  type DeployedStack,
+  type Wallet,
+} from "./deployStack.ts";
 
 /** Mirrors the venues' on-chain `TimeInForce`; fixtures only ever rest liquidity. */
 const GTC = 0;
@@ -190,9 +197,12 @@ export async function baseFixture(rpcUrl: string): Promise<BaseFixture> {
   const stack = await deployStack(rpcUrl);
   return {
     ...stack,
-    bumpHashprice: (price) => writeOracle(stack, stack.addresses.hashpriceOracle, price),
-    bumpBtcUsdc: (price) => writeOracle(stack, stack.addresses.btcUsdcFeed, price),
-    setMark: (marketPrice) => writeOracle(stack, stack.addresses.hashpriceOracle, marketPrice),
+    bumpHashprice: (price) =>
+      writeOracle(stack, stack.addresses.hashpriceOracle, price),
+    bumpBtcUsdc: (price) =>
+      writeOracle(stack, stack.addresses.btcUsdcFeed, price),
+    setMark: (marketPrice) =>
+      writeOracle(stack, stack.addresses.hashpriceOracle, marketPrice),
     deposit: (user, amount) => depositTo(stack, user, amount),
     crashOracles: async (marketPrice) => {
       await writeOracle(stack, stack.addresses.hashpriceOracle, marketPrice);
@@ -328,8 +338,18 @@ export function twoUnderwaterUsersFixtureBuilder(rpcUrl: string) {
       base.config.initialMarketPrice,
       -(aliceQty + daveQty),
     );
-    await placePerpsOrder(base, base.accounts.alice, base.config.initialMarketPrice, aliceQty);
-    await placePerpsOrder(base, base.accounts.dave, base.config.initialMarketPrice, daveQty);
+    await placePerpsOrder(
+      base,
+      base.accounts.alice,
+      base.config.initialMarketPrice,
+      aliceQty,
+    );
+    await placePerpsOrder(
+      base,
+      base.accounts.dave,
+      base.config.initialMarketPrice,
+      daveQty,
+    );
 
     return {
       ...base,
@@ -572,7 +592,8 @@ export function futuresPartialCrashFixtureBuilder(rpcUrl: string) {
       aliceFuturesQty,
       // Moderate crash: $40 → $30 mark. Deep enough to break MM, shallow enough
       // that a subset of lots restores the IM buffer.
-      makeLiquidatable: () => base.crashOracles(parseUnits("30", base.config.tokenDecimals)),
+      makeLiquidatable: () =>
+        base.crashOracles(parseUnits("30", base.config.tokenDecimals)),
     };
   };
 }
@@ -623,7 +644,8 @@ export function futuresMultiExpiryPartialCrashFixtureBuilder(rpcUrl: string) {
       aliceDeposit,
       expirationAts: [firstExpirationAt, secondExpirationAt] as const,
       perExpiryQty,
-      makeLiquidatable: () => base.crashOracles(parseUnits("30", base.config.tokenDecimals)),
+      makeLiquidatable: () =>
+        base.crashOracles(parseUnits("30", base.config.tokenDecimals)),
     };
   };
 }
@@ -808,7 +830,8 @@ export function crossVenueBothLegsCrashFixtureBuilder(rpcUrl: string) {
       aliceDeposit,
       alicePerpsQty,
       aliceFuturesQty,
-      makeLiquidatable: () => base.crashOracles(parseUnits("30", base.config.tokenDecimals)),
+      makeLiquidatable: () =>
+        base.crashOracles(parseUnits("30", base.config.tokenDecimals)),
     };
   };
 }
@@ -830,7 +853,12 @@ export function crossVenueBothLegsCrashFixtureBuilder(rpcUrl: string) {
  */
 function crossVenueFixtureBody(
   base: BaseFixture,
-  sizing: { aliceDeposit: bigint; bobDeposit: bigint; alicePerpsQty: bigint; aliceFuturesQty: number },
+  sizing: {
+    aliceDeposit: bigint;
+    bobDeposit: bigint;
+    alicePerpsQty: bigint;
+    aliceFuturesQty: number;
+  },
 ): Promise<CrossVenueFixture> {
   return (async () => {
     const { aliceDeposit, bobDeposit, alicePerpsQty, aliceFuturesQty } = sizing;
@@ -973,6 +1001,248 @@ export function crossVenueFuturesDominantFixtureBuilder(rpcUrl: string) {
   };
 }
 
+/** Alice rests decoy order books on both venues and holds no position. */
+export interface DecoyBooksFixture extends BaseFixture {
+  aliceDeposit: bigint;
+  /** Per-contract mark the books are placed around. */
+  mark: bigint;
+}
+
+/**
+ * CF-007: every book hides a marketable order behind a deep one, so netting a
+ * side's limit value against its mark value reads it as loss-free. The venues
+ * bound each side's fill loss from its price spread instead, per expiry on
+ * futures, and the keeper's replica has to agree with the engine at any mark.
+ *
+ * At a $50 mark, 10 contracts per order:
+ *   - perps: bids at $60 and $40
+ *   - futures, first expiry: bids at $60 and $40
+ *   - futures, second expiry: one bid at $50 (no loss on its own, but pooled
+ *     with the first expiry it would widen that spread)
+ *   - futures, third expiry: asks at $40 and $60
+ * True fill loss at $50 is $100 per decoy pair. Deposit $2,000 covers the IM.
+ */
+export function decoyBooksFixtureBuilder(rpcUrl: string) {
+  return async (): Promise<DecoyBooksFixture> => {
+    const base = await baseFixture(rpcUrl);
+    const usd = (value: string) => parseUnits(value, base.config.tokenDecimals);
+    const mark = usd("50");
+    await base.setMark(mark);
+
+    const alice = base.accounts.alice;
+    const aliceDeposit = usd("2000");
+    await base.deposit(alice.account.address, aliceDeposit);
+
+    const perpsQty = parseUnits("10", base.config.quantityDecimals);
+    await placePerpsOrder(base, alice, usd("60"), perpsQty);
+    await placePerpsOrder(base, alice, usd("40"), perpsQty);
+
+    const expirationAts = (await base.publicClient.readContract({
+      address: base.addresses.futures,
+      abi: base.abis.futures,
+      functionName: "getExpirationDates",
+    })) as readonly bigint[];
+    const [first, second, third] = expirationAts;
+    if (first === undefined || second === undefined || third === undefined) {
+      throw new Error("decoy books need three listed expiries");
+    }
+    await placeFuturesOrder(base, alice, usd("60"), first, 10);
+    await placeFuturesOrder(base, alice, usd("40"), first, 10);
+    await placeFuturesOrder(base, alice, usd("50"), second, 10);
+    await placeFuturesOrder(base, alice, usd("40"), third, -10);
+    await placeFuturesOrder(base, alice, usd("60"), third, -10);
+
+    return { ...base, aliceDeposit, mark };
+  };
+}
+
+/** Alice trades both venues while their marks sit away from the index. */
+export interface HalvingMarksFixture extends BaseFixture {
+  /** The index (`HashpriceUSD`) in token decimals: futures' `getMarketPrice()`. */
+  index: bigint;
+  /** Perps mark: the glide, part way down to the post-halving price. */
+  perpsMark: bigint;
+  /** First listed futures date, which settles after the halving. */
+  futuresDate: bigint;
+  futuresLow: bigint;
+  futuresHigh: bigint;
+}
+
+const HALVING_HEIGHT = 1_050_000n;
+const BTC_FEES = 3_150_000n;
+const BTC_DIFFICULTY = 150_000_000_000_000n;
+const BTC_USD = parseUnits("100000", 8);
+
+/**
+ * CF-321: the real oracle chain (`HashpriceBTCMock` → `HashpriceUSD` → `HashpriceGlideUSD`)
+ * 600 blocks before the halving. Perps marks at the glide (552 of 1,008 blocks down, about
+ * 73% of the index) and futures at the mark ranges, whose first date (30 days out) settles
+ * after the halving at about half the index; the engine stresses at the index.
+ *
+ * Alice holds 10 perps long at the perps mark and 10 futures short at the date's mark, plus a
+ * perps bid 5% under the mark and a futures ask 5% over it.
+ */
+export function halvingMarksFixtureBuilder(rpcUrl: string) {
+  return async (): Promise<HalvingMarksFixture> => {
+    const base = await baseFixture(rpcUrl);
+    const { publicClient: pc } = base;
+    const owner = base.accounts.owner.client;
+    const btcArt = artifacts.hashpriceBtcMock();
+    const feedArt = artifacts.priceFeedMock();
+    const btc = await deploy(pc, owner, btcArt, []);
+    const btcUsd = await deploy(pc, owner, feedArt, [8, "BTC/USD"]);
+    await write(pc, owner, btcUsd, feedArt.abi, "setPrice", [BTC_USD]);
+    await write(pc, owner, btc, btcArt.abi, "setBlock", [
+      Number(HALVING_HEIGHT - 600n),
+      BTC_FEES,
+      BTC_DIFFICULTY,
+    ]);
+    const hashpriceUsd = await deploy(pc, owner, artifacts.hashpriceUsd(), [
+      btc,
+      btcUsd,
+    ]);
+    const glide = await deploy(pc, owner, artifacts.hashpriceGlideUsd(), [
+      hashpriceUsd,
+    ]);
+    const { pme, perps, futures } = base.addresses;
+    await write(pc, owner, pme, base.abis.pme, "setOracle", [hashpriceUsd]);
+    await write(pc, owner, perps, base.abis.perps, "setOracle", [glide]);
+    await write(pc, owner, futures, base.abis.futures, "setOracle", [glide]);
+
+    const read = (
+      address: Address,
+      abi: typeof base.abis.perps,
+      functionName: string,
+      args: readonly unknown[] = [],
+    ) => pc.readContract({ address, abi, functionName, args });
+    const index = (await read(
+      futures,
+      base.abis.futures,
+      "getMarketPrice",
+    )) as bigint;
+    const perpsMark = (await read(
+      perps,
+      base.abis.perps,
+      "getMarketPrice",
+    )) as bigint;
+    const futuresDate = base.config.futuresFirstExpirationAt;
+    const [futuresLow, futuresHigh] = (await read(
+      futures,
+      base.abis.futures,
+      "getMarkRange",
+      [futuresDate],
+    )) as readonly [bigint, bigint];
+
+    const usd = (value: string) => parseUnits(value, base.config.tokenDecimals);
+    const { alice, bob } = base.accounts;
+    await base.deposit(alice.account.address, usd("2000"));
+    await base.deposit(bob.account.address, usd("5000"));
+    const perpsQty = parseUnits("10", base.config.quantityDecimals);
+    await matchPerpsTrade(base, {
+      buyer: alice,
+      seller: bob,
+      price: perpsMark,
+      quantity: perpsQty,
+    });
+    await matchFuturesTrade(base, {
+      buyer: bob,
+      seller: alice,
+      price: futuresLow,
+      expirationAt: futuresDate,
+      quantity: 10,
+    });
+    const tick = base.config.minimumPriceIncrement;
+    const awayFrom = (mark: bigint, pct: bigint) =>
+      ((mark * pct) / 100n / tick) * tick;
+    await placePerpsOrder(base, alice, awayFrom(perpsMark, 95n), perpsQty);
+    await placeFuturesOrder(
+      base,
+      alice,
+      awayFrom(futuresHigh, 105n),
+      futuresDate,
+      -5,
+    );
+
+    return { ...base, index, perpsMark, futuresDate, futuresLow, futuresHigh };
+  };
+}
+
+/** Alice's perps long on the glide, partly liquidatable after a BTC fall. */
+export interface HalvingPerpsPartialCrashFixture extends BaseFixture {
+  aliceQty: bigint;
+  /** Perps mark at entry: the glide, about 73% of the index. */
+  perpsMark: bigint;
+  makeLiquidatable(): Promise<void>;
+}
+
+/**
+ * CF-321: `halvingMarksFixtureBuilder`'s oracle chain with perps alone in play. Alice buys 5
+ * perps at the glide with 31% of the notional, the proportions of
+ * `perpsPartialCrashFixtureBuilder`; a 28.7% fall in BTC/USD moves the index and the glide
+ * down together and leaves her below MM, recoverable by a partial close.
+ */
+export function halvingPerpsPartialCrashFixtureBuilder(rpcUrl: string) {
+  return async (): Promise<HalvingPerpsPartialCrashFixture> => {
+    const base = await baseFixture(rpcUrl);
+    const { publicClient: pc } = base;
+    const owner = base.accounts.owner.client;
+    const btcArt = artifacts.hashpriceBtcMock();
+    const feedArt = artifacts.priceFeedMock();
+    const btc = await deploy(pc, owner, btcArt, []);
+    const btcUsd = await deploy(pc, owner, feedArt, [8, "BTC/USD"]);
+    await write(pc, owner, btcUsd, feedArt.abi, "setPrice", [BTC_USD]);
+    await write(pc, owner, btc, btcArt.abi, "setBlock", [
+      Number(HALVING_HEIGHT - 600n),
+      BTC_FEES,
+      BTC_DIFFICULTY,
+    ]);
+    const hashpriceUsd = await deploy(pc, owner, artifacts.hashpriceUsd(), [
+      btc,
+      btcUsd,
+    ]);
+    const glide = await deploy(pc, owner, artifacts.hashpriceGlideUsd(), [
+      hashpriceUsd,
+    ]);
+    const { pme, perps, futures } = base.addresses;
+    await write(pc, owner, pme, base.abis.pme, "setOracle", [hashpriceUsd]);
+    await write(pc, owner, perps, base.abis.perps, "setOracle", [glide]);
+    await write(pc, owner, futures, base.abis.futures, "setOracle", [glide]);
+
+    const perpsMark = (await pc.readContract({
+      address: perps,
+      abi: base.abis.perps,
+      functionName: "getMarketPrice",
+    })) as bigint;
+    const aliceQty = parseUnits("5", base.config.quantityDecimals);
+    const notional =
+      (perpsMark * aliceQty) / 10n ** BigInt(base.config.quantityDecimals);
+    await base.deposit(
+      base.accounts.alice.account.address,
+      (notional * 31n) / 100n,
+    );
+    await base.deposit(
+      base.accounts.bob.account.address,
+      parseUnits("3000", base.config.tokenDecimals),
+    );
+    await matchPerpsTrade(base, {
+      buyer: base.accounts.alice,
+      seller: base.accounts.bob,
+      price: perpsMark,
+      quantity: aliceQty,
+    });
+
+    return {
+      ...base,
+      aliceQty,
+      perpsMark,
+      makeLiquidatable: () =>
+        write(pc, owner, btcUsd, feedArt.abi, "setPrice", [
+          (BTC_USD * 713n) / 1000n,
+        ]),
+    };
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Internal placement / writing helpers
 // ─────────────────────────────────────────────────────────────────────────
@@ -990,7 +1260,10 @@ interface PerpsTrade {
  * `seller` (negative qty). Seller's resting short is placed *first* so
  * the taker (`buyer`) matches against it on submission.
  */
-async function matchPerpsTrade(base: BaseFixture, t: PerpsTrade): Promise<void> {
+async function matchPerpsTrade(
+  base: BaseFixture,
+  t: PerpsTrade,
+): Promise<void> {
   await placePerpsOrder(base, t.seller, t.price, -t.quantity);
   await placePerpsOrder(base, t.buyer, t.price, t.quantity);
 }
@@ -1005,7 +1278,10 @@ interface FuturesTrade {
 }
 
 /** Same shape as `matchPerpsTrade`, but for the Futures venue. */
-async function matchFuturesTrade(base: BaseFixture, t: FuturesTrade): Promise<void> {
+async function matchFuturesTrade(
+  base: BaseFixture,
+  t: FuturesTrade,
+): Promise<void> {
   await placeFuturesOrder(base, t.seller, t.price, t.expirationAt, -t.quantity);
   await placeFuturesOrder(base, t.buyer, t.price, t.expirationAt, t.quantity);
 }
@@ -1047,7 +1323,10 @@ async function placeFuturesOrder(
 }
 
 /** Owner-only: set the futures taker fee (bps of notional). */
-async function setFuturesTakerFee(stack: DeployedStack, feeBps: bigint): Promise<void> {
+async function setFuturesTakerFee(
+  stack: DeployedStack,
+  feeBps: bigint,
+): Promise<void> {
   const hash = await stack.accounts.owner.client.writeContract({
     address: stack.addresses.futures,
     abi: stack.abis.futures,
@@ -1059,7 +1338,11 @@ async function setFuturesTakerFee(stack: DeployedStack, feeBps: bigint): Promise
   await stack.publicClient.waitForTransactionReceipt({ hash });
 }
 
-async function writeOracle(stack: DeployedStack, oracle: Address, price: bigint): Promise<void> {
+async function writeOracle(
+  stack: DeployedStack,
+  oracle: Address,
+  price: bigint,
+): Promise<void> {
   const hash = await stack.accounts.owner.client.writeContract({
     address: oracle,
     abi: stack.abis.hashpriceOracle,
@@ -1071,8 +1354,14 @@ async function writeOracle(stack: DeployedStack, oracle: Address, price: bigint)
   await stack.publicClient.waitForTransactionReceipt({ hash });
 }
 
-async function depositTo(stack: DeployedStack, user: Address, amount: bigint): Promise<void> {
-  const wallet = Object.values(stack.accounts).find((w) => w.account.address === user);
+async function depositTo(
+  stack: DeployedStack,
+  user: Address,
+  amount: bigint,
+): Promise<void> {
+  const wallet = Object.values(stack.accounts).find(
+    (w) => w.account.address === user,
+  );
   if (wallet === undefined) throw new Error(`No fixture wallet for ${user}`);
   const hash = await wallet.client.writeContract({
     address: stack.addresses.vault,

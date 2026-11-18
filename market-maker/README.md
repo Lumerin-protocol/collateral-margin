@@ -172,7 +172,7 @@ else lives in YAML.
 | `PERPS_ADDRESS` | all | Deployed `HashPowerPerpsDEX` proxy address |
 | `FUTURES_ADDRESS` | all | Deployed `Futures` proxy address |
 | `HASHPRICE_ORACLE_SUBGRAPH_URL` | dev / prd | Hashprice-oracle subgraph, used to backfill the σ window at startup |
-| `ETH_PRICE_FEED_ADDRESS` | dev / prd | Chainlink ETH/USD aggregator; required for USD-denominated gas budgets |
+| `ETH_PRICE_FEED_ADDRESS` | prd | Chainlink ETH/USD aggregator; startup fails without it while `risk.usdGasAccounting` is on. The dev and local YAMLs turn that off, since testnet gas is not a real fee market. |
 
 Custom YAMLs may reference additional `${VAR}` tokens (e.g. a
 non-Alchemy RPC URL, a chain id override). The bundled YAMLs in
@@ -200,21 +200,9 @@ pnpm install
 ### Run
 
 ```bash
-# Local hardhat (pretty-printed logs, dry-run on by default)
-pnpm local:perps
-pnpm local:futures
-
-# base-sepolia (dev testnet)
-pnpm dev:perps
-pnpm dev:futures
-
-# base-mainnet (staging — pre-prod sizes)
-pnpm stg:perps
-pnpm stg:futures
-
-# base-mainnet (production)
-pnpm prd:perps
-pnpm prd:futures
+pnpm local:portfolio  # local hardhat
+pnpm dev:portfolio    # base-sepolia
+pnpm prd:portfolio    # base-mainnet
 ```
 
 ## Health endpoint

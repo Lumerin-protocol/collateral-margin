@@ -43,7 +43,7 @@ describe("formatGasCost", () => {
     // 100k * 1 gwei = 1e14 wei. Pretend ETH/USD = $3000; cost = 0.0001 * 3000 = $0.3
     const fields = formatGasCost(
       receipt(100_000n, 1_000_000_000n),
-      makeFeed((wei) => Number(wei) * 3000 / 1e18),
+      makeFeed((wei) => (Number(wei) * 3000) / 1e18),
     );
     assert.equal(fields.gasCostUsd, 0.3);
   });
@@ -71,7 +71,10 @@ describe("formatGasCost", () => {
   it("tolerates a partial receipt with null gasUsed / effectiveGasPrice (RPC fallback)", () => {
     // Some providers return `null` here on freshly-mined txs; we must
     // not crash a tx confirmation path on a cosmetic field.
-    const partial = { gasUsed: null, effectiveGasPrice: null } as unknown as TransactionReceipt;
+    const partial = {
+      gasUsed: null,
+      effectiveGasPrice: null,
+    } as unknown as TransactionReceipt;
     const fields = formatGasCost(partial);
     assert.equal(fields.gasUsed, 0);
     assert.equal(fields.gasCostEth, "0");

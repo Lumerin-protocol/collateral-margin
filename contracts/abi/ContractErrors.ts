@@ -68,6 +68,17 @@ export const contractErrors = [
     "type": "error"
   },
   {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "value",
+        "type": "uint256"
+      }
+    ],
+    "name": "SafeCastOverflowedUintToInt",
+    "type": "error"
+  },
+  {
     "inputs": [],
     "name": "DebtAboveCap",
     "type": "error"

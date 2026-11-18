@@ -1,16 +1,9 @@
-import {
-  getAddress,
-  type Address,
-  type Log,
-} from "viem";
+import { getAddress, type Address, type Log } from "viem";
 import type pino from "pino";
 import { HashPowerFuturesAbi } from "../abi/HashPowerFutures.ts";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
-import type {
-  ParticipantListener,
-  ParticipantSource,
-} from "./types.ts";
+import type { ParticipantListener, ParticipantSource } from "./types.ts";
 import { BACKSTOP_ADDR, isProtocolAccount } from "../protocolAccounts.ts";
 
 export interface ExpiryPosition {
@@ -49,11 +42,7 @@ export class FuturesExpiryIndex implements ParticipantSource {
   private readonly config: Config;
   private readonly logger: pino.Logger;
 
-  constructor(
-    chain: Chain,
-    config: Config,
-    logger: pino.Logger,
-  ) {
+  constructor(chain: Chain, config: Config, logger: pino.Logger) {
     this.chain = chain;
     this.config = config;
     this.logger = logger.child({ component: "futuresExpiryIndex" });
@@ -63,7 +52,9 @@ export class FuturesExpiryIndex implements ParticipantSource {
     this.unwatchers.push(
       this.watch("OrderCreated", (logs) => this.onOrderCreated(logs)),
       this.watch("OrderMatched", (logs) => this.onOrderMatched(logs)),
-      this.watch("PositionLiquidated", (logs) => this.onPositionLiquidated(logs)),
+      this.watch("PositionLiquidated", (logs) =>
+        this.onPositionLiquidated(logs),
+      ),
       this.watch("PositionSettled", (logs) => this.onPositionSettled(logs)),
     );
 
@@ -79,7 +70,8 @@ export class FuturesExpiryIndex implements ParticipantSource {
         this.logger.error({ err }, "futures expiry window refresh failed");
       });
     }, this.config.delivery.sweepIntervalMs);
-    if (typeof this.refreshTimer.unref === "function") this.refreshTimer.unref();
+    if (typeof this.refreshTimer.unref === "function")
+      this.refreshTimer.unref();
   }
 
   stop(): void {
@@ -217,7 +209,9 @@ export class FuturesExpiryIndex implements ParticipantSource {
 
     const intervalSec = window.intervalDays * 86_400n;
     const earliestExpiry = window.targets.reduce((a, b) => (a < b ? a : b));
-    const lifetimeSec = intervalSec * BigInt(Math.max(1, window.expiryCount));
+    // One interval of slack: a date moved clear of a halving (N28) can be listed up to half an
+    // interval earlier than its grid position suggests.
+    const lifetimeSec = intervalSec * BigInt(Math.max(1, window.expiryCount) + 1);
     const fromTimestamp =
       earliestExpiry > lifetimeSec ? earliestExpiry - lifetimeSec : 0n;
     const head = await this.chain.publicClient.getBlockNumber();
@@ -240,7 +234,7 @@ export class FuturesExpiryIndex implements ParticipantSource {
   }
 
   private async refreshWindow(): Promise<ExpiryWindow> {
-    const [rawExpiries, intervalDays, expiryCount] = await Promise.all([
+    const [rawExpiries, intervalDays, expiryCount, schedule] = await Promise.all([
       this.chain.publicClient.readContract({
         address: this.config.futures.address,
         abi: HashPowerFuturesAbi,
@@ -256,14 +250,19 @@ export class FuturesExpiryIndex implements ParticipantSource {
         abi: HashPowerFuturesAbi,
         functionName: "futureExpirationDatesCount",
       }) as Promise<number>,
+      this.chain.publicClient.readContract({
+        address: this.config.futures.address,
+        abi: HashPowerFuturesAbi,
+        functionName: "deliverySchedule",
+      }) as Promise<readonly [bigint, bigint, bigint]>,
     ]);
-    const active = [...rawExpiries].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-    const intervalSec = BigInt(intervalDays) * 86_400n;
-    const firstActive = active[0];
-    const previous =
-      firstActive !== undefined && firstActive >= intervalSec
-        ? firstActive - intervalSec
-        : undefined;
+    const active = [...rawExpiries].sort((a, b) =>
+      a < b ? -1 : a > b ? 1 : 0,
+    );
+    // The date that matured last comes from the venue's schedule: a date moved clear of a
+    // halving (N28) leaves the previous one 15 or 45 days back, not one interval.
+    const [, , previousExpiry] = schedule;
+    const previous = previousExpiry === 0n ? undefined : previousExpiry;
     const targets = previous === undefined ? active : [previous, ...active];
 
     this.previousExpiry = previous;
@@ -275,10 +274,7 @@ export class FuturesExpiryIndex implements ParticipantSource {
   private pruneDrainedBuckets(): void {
     if (this.previousExpiry === undefined) return;
     for (const [expirationAt, bucket] of this.buckets) {
-      if (
-        expirationAt < this.previousExpiry &&
-        bucket.positions.size === 0
-      ) {
+      if (expirationAt < this.previousExpiry && bucket.positions.size === 0) {
         this.buckets.delete(expirationAt);
       }
     }
@@ -286,7 +282,8 @@ export class FuturesExpiryIndex implements ParticipantSource {
 
   private async replay(fromBlock: bigint, head: bigint): Promise<void> {
     const chunkSize = this.config.chain.backfillChunkSize;
-    if (chunkSize <= 0n) throw new Error("BACKFILL_CHUNK_SIZE must be positive");
+    if (chunkSize <= 0n)
+      throw new Error("BACKFILL_CHUNK_SIZE must be positive");
     const eventNames = [
       "OrderCreated",
       "OrderMatched",
@@ -314,7 +311,8 @@ export class FuturesExpiryIndex implements ParticipantSource {
           }),
         );
         const ordered = pages.flat().sort(compareLogs);
-        for (const entry of ordered) this.dispatch(entry.eventName, [entry.log]);
+        for (const entry of ordered)
+          this.dispatch(entry.eventName, [entry.log]);
       } catch (err) {
         this.logger.error(
           { err, fromBlock: start.toString(), toBlock: toBlock.toString() },
@@ -334,7 +332,8 @@ export class FuturesExpiryIndex implements ParticipantSource {
   ): void {
     if (eventName === "OrderCreated") this.onOrderCreated(logs);
     else if (eventName === "OrderMatched") this.onOrderMatched(logs);
-    else if (eventName === "PositionLiquidated") this.onPositionLiquidated(logs);
+    else if (eventName === "PositionLiquidated")
+      this.onPositionLiquidated(logs);
     else this.onPositionSettled(logs);
   }
 
@@ -520,7 +519,9 @@ export class FuturesExpiryIndex implements ParticipantSource {
     let high = head;
     while (low < high) {
       const mid = (low + high) / 2n;
-      const block = await this.chain.publicClient.getBlock({ blockNumber: mid });
+      const block = await this.chain.publicClient.getBlock({
+        blockNumber: mid,
+      });
       if (block.timestamp < timestamp) low = mid + 1n;
       else high = mid;
     }
@@ -528,10 +529,7 @@ export class FuturesExpiryIndex implements ParticipantSource {
   }
 }
 
-function compareLogs(
-  a: { log: Log },
-  b: { log: Log },
-): number {
+function compareLogs(a: { log: Log }, b: { log: Log }): number {
   const aBlock = a.log.blockNumber ?? 0n;
   const bBlock = b.log.blockNumber ?? 0n;
   if (aBlock !== bBlock) return aBlock < bBlock ? -1 : 1;

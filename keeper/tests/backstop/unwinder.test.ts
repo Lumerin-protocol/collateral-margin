@@ -1,6 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { BaseError, ContractFunctionRevertedError, getAddress, type Address } from "viem";
+import {
+  BaseError,
+  ContractFunctionRevertedError,
+  getAddress,
+  type Address,
+} from "viem";
 import type pino from "pino";
 import type { Chain } from "../../src/chain.ts";
 import type { Config } from "../../src/config.ts";
@@ -9,6 +14,7 @@ import { BACKSTOP_ADDR } from "../../src/protocolAccounts.ts";
 
 const FUTURES = "0x000000000000000000000000000000000000F00d" as Address;
 const PERPS = "0x000000000000000000000000000000000000Fee5" as Address;
+const VAULT = "0x000000000000000000000000000000000000Ba5e" as Address;
 const NOW = BigInt(Math.floor(Date.now() / 1000));
 const LIVE_EXPIRY = NOW + 7n * 86_400n;
 const MATURED_EXPIRY = NOW - 86_400n;
@@ -31,9 +37,16 @@ function makeConfig(over: Partial<Config["backstop"]> = {}): Config {
   return {
     futures: { address: FUTURES },
     perps: { address: PERPS },
+    vault: { address: VAULT },
     keeper: { dryRun: true },
     coordinator: { confirmationBlocks: 1 },
-    backstop: { enabled: true, intervalMs: 60_000, maxQtyFutures: 0n, maxQtyPerps: 0n, ...over },
+    backstop: {
+      enabled: true,
+      intervalMs: 60_000,
+      maxQtyFutures: 0n,
+      maxQtyPerps: 0n,
+      ...over,
+    },
   } as unknown as Config;
 }
 
@@ -50,13 +63,19 @@ function revert(errorName: string): BaseError {
 function makeChain(state: {
   futuresLegs: Record<string, bigint>;
   perpsNet: bigint;
+  halted?: boolean;
   simulateFails?: (call: Call) => string | undefined;
 }) {
   const simulated: Call[] = [];
   const chain = {
-    account: { address: "0x0000000000000000000000000000000000009999" as Address },
+    account: {
+      address: "0x0000000000000000000000000000000000009999" as Address,
+    },
     publicClient: {
       readContract: async (call: Call) => {
+        if (call.functionName === "halted" && call.address === VAULT) {
+          return state.halted ?? false;
+        }
         if (call.functionName === "getActiveExpirationDates") {
           assert.equal(getAddress(call.args?.[0] as Address), BACKSTOP_ADDR);
           return Object.keys(state.futuresLegs).map((k) => BigInt(k));
@@ -95,8 +114,16 @@ describe("BackstopUnwinder", () => {
     assert.equal(simulated.length, 2);
     const futures = simulated.find((c) => c.address === FUTURES);
     const perps = simulated.find((c) => c.address === PERPS);
-    assert.deepEqual(futures?.args, [LIVE_EXPIRY, 7n], "matured leg left to settlement");
-    assert.deepEqual(perps?.args, [40_000_000n], "absolute size, side chosen on-chain");
+    assert.deepEqual(
+      futures?.args,
+      [LIVE_EXPIRY, 7n],
+      "matured leg left to settlement",
+    );
+    assert.deepEqual(
+      perps?.args,
+      [40_000_000n],
+      "absolute size, side chosen on-chain",
+    );
     assert.ok(simulated.every((c) => c.functionName === "unwindBackstop"));
 
     const stats = unwinder.snapshot();
@@ -116,8 +143,13 @@ describe("BackstopUnwinder", () => {
       silentLogger,
     );
     await unwinder.tick();
-    assert.deepEqual(simulated.find((c) => c.address === FUTURES)?.args, [LIVE_EXPIRY, 3n]);
-    assert.deepEqual(simulated.find((c) => c.address === PERPS)?.args, [1_000_000n]);
+    assert.deepEqual(simulated.find((c) => c.address === FUTURES)?.args, [
+      LIVE_EXPIRY,
+      3n,
+    ]);
+    assert.deepEqual(simulated.find((c) => c.address === PERPS)?.args, [
+      1_000_000n,
+    ]);
   });
 
   it("does nothing when the backstop is flat everywhere", async () => {
@@ -132,7 +164,8 @@ describe("BackstopUnwinder", () => {
     const { chain, simulated } = makeChain({
       futuresLegs: { [String(LIVE_EXPIRY)]: 4n },
       perpsNet: 1n,
-      simulateFails: (call) => (call.address === FUTURES ? "TimeInForceNotFilled" : undefined),
+      simulateFails: (call) =>
+        call.address === FUTURES ? "TimeInForceNotFilled" : undefined,
     });
     const unwinder = new BackstopUnwinder(chain, makeConfig(), silentLogger);
     await unwinder.tick();
@@ -141,5 +174,67 @@ describe("BackstopUnwinder", () => {
     const stats = unwinder.snapshot();
     assert.equal(stats.unfilled, 1);
     assert.equal(stats.unwinds, 1);
+  });
+
+  it("X3-R4-5-2: sends no unwind and logs no error while the vault is halted", async () => {
+    const { chain, simulated } = makeChain({
+      futuresLegs: { [String(LIVE_EXPIRY)]: 4n },
+      perpsNet: -1_000_000n,
+      halted: true,
+      simulateFails: () => "TradingHalted",
+    });
+    const errors: unknown[] = [];
+    const logger = {
+      ...silentLogger,
+      child: () => logger,
+      error: (...args: unknown[]) => errors.push(args),
+    } as unknown as pino.Logger;
+    const unwinder = new BackstopUnwinder(chain, makeConfig(), logger);
+    await unwinder.tick();
+    assert.equal(simulated.length, 0);
+    assert.deepEqual(errors, [], "a halt is expected, not an error");
+    assert.equal(unwinder.snapshot().ticks, 1);
+  });
+
+  it("X3-R4-5-1: a non-recoverable revert on one leg does not stop the other legs or perps", async () => {
+    const revoked = LIVE_EXPIRY;
+    const unlisted = LIVE_EXPIRY + 86_400n;
+    const healthy = LIVE_EXPIRY + 2n * 86_400n;
+    const { chain, simulated } = makeChain({
+      futuresLegs: {
+        [String(revoked)]: 3n,
+        [String(unlisted)]: -2n,
+        [String(healthy)]: 5n,
+      },
+      perpsNet: -1_000_000n,
+      simulateFails: (call) => {
+        if (call.address !== FUTURES) return undefined;
+        if (call.args?.[0] === revoked) return "NotAuthorized";
+        if (call.args?.[0] === unlisted) return "ExpirationDateNotAvailable";
+        return undefined;
+      },
+    });
+    const errors: unknown[] = [];
+    const warnings: unknown[] = [];
+    const logger = {
+      ...silentLogger,
+      child: () => logger,
+      warn: (...args: unknown[]) => warnings.push(args),
+      error: (...args: unknown[]) => errors.push(args),
+    } as unknown as pino.Logger;
+    const unwinder = new BackstopUnwinder(chain, makeConfig(), logger);
+    await unwinder.tick();
+
+    assert.deepEqual(
+      simulated.map((c) => [c.address, c.args]),
+      [
+        [FUTURES, [healthy, 5n]],
+        [PERPS, [1_000_000n]],
+      ],
+      "the healthy futures leg and perps are still unwound",
+    );
+    assert.equal(errors.length, 1, "only the NotAuthorized leg is an error");
+    assert.equal(warnings.length, 1, "the unlisted-date leg only warns");
+    assert.equal(unwinder.snapshot().legs.length, 4);
   });
 });

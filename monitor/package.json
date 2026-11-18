@@ -12,7 +12,7 @@
     "prd": "node --env-file=../config/prd.env --env-file-if-exists=../.env --env-file-if-exists=.env src/local.ts",
     "test": "node --test \"tests/**/*.test.ts\"",
     "typecheck": "tsc --noEmit",
-    "lint": "biome lint .",
+    "lint": "biome lint --error-on-warnings .",
     "lint:fix": "biome check --write ."
   },
   "dependencies": {

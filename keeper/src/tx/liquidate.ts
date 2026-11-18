@@ -117,7 +117,9 @@ export async function sendLiquidate<S extends string>(
   // need literal abi inference to typecheck the request shape, so we cast at
   // the boundary; the runtime ABI is still validated by viem internally.
   type SimParams = Parameters<typeof chain.publicClient.simulateContract>[0];
-  type SimReturn = Awaited<ReturnType<typeof chain.publicClient.simulateContract>>;
+  type SimReturn = Awaited<
+    ReturnType<typeof chain.publicClient.simulateContract>
+  >;
   let request: SimReturn["request"];
   try {
     const sim = (await chain.publicClient.simulateContract({
@@ -131,9 +133,14 @@ export async function sendLiquidate<S extends string>(
   } catch (err) {
     const decoded = decodeRecoverableRevert(err);
     if (decoded) {
-      logger.debug({ functionName, args, revert: decoded }, "Liquidate skipped (recoverable revert)");
+      logger.debug(
+        { functionName, args, revert: decoded },
+        "Liquidate skipped (recoverable revert)",
+      );
       return {
-        skipped: (mapSkip ? mapSkip(decoded) : ("notLiquidatable" as unknown as S)) as S,
+        skipped: (mapSkip
+          ? mapSkip(decoded)
+          : ("notLiquidatable" as unknown as S)) as S,
       };
     }
     throw err;
@@ -145,15 +152,24 @@ export async function sendLiquidate<S extends string>(
   }
 
   type WriteParams = Parameters<typeof chain.walletClient.writeContract>[0];
-  const hash = await chain.walletClient.writeContract(request as unknown as WriteParams);
+  const hash = await chain.walletClient.writeContract(
+    request as unknown as WriteParams,
+  );
   const receipt = await chain.publicClient.waitForTransactionReceipt({
     hash,
     confirmations: config.coordinator.confirmationBlocks,
   });
 
-  const feeEarned = feeEventName === null ? 0n : sumFees(abi, receipt, feeEventName);
+  const feeEarned =
+    feeEventName === null ? 0n : sumFees(abi, receipt, feeEventName);
   logger.info(
-    { functionName, args, hash, feeEarned, ...formatGasCost(receipt, ethUsdFeed) },
+    {
+      functionName,
+      args,
+      hash,
+      feeEarned,
+      ...formatGasCost(receipt, ethUsdFeed),
+    },
     "Liquidate tx confirmed",
   );
   return { feeEarned, receipt };
@@ -171,7 +187,9 @@ function decodeRecoverableRevert(err: unknown): KnownRevert | undefined {
   if (!(revert instanceof ContractFunctionRevertedError)) return undefined;
   const name = revert.data?.errorName;
   if (typeof name !== "string") return undefined;
-  return RECOVERABLE_REVERTS.has(name as KnownRevert) ? (name as KnownRevert) : undefined;
+  return RECOVERABLE_REVERTS.has(name as KnownRevert)
+    ? (name as KnownRevert)
+    : undefined;
 }
 
 /**
@@ -180,7 +198,11 @@ function decodeRecoverableRevert(err: unknown): KnownRevert | undefined {
  * the per-leg fee, so this naturally aggregates batch calls
  * (`liquidateOrders` cancels N orders → N events → summed fees).
  */
-function sumFees(abi: Abi, receipt: TransactionReceipt, eventName: string): bigint {
+function sumFees(
+  abi: Abi,
+  receipt: TransactionReceipt,
+  eventName: string,
+): bigint {
   const logs = parseEventLogs({
     abi,
     logs: receipt.logs,

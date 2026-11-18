@@ -1,0 +1,64 @@
+name: Portfolio Margin Tests
+
+on:
+  push:
+    branches: [main, dev, stg]
+    paths:
+      - "portfolio-margin/**"
+      - ".github/workflows/portfolio-margin-test.yml"
+
+  pull_request:
+    paths:
+      - "portfolio-margin/**"
+      - ".github/workflows/portfolio-margin-test.yml"
+
+  workflow_dispatch:
+
+concurrency:
+  group: portfolio-margin-test-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout collateral-margin
+        uses: actions/checkout@v5
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          package_json_file: portfolio-margin/package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "pnpm"
+          cache-dependency-path: portfolio-margin/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: ./portfolio-margin
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        working-directory: ./portfolio-margin
+        run: pnpm lint
+
+      - name: TypeCheck
+        working-directory: ./portfolio-margin
+        run: pnpm typecheck
+
+      - name: Unit tests
+        working-directory: ./portfolio-margin
+        run: pnpm test

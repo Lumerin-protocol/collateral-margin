@@ -7,16 +7,29 @@ on:
       - main
       - "cicd/**"
     paths:
-      - "indexer/**"
+      - "indexer/src/**"
+      - "indexer/schema.graphql"
+      - "indexer/subgraph.template.yaml"
+      - "indexer/package.json"
+      - "indexer/pnpm-lock.yaml"
+      - "indexer/pnpm-workspace.yaml"
+      - "indexer/tsconfig.json"
+      - "indexer/assembly.d.ts"
       - "config/*.env"
       - "contracts/abi/CollateralVault.json"
-      - ".github/workflows/deploy-subgraph.yml"
   pull_request:
     branches:
       - dev
       - main
     paths:
-      - "indexer/**"
+      - "indexer/src/**"
+      - "indexer/schema.graphql"
+      - "indexer/subgraph.template.yaml"
+      - "indexer/package.json"
+      - "indexer/pnpm-lock.yaml"
+      - "indexer/pnpm-workspace.yaml"
+      - "indexer/tsconfig.json"
+      - "indexer/assembly.d.ts"
       - "config/*.env"
       - "contracts/abi/CollateralVault.json"
       - ".github/workflows/deploy-subgraph.yml"
@@ -113,7 +126,8 @@ jobs:
 
   build:
     name: 🔨 Build
-    runs-on: ubuntu-latest
+    # matchstick ships no binary for Ubuntu 26, which ubuntu-latest became in 2026-10.
+    runs-on: ubuntu-24.04
     needs: setup
     environment: ${{ github.event_name != 'pull_request' && needs.setup.outputs.environment || '' }}
     outputs:
@@ -210,6 +224,13 @@ jobs:
           echo "✅ Configuration ready"
           echo "--- subgraph.yaml ---"
           cat subgraph.yaml
+
+      # matchstick-ts runs `graph test` without -v, which otherwise asks the GitHub API for the
+      # latest Matchstick release and fails when it is rate-limited; graph-cli trusts a cache
+      # younger than a day.
+      - name: Pin Matchstick
+        working-directory: ./indexer
+        run: echo "{\"version\":\"0.6.0\",\"timestamp\":$(date +%s000)}" > tests/.latest.json
 
       - name: Generate code, build, test
         working-directory: ./indexer

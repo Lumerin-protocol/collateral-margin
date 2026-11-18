@@ -51,7 +51,10 @@ function __keys(): readonly FixtureFn<unknown>[] {
  * every call — wrapping the fixture in a lambda each test case defeats the
  * cache and reverts to "redeploy on every test".
  */
-export async function loadFixture<T>(fn: FixtureFn<T>, tc: TestClient): Promise<T> {
+export async function loadFixture<T>(
+  fn: FixtureFn<T>,
+  tc: TestClient,
+): Promise<T> {
   const cached = cache.get(fn as FixtureFn<unknown>);
   if (cached !== undefined) {
     // `revert` returns true on success; if it fails (e.g. snapshot ID
@@ -65,7 +68,10 @@ export async function loadFixture<T>(fn: FixtureFn<T>, tc: TestClient): Promise<
         method: "evm_snapshot",
         params: [] as unknown as never,
       })) as unknown as Hex;
-      cache.set(fn as FixtureFn<unknown>, { snapshotId: fresh, data: cached.data });
+      cache.set(fn as FixtureFn<unknown>, {
+        snapshotId: fresh,
+        data: cached.data,
+      });
       return cached.data as T;
     }
     cache.delete(fn as FixtureFn<unknown>);

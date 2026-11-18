@@ -4,8 +4,6 @@ import Fraction from "fraction.js";
 import { RiskManager, type RiskManagerConfig } from "../../src/core/riskManager.ts";
 import type { CollateralTracker } from "../../src/core/collateralTracker.ts";
 import type { InventoryManager } from "../../src/core/inventoryManager.ts";
-import type { GasTracker } from "../../src/core/gasTracker.ts";
-import type { OracleTracker } from "../../src/core/oracleTracker.ts";
 
 const noop = () => {};
 function makeLogger(): never {
@@ -43,8 +41,6 @@ function makeCollateral(overrides: Partial<CollateralTracker> = {}): CollateralT
   } as CollateralTracker;
 }
 
-const dummyGas = {} as GasTracker;
-const dummyOracle = { currentPrice: 100_000_000n } as OracleTracker;
 
 describe("RiskManager", () => {
   it("allows quoting when healthy", () => {
@@ -52,8 +48,6 @@ describe("RiskManager", () => {
       makeConfig(),
       makeInventory(),
       makeCollateral(),
-      dummyGas,
-      dummyOracle,
       makeLogger(),
     );
     r.initialize();
@@ -66,8 +60,6 @@ describe("RiskManager", () => {
       makeConfig({ minCollateralBalance: 100_000_000n }),
       makeInventory(),
       makeCollateral({ vaultBalance: 50_000_000n }),
-      dummyGas,
-      dummyOracle,
       makeLogger(),
     );
     r.initialize();
@@ -81,8 +73,6 @@ describe("RiskManager", () => {
       makeConfig({ minCollateralBalance: 0n }),
       makeInventory(),
       makeCollateral({ vaultBalance: 100_000_000n, portfolioMM: 200_000_000n }),
-      dummyGas,
-      dummyOracle,
       makeLogger(),
     );
     r.initialize();
@@ -96,8 +86,6 @@ describe("RiskManager", () => {
       makeConfig({ maxDailyLossUsd: 500_000_000n, minCollateralBalance: 0n }),
       makeInventory(),
       collateral,
-      dummyGas,
-      dummyOracle,
       makeLogger(),
     );
     r.initialize();
@@ -111,8 +99,6 @@ describe("RiskManager", () => {
       makeConfig(),
       makeInventory(),
       makeCollateral(),
-      dummyGas,
-      dummyOracle,
       makeLogger(),
     );
     r.initialize();
@@ -126,8 +112,6 @@ describe("RiskManager", () => {
       makeConfig(),
       makeInventory({ netQuantity: 0n }),
       makeCollateral(),
-      dummyGas,
-      dummyOracle,
       makeLogger(),
     );
     assert.deepEqual(r.allowedSides(), { quoteBid: true, quoteAsk: true });
@@ -138,8 +122,6 @@ describe("RiskManager", () => {
       makeConfig({ maxUtilizationPct: 80 }),
       makeInventory({ netQuantity: 100_000_000n }),
       makeCollateral({ utilizationPct: 90 }),
-      dummyGas,
-      dummyOracle,
       makeLogger(),
     );
     assert.deepEqual(r.allowedSides(), { quoteBid: false, quoteAsk: true });
@@ -150,8 +132,6 @@ describe("RiskManager", () => {
       makeConfig({ maxUtilizationPct: 80 }),
       makeInventory({ netQuantity: -100_000_000n }),
       makeCollateral({ utilizationPct: 90 }),
-      dummyGas,
-      dummyOracle,
       makeLogger(),
     );
     assert.deepEqual(r.allowedSides(), { quoteBid: true, quoteAsk: false });
@@ -162,8 +142,6 @@ describe("RiskManager", () => {
       makeConfig({ maxUtilizationPct: 80 }),
       makeInventory({ netQuantity: 0n }),
       makeCollateral({ utilizationPct: 90 }),
-      dummyGas,
-      dummyOracle,
       makeLogger(),
     );
     assert.deepEqual(r.allowedSides(), { quoteBid: false, quoteAsk: false });
@@ -174,8 +152,6 @@ describe("RiskManager", () => {
       makeConfig(),
       makeInventory({ netQuantity: 100_000_001n, maxPositionSize: 100_000_000n }),
       makeCollateral({ utilizationPct: 10 }),
-      dummyGas,
-      dummyOracle,
       makeLogger(),
     );
     assert.deepEqual(r.allowedSides(), { quoteBid: false, quoteAsk: true });
@@ -188,8 +164,6 @@ describe("RiskManager", () => {
       makeConfig(),
       makeInventory({ netQuantity: 0n, maxPositionSize: 1_000_000_000n }),
       makeCollateral({ utilizationPct: 10 }),
-      dummyGas,
-      dummyOracle,
       makeLogger(),
     );
     const perMarket = makeInventory({ netQuantity: 5_000_000n, maxPositionSize: 5_000_000n });
@@ -206,8 +180,6 @@ describe("RiskManager", () => {
       makeConfig(),
       null,
       makeCollateral(),
-      dummyGas,
-      dummyOracle,
       makeLogger(),
     );
     assert.deepEqual(r.allowedSides(), { quoteBid: false, quoteAsk: false });
@@ -218,8 +190,6 @@ describe("RiskManager", () => {
       makeConfig({ maxGasBudgetPerHourUsd: 10_000_000n }),
       makeInventory(),
       makeCollateral(),
-      dummyGas,
-      dummyOracle,
       makeLogger(),
     );
     r.initialize();
@@ -234,8 +204,6 @@ describe("RiskManager", () => {
       makeConfig({ maxGasBudgetPerHourUsd: 1_000_000_000n, maxGasBudgetPerDayUsd: 10_000_000n }),
       makeInventory(),
       makeCollateral(),
-      dummyGas,
-      dummyOracle,
       makeLogger(),
     );
     r.initialize();
@@ -250,8 +218,6 @@ describe("RiskManager", () => {
       makeConfig({ minCollateralBalance: 0n, maxDailyLossUsd: 1_000_000_000n }),
       makeInventory(),
       makeCollateral(),
-      dummyGas,
-      dummyOracle,
       makeLogger(),
     );
     r.initialize();
@@ -269,8 +235,6 @@ describe("RiskManager", () => {
       makeConfig(),
       makeInventory(),
       makeCollateral(),
-      dummyGas,
-      dummyOracle,
       makeLogger(),
     );
     const dummyInstrument = { estimateOrderMargin: () => 0n } as never;
@@ -289,8 +253,6 @@ describe("RiskManager", () => {
       makeConfig(),
       makeInventory(),
       collateral,
-      dummyGas,
-      dummyOracle,
       makeLogger(),
     );
     const dummyInstrument = { estimateOrderMargin: () => 400n } as never;

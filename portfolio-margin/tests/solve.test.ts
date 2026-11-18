@@ -16,6 +16,7 @@ import type {
   MMParams,
   RestingOrders,
 } from "../src/types.ts";
+import { book } from "./books.ts";
 
 const USER = "0x1111111111111111111111111111111111111111" as Address;
 const QTY_SCALE = 10n ** 6n;
@@ -23,13 +24,8 @@ const QTY_SCALE = 10n ** 6n;
 const EXPIRY_A = 1_756_416_000n;
 const EXPIRY_B = 1_759_008_000n;
 
-/** An empty book on one venue. */
-const NO_ORDERS: RestingOrders = {
-  buyDelta: 0n,
-  sellDelta: 0n,
-  buyValue: 0n,
-  sellValue: 0n,
-};
+/** An empty perps book. */
+const NO_ORDERS: RestingOrders = book();
 
 const PARAMS: MMParams = {
   imSpotShock: 10n ** 17n, // 10%
@@ -44,8 +40,9 @@ function emptySnapshot(
   return {
     user: USER,
     balance: 0n,
+    accountDebt: 0n,
     perp: { netQty: 0n, entryPrice: 0n, orders: NO_ORDERS, fundingOwed: 0n },
-    futures: { positions: [], orders: NO_ORDERS },
+    futures: { positions: [], orders: [] },
     ...overrides,
   };
 }
@@ -131,21 +128,16 @@ describe("predict/solve: solveLiquidationThresholds", () => {
   it("finds a threshold hidden behind a fill-loss breakeven kink", () => {
     // A flat account whose only exposure is a resting bid *is* liquidatable now, and
     // its requirement is non-monotone in price: it drops through the bid's breakeven
-    // (the fill loss vanishes) before resuming its climb with stress. The bisector only
-    // finds the down-side crossing if the breakeven is in its kink set — without it,
-    // the interval containing the crossing is not monotone and bisection walks past it.
+    // (the fill loss vanishes) before resuming its climb with stress. The breakeven is
+    // not in the kink set — the fill-loss bound is convex, so the surplus stays concave
+    // and the interval below the current price still holds exactly one crossing.
     const snap = emptySnapshot({
       balance: 8_000_000n,
       perp: {
         netQty: 0n,
         entryPrice: 0n,
         // 1 contract bid at $101; at $100 the requirement is $5 stress + $1 fill loss.
-        orders: {
-          buyDelta: 1_000_000n,
-          sellDelta: 0n,
-          buyValue: 101_000_000n,
-          sellValue: 0n,
-        },
+        orders: book([[101_000_000n, 1_000_000n]]),
         fundingOwed: 0n,
       },
     });
@@ -265,7 +257,7 @@ describe("predict/solve: solveLiquidationThresholds", () => {
             settlementPrice: 0n,
           },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     const out = solveLiquidationThresholds(snap, PARAMS, 50_000_000n);
@@ -297,7 +289,7 @@ describe("predict/solve: solveLiquidationThresholds", () => {
             settlementPrice: 0n,
           },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     // At $150 the perp's +$100 and the futures' −$100 cancel: MM charges nothing,
@@ -354,7 +346,7 @@ describe("predict/solve: solveLiquidationThresholds", () => {
             settlementPrice: 0n,
           },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     const turningPoints = (f: (P: bigint) => bigint): bigint[] => {
@@ -404,7 +396,7 @@ describe("predict/solve: solveLiquidationThresholds", () => {
             settlementPrice: 0n,
           },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     // At a $75 mark the long leg is +$30 and the short leg is −$45; netted, the venue
@@ -446,12 +438,7 @@ describe("predict/solve: solveLiquidationThresholds", () => {
         entryPrice: 100_000_000n,
         // A second contract bid at the mark: doubles the buy-leg delta and so the
         // stress term, with no fill loss of its own at $100.
-        orders: {
-          buyDelta: 1_000_000n,
-          sellDelta: 0n,
-          buyValue: 100_000_000n,
-          sellValue: 0n,
-        },
+        orders: book([[100_000_000n, 1_000_000n]]),
         fundingOwed: 1_000_000n,
       },
     });
@@ -609,7 +596,7 @@ describe("predict/solve: solveAlertThresholds", () => {
             settlementPrice: 0n,
           },
         ],
-        orders: NO_ORDERS,
+        orders: [],
       },
     });
     // V-shaped around $90 — the clamp turning over is the only kink in the term.

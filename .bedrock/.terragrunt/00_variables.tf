@@ -149,6 +149,13 @@ variable "alchemy_api_key" {
   sensitive   = true
 }
 
+variable "bitcoin_rpc_url" {
+  description = "Bitcoin JSON-RPC URL for the vault monitor's halving countdown and SPV relay delay (Alchemy bitcoin-mainnet). Empty composes it from alchemy_api_key"
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
 variable "liquidator_private_key" {
   description = "Keeper signer. Injected as LIQUIDATOR_PRIVATE_KEY"
   type        = string
@@ -207,6 +214,10 @@ variable "vault_monitoring" {
     # Book mid vs mark. Normal is a few bps; the perps quoter can skew up to
     # about 50 bps, so past that the quotes are stale rather than skewed.
     book_drift_warn_bps = number
+    # Protocol backstop: gross exposure at the mark that warns, and the
+    # mark-to-market loss (positive USD) that pages.
+    backstop_notional_warn_usd = number
+    backstop_loss_crit_usd     = number
   })
   default = {
     create                       = false
@@ -224,18 +235,23 @@ variable "vault_monitoring" {
     mm_perps_position_warn_usd   = 1000
     mm_futures_position_warn_usd = 1000
     book_drift_warn_bps          = 100
+    backstop_notional_warn_usd   = 1000
+    backstop_loss_crit_usd       = 500
   }
 }
 
 variable "vault_env" {
-  description = "Vault monitor addresses and subgraph URLs from config/dev.env or config/prd.env (VAULT_ADDRESS, FUTURES_ADDRESS, PERPS_ADDRESS, MM_ADDRESS, VAULT_SUBGRAPH_URL, POINTS_SUBGRAPH_URL). All required; the Lambda does not validate its environment."
+  description = "Vault monitor addresses and subgraph URLs from config/dev.env or config/prd.env (VAULT_ADDRESS, FUTURES_ADDRESS, PERPS_ADDRESS, MM_ADDRESS, VAULT_SUBGRAPH_URL, POINTS_SUBGRAPH_URL, FUTURES_SUBGRAPH_URL, DERIVATIVES_SUBGRAPH_URL, HASHPRICE_ORACLE_SUBGRAPH_URL). All required; the Lambda does not validate its environment."
   type = object({
-    subgraph_url        = string
-    points_subgraph_url = string
-    vault_address       = string
-    futures_address     = string
-    perps_address       = string
-    mm_address          = string
+    subgraph_url             = string
+    points_subgraph_url      = string
+    futures_subgraph_url     = string
+    derivatives_subgraph_url = string
+    oracles_subgraph_url     = string
+    vault_address            = string
+    futures_address          = string
+    perps_address            = string
+    mm_address               = string
   })
   validation {
     condition     = alltrue([for value in values(var.vault_env) : value != ""])

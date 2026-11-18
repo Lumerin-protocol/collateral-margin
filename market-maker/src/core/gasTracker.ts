@@ -4,11 +4,20 @@ import Fraction from "fraction.js";
 import { RollingWindow } from "./math.ts";
 
 export interface GasTrackerConfig {
-  /** Chainlink aggregator address; if absent, ethPriceUsd stays 0. */
-  ethPriceFeedAddress?: Address;
+  /** Chainlink ETH/USD aggregator; absent only while USD gas accounting is off, and ethPriceUsd then stays 0. */
+  ethPriceFeed?: EthPriceFeed;
   gasSpikeThresholdPct: number;
   gasCapMultiplier: number;
 }
+
+export interface EthPriceFeed {
+  address: Address;
+  /** Readings older than this are rejected and the last accepted price kept. */
+  maxAgeSec: number;
+}
+
+export const USD_GAS_ACCOUNTING_OFF =
+  "USD gas accounting is off (risk.usdGasAccounting: false): gas budgets, gas in the daily loss and the spread's gas penalty read $0";
 
 const aggregatorV3InterfaceAbi = [
   {
@@ -71,8 +80,8 @@ export class GasTracker {
 
     this.isGasSpiking = this.gasSpikePct.compare(new Fraction(this.config.gasSpikeThresholdPct)) > 0;
 
-    if (this.config.ethPriceFeedAddress) {
-      await this.updateEthPrice();
+    if (this.config.ethPriceFeed) {
+      await this.updateEthPrice(this.config.ethPriceFeed);
     }
 
     this.logger.debug(
@@ -111,6 +120,11 @@ export class GasTracker {
     return this.currentGasPrice < cap ? cap : this.currentGasPrice;
   }
 
+  /** Whether gas is priced in USD; reported on /health. */
+  get usdGasAccounting(): boolean {
+    return this.config.ethPriceFeed !== undefined;
+  }
+
   /** Calibrate gas estimates against a candidate transaction. Adapters provide the tx. */
   async calibrate(estimator: () => Promise<bigint>): Promise<void> {
     try {
@@ -124,23 +138,28 @@ export class GasTracker {
     }
   }
 
-  private async updateEthPrice(): Promise<void> {
+  private async updateEthPrice(feed: EthPriceFeed): Promise<void> {
     try {
-      const [[, answer], decimals] = await this.publicClient.multicall({
+      const [[, answer, , updatedAt], decimals] = await this.publicClient.multicall({
         allowFailure: false,
         contracts: [
           {
-            address: this.config.ethPriceFeedAddress!,
+            address: feed.address,
             abi: aggregatorV3InterfaceAbi,
             functionName: "latestRoundData",
           },
           {
-            address: this.config.ethPriceFeedAddress!,
+            address: feed.address,
             abi: aggregatorV3InterfaceAbi,
             functionName: "decimals",
           },
         ],
       });
+      const ageSec = Math.floor(Date.now() / 1000) - Number(updatedAt);
+      if (ageSec > feed.maxAgeSec) {
+        this.logger.warn({ ageSec, maxAgeSec: feed.maxAgeSec }, "ETH price feed stale; keeping last price");
+        return;
+      }
       if (answer > 0n) {
         this.ethPriceUsd = scaleDecimals(answer, BigInt(decimals), 6n);
       }

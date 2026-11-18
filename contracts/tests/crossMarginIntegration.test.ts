@@ -5,15 +5,18 @@ import { network } from "hardhat";
 import {
   DEFAULT_MARKET_PRICE,
   INTEGRATION_ALICE_DEPOSIT,
+  LOT_QTY,
   deployCrossMarginIntegrationFixture,
 } from "./fixtures.js";
 
 const { viem, networkHelpers } = await network.connect();
 
-/** Perps mock: 3-lot position quantity (1 lot = 1e6 units). */
-const THREE_LOTS_QTY = 3_000_000n;
+/** Perps mock: 3-lot position quantity (1 lot = $50k of notional). */
+const THREE_LOTS_QTY = 3n * LOT_QTY;
 /** Perps mock: 21-lot position quantity. */
-const TWENTY_ONE_LOTS_QTY = 21_000_000n;
+const TWENTY_ONE_LOTS_QTY = 21n * LOT_QTY;
+/** The mocks' 6-decimal quantity lifted to the engine's WAD delta. */
+const TO_WAD_DELTA = 10n ** 12n;
 
 /**
  * Full-stack cross-margin integration tests: deposit, margin-gated withdrawals,
@@ -46,7 +49,7 @@ describe("Cross-Margin Integration", () => {
         deployCrossMarginIntegrationFixture,
       );
 
-      // Alice has 50k USDC. 3 lots at $50k → IM = 3 * 10% * $50k = $15k
+      // Alice has 50k USDC. 3 lots of $50k → IM = 3 * 10% * $50k = $15k
       await perpsMock.write.setUserPosition([aliceAddr, THREE_LOTS_QTY, DEFAULT_MARKET_PRICE]);
 
       // Try to withdraw 40k (would leave 10k, but IM requires 15k)
@@ -104,8 +107,8 @@ describe("Cross-Margin Integration", () => {
         "MarginBreach",
       );
 
-      // Offset with options delta: perpDelta = 3e18, need optionsDelta = -3e18
-      await optionsMock.write.setNetGreeks([aliceAddr, -(3n * 10n ** 18n), 0n, 0n]);
+      // Offset with an equal and opposite options delta.
+      await optionsMock.write.setNetGreeks([aliceAddr, -(THREE_LOTS_QTY * TO_WAD_DELTA), 0n, 0n]);
 
       await viem.assertions.emitWithArgs(
         vault.write.withdraw([withdrawAmount], { account: alice.account }),
@@ -125,8 +128,8 @@ describe("Cross-Margin Integration", () => {
         deployCrossMarginIntegrationFixture,
       );
 
-      // 1 lot of resting bids on a flat account → 1e6 × 10% × $50k = $5,000 of stress.
-      await perpsMock.write.setOrderDeltas([aliceAddr, 1_000_000n, 0n]);
+      // 1 lot of resting bids on a flat account → 10% × $50k = $5,000 of stress.
+      await perpsMock.write.setOrderDeltas([aliceAddr, LOT_QTY, 0n]);
       await optionsMock.write.setReservedMargin([aliceAddr, 3_000_000_000n * 10n ** 12n]);
       await perpsMock.write.setUnrealizedPnl([aliceAddr, -2_000_000_000n]);
       await perpsMock.write.setPendingFunding([aliceAddr, 1_000_000_000n]);
@@ -158,7 +161,7 @@ describe("Cross-Margin Integration", () => {
       await perpsMock.write.setUserPosition([aliceAddr, TWENTY_ONE_LOTS_QTY, DEFAULT_MARKET_PRICE]);
       assert.equal(await pme.read.isHealthy([aliceAddr]), false, "unhedged = unhealthy");
 
-      await optionsMock.write.setNetGreeks([aliceAddr, -(21n * 10n ** 18n), 0n, 0n]);
+      await optionsMock.write.setNetGreeks([aliceAddr, -(TWENTY_ONE_LOTS_QTY * TO_WAD_DELTA), 0n, 0n]);
       assert.equal(await pme.read.isHealthy([aliceAddr]), true, "hedged = healthy");
     });
 
@@ -200,8 +203,8 @@ describe("Cross-Margin Integration", () => {
       const maxWithdraw = 5_000_000_000n;
       const excessWithdrawAttempt = 10_000_000_000n;
 
-      // 9 lots of resting bids → 9e6 × 10% × $50k = $45,000 of stress on the buy leg.
-      await perpsMock.write.setOrderDeltas([aliceAddr, 9_000_000n, 0n]);
+      // 9 lots of resting bids → 9 × 10% × $50k = $45,000 of stress on the buy leg.
+      await perpsMock.write.setOrderDeltas([aliceAddr, 9n * LOT_QTY, 0n]);
 
       await viem.assertions.revertWithCustomError(
         vault.write.withdraw([excessWithdrawAttempt], { account: alice.account }),
@@ -222,11 +225,10 @@ describe("Cross-Margin Integration", () => {
 
   describe("futures leg in cross-margin engine", () => {
     // Deltas are pinned in the ILinearMarket token-decimal scale (10^6, USDC);
-    // the PME lifts them to its internal WAD scale. A delta of 7e6 (7 contracts)
-    // at $50k spot with 10% IM stress = $35k loss, i.e. 35_000_000_000 token
-    // units (6 decimals).
-    const ONE_WEEK_DELTA = 7n * 10n ** 6n;
-    const SEVEN_DAY_LONG_IM = 35_000_000_000n; // |7e6| * 10% * $50k → 35k USDC
+    // the PME lifts them to its internal WAD scale. 7 lots ($350k notional) with
+    // 10% IM stress = $35k loss, i.e. 35_000_000_000 token units (6 decimals).
+    const ONE_WEEK_DELTA = 7n * LOT_QTY;
+    const SEVEN_DAY_LONG_IM = 35_000_000_000n; // 7 lots * 10% * $50k → 35k USDC
     const SEVEN_DAY_LONG_MM = 17_500_000_000n; // 5% MM = 17.5k USDC
 
     it("futures-only IM gates withdrawal", async () => {
@@ -234,7 +236,7 @@ describe("Cross-Margin Integration", () => {
         deployCrossMarginIntegrationFixture,
       );
 
-      // Alice has 50k USDC. One 7-contract long → IM = $35k.
+      // Alice has 50k USDC. A 7-lot long → IM = $35k.
       // Withdrawing 30k would leave 20k < 35k IM, so it must revert.
       await futuresMock.write.setNetPositionDelta([aliceAddr, ONE_WEEK_DELTA]);
 
@@ -264,8 +266,8 @@ describe("Cross-Margin Integration", () => {
       // net portfolio delta ≈ 0 the stress loss collapses, so 40k withdraw
       // succeeds (only the perp's order/position add-ons remain — both zero).
       // Perp delta = qty * 10^6 / 10^QUANTITY_DECIMALS = qty (both 6 decimals),
-      // so qty = 7_000_000 offsets the 7e6 futures delta.
-      await perpsMock.write.setUserPosition([aliceAddr, 7_000_000n, DEFAULT_MARKET_PRICE]);
+      // so the same 7 lots offset the futures delta.
+      await perpsMock.write.setUserPosition([aliceAddr, ONE_WEEK_DELTA, DEFAULT_MARKET_PRICE]);
 
       await viem.assertions.emitWithArgs(
         vault.write.withdraw([withdrawAmount], { account: alice.account }),
@@ -281,10 +283,10 @@ describe("Cross-Margin Integration", () => {
       );
 
       const futuresLoss = -2_500_000_000n;
-      // 0.8e6 futures + 0.3e6 perps of resting bid delta → 1.1e6 × 10% × $50k = $5,500.
-      await futuresMock.write.setOrderDeltas([aliceAddr, 800_000n, 0n]);
+      // 0.8 lots futures + 0.3 lots perps of resting bids → 1.1 × 10% × $50k = $5,500.
+      await futuresMock.write.setOrderDeltas([aliceAddr, (8n * LOT_QTY) / 10n, 0n]);
       await futuresMock.write.setUnrealizedPnl([aliceAddr, futuresLoss]);
-      await perpsMock.write.setOrderDeltas([aliceAddr, 300_000n, 0n]);
+      await perpsMock.write.setOrderDeltas([aliceAddr, (3n * LOT_QTY) / 10n, 0n]);
 
       const im = await pme.read.computePortfolioIM([aliceAddr]);
       assert.equal(im, 5_500_000_000n + 2_500_000_000n, "one stress leg over the summed delta");
@@ -295,14 +297,14 @@ describe("Cross-Margin Integration", () => {
         deployCrossMarginIntegrationFixture,
       );
 
-      // Long 1e6 futures, short 1e6 perps: flat at the portfolio, so no stress.
-      await futuresMock.write.setNetPositionDelta([aliceAddr, 1_000_000n]);
-      await perpsMock.write.setUserPosition([aliceAddr, -1_000_000n, DEFAULT_MARKET_PRICE]);
+      // Long 1 lot futures, short 1 lot perps: flat at the portfolio, so no stress.
+      await futuresMock.write.setNetPositionDelta([aliceAddr, LOT_QTY]);
+      await perpsMock.write.setUserPosition([aliceAddr, -LOT_QTY, DEFAULT_MARKET_PRICE]);
       assert.equal(await pme.read.computePortfolioIM([aliceAddr]), 0n, "hedged portfolio is flat");
 
       // A resting perps ask looks risk-reducing to nobody once netted: filling it takes
-      // the portfolio to genuinely short 1e6. The old per-venue credit charged 0 here.
-      await perpsMock.write.setOrderDeltas([aliceAddr, 0n, 1_000_000n]);
+      // the portfolio to genuinely short 1 lot. The old per-venue credit charged 0 here.
+      await perpsMock.write.setOrderDeltas([aliceAddr, 0n, LOT_QTY]);
       assert.equal(
         await pme.read.computePortfolioIM([aliceAddr]),
         5_000_000_000n,
@@ -318,14 +320,14 @@ describe("Cross-Margin Integration", () => {
 
       assert.equal(await pme.read.isHealthy([aliceAddr]), true, "no positions = healthy");
 
-      // 7-contract long → MM = 5% * $50k = $17.5k (well under 50k balance).
+      // 7-lot long → MM = 7 * 5% * $50k = $17.5k (well under 50k balance).
       await futuresMock.write.setNetPositionDelta([aliceAddr, ONE_WEEK_DELTA]);
       assert.equal(await pme.read.isHealthy([aliceAddr]), true, "small futures MM still healthy");
       assert.ok(SEVEN_DAY_LONG_MM < INTEGRATION_ALICE_DEPOSIT);
       assert.ok(SEVEN_DAY_LONG_IM < INTEGRATION_ALICE_DEPOSIT);
 
-      // Scale the delta until MM exceeds 50k. 5e7 delta * 5% * $50k = $125k.
-      await futuresMock.write.setNetPositionDelta([aliceAddr, 5n * 10n ** 7n]);
+      // Scale the delta until MM exceeds 50k. 50 lots * 5% * $50k = $125k.
+      await futuresMock.write.setNetPositionDelta([aliceAddr, 50n * LOT_QTY]);
       assert.equal(
         await pme.read.isHealthy([aliceAddr]),
         false,

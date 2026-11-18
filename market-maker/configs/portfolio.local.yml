@@ -21,8 +21,6 @@ wallet: primary
 network:
   name: "hardhat"
   rpcUrl: "http://127.0.0.1:8545"
-  ethPriceFeed: ${ETH_PRICE_FEED_ADDRESS:-}
-
 venues:
   - kind: perps
     address: ${PERPS_ADDRESS}
@@ -66,6 +64,8 @@ risk:
   maxDailyLossUsd: 100
   maxGasBudgetPerHourUsd: 50
   maxGasBudgetPerDayUsd: 500
+  # Hardhat has no ETH/USD feed.
+  usdGasAccounting: false
   gasSpikeThresholdPct: 200
   gasPenaltyBps: 5
   urgentRequoteThresholdTicks: 10

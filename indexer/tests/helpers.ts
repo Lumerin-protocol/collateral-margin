@@ -93,6 +93,8 @@ export function setupVault(): void {
   vault.insuranceDebtRepaidTotal = BigInt.zero();
   vault.traderBadDebtTotal = BigInt.zero();
   vault.backstopBadDebtTotal = BigInt.zero();
+  vault.accountDebtTotal = BigInt.zero();
+  vault.accountDebtRecoveredTotal = BigInt.zero();
   vault.backstopUnwindBandBps = 0;
   vault.backstopUnwindFeeBps = 0;
   vault.insuranceCapital = BigInt.zero();

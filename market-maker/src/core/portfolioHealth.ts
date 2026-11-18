@@ -129,6 +129,7 @@ export class PortfolioHealthCheck {
         },
         gas: {
           gasPrice: `${(Number(gas.currentGasPrice) / 1e9).toFixed(4)} gwei`,
+          usdGasAccounting: gas.usdGasAccounting,
           gasSpiking: gas.isGasSpiking,
           gasSpike: `${fractionToNumber(gas.gasSpikePct).toFixed(0)}%`,
         },
@@ -187,6 +188,7 @@ export class PortfolioHealthCheck {
         },
         gas: {
           gasGwei: (Number(gas.currentGasPrice) / 1e9).toFixed(2),
+          usdGasAccounting: gas.usdGasAccounting,
           gasSpiking: gas.isGasSpiking,
           gasSpikePct: fractionToNumber(gas.gasSpikePct).toFixed(0),
         },

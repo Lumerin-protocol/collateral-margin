@@ -40,14 +40,23 @@ const here = dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = resolve(here, "..", "..", "..");
 
 /** Repo root env var → Hardhat package dir (`<root>/contracts`). */
-function contractsPackageDir(repoRootEnv: string | undefined, defaultRepoRoot: string): string {
+function contractsPackageDir(
+  repoRootEnv: string | undefined,
+  defaultRepoRoot: string,
+): string {
   const root = repoRootEnv ?? defaultRepoRoot;
   const pkg = resolve(root, "contracts");
-  if (existsSync(resolve(pkg, "hardhat.config.ts")) || existsSync(resolve(pkg, "hardhat.config.js"))) {
+  if (
+    existsSync(resolve(pkg, "hardhat.config.ts")) ||
+    existsSync(resolve(pkg, "hardhat.config.js"))
+  ) {
     return pkg;
   }
   // Legacy: env pointed directly at the contracts package.
-  if (existsSync(resolve(root, "hardhat.config.ts")) || existsSync(resolve(root, "hardhat.config.js"))) {
+  if (
+    existsSync(resolve(root, "hardhat.config.ts")) ||
+    existsSync(resolve(root, "hardhat.config.js"))
+  ) {
     return root;
   }
   return pkg;
@@ -57,7 +66,10 @@ const targets = [
   { name: "collateral-margin", dir: resolve(here, "..", "..", "contracts") },
   {
     name: "perps",
-    dir: contractsPackageDir(process.env.PERPS_REPO, resolve(workspaceRoot, "perps")),
+    dir: contractsPackageDir(
+      process.env.PERPS_REPO,
+      resolve(workspaceRoot, "perps"),
+    ),
   },
   {
     name: "futures-marketplace",
@@ -77,14 +89,18 @@ for (const target of targets) {
     process.exit(1);
   }
 
-  console.log(`[compile-siblings] ${target.name}: pnpm hardhat compile (${target.dir})`);
+  console.log(
+    `[compile-siblings] ${target.name}: pnpm hardhat compile (${target.dir})`,
+  );
   const result = spawnSync("pnpm", ["hardhat", "compile"], {
     cwd: target.dir,
     stdio: "inherit",
     env: process.env,
   });
   if (result.status !== 0) {
-    console.error(`[compile-siblings] ${target.name} compile failed with status ${result.status}`);
+    console.error(
+      `[compile-siblings] ${target.name} compile failed with status ${result.status}`,
+    );
     process.exit(result.status ?? 1);
   }
 }

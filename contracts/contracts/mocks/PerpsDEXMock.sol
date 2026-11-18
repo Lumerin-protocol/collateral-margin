@@ -30,6 +30,13 @@ contract PerpsDEXMock is ILinearMarket {
     mapping(address => uint256) private _buyOrderFillLoss;
     mapping(address => uint256) private _sellOrderFillLoss;
     bool private _riskViewDisabled;
+    /// @dev The mark `getExposureView` values contracts at; 0 (the default) makes the mock a
+    ///      market without the exposure view.
+    uint256 public markPrice;
+
+    function setMarkPrice(uint256 price) external {
+        markPrice = price;
+    }
 
     function setUserPosition(address user, int256 qty, uint256 entryPrice) external {
         int256 netEntryValue = qty * int256(entryPrice) / int256(10 ** QUANTITY_DECIMALS);
@@ -58,6 +65,21 @@ contract PerpsDEXMock is ILinearMarket {
             pendingFunding: _pendingFunding[user],
             buyOrderDelta: _buyOrderDelta[user],
             sellOrderDelta: _sellOrderDelta[user],
+            buyOrderFillLoss: _buyOrderFillLoss[user],
+            sellOrderFillLoss: _sellOrderFillLoss[user]
+        });
+    }
+
+    /// @dev Reverts with no data, as a market without the view does, while no mark is set.
+    function getExposureView(address user) external view returns (ExposureView memory) {
+        if (_riskViewDisabled || markPrice == 0) revert();
+        int256 mark = int256(markPrice);
+        return ExposureView({
+            netPositionExposure: _positions[user].netQuantity * mark / int256(10 ** QUANTITY_DECIMALS),
+            unrealizedPnl: _unrealizedPnl[user],
+            pendingFunding: _pendingFunding[user],
+            buyOrderExposure: _buyOrderDelta[user] * markPrice / 1e6,
+            sellOrderExposure: _sellOrderDelta[user] * markPrice / 1e6,
             buyOrderFillLoss: _buyOrderFillLoss[user],
             sellOrderFillLoss: _sellOrderFillLoss[user]
         });

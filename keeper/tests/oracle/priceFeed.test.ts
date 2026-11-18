@@ -66,7 +66,8 @@ function makeChainStub(initialAnswer: bigint, decimals: number): ChainStub {
       currentAnswer = answer;
     },
     fireAnswerUpdated: async () => {
-      if (onLogs === undefined) throw new Error("watchContractEvent was not registered");
+      if (onLogs === undefined)
+        throw new Error("watchContractEvent was not registered");
       onLogs();
       // The watcher dispatches `void this.refresh(...)` — yield to let the
       // promise chain run to completion before the test inspects state.
@@ -155,7 +156,11 @@ describe("oracle/priceFeed: lifecycle + dispatch", () => {
     unsubscribe();
     stub.setAnswer(120_000_000n);
     await stub.fireAnswerUpdated();
-    assert.equal(updates.length, 1, "should not have received second update after unsubscribe");
+    assert.equal(
+      updates.length,
+      1,
+      "should not have received second update after unsubscribe",
+    );
     feed.stop();
   });
 });

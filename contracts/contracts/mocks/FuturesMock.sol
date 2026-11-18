@@ -9,7 +9,9 @@ import { ILinearMarket } from "../interfaces/ILinearMarket.sol";
 ///         ILinearMarket view outputs (`getNetPositionDelta`, the per-side order
 ///         delta / fill loss, `getUnrealizedPnl`). All views default to zero
 ///         so a fresh mock is a no-op contributor to portfolio margin.
-contract FuturesMock is ILinearMarket {
+///         It lacks `getExposureView`, so it models a market without the exposure view and
+///         cannot declare `ILinearMarket`.
+contract FuturesMock {
     mapping(address => int256) private _netDelta;
     mapping(address => int256) private _unrealizedPnl;
     mapping(address => int256) private _pendingFunding;
@@ -63,8 +65,8 @@ contract FuturesMock is ILinearMarket {
         return _pendingFunding[user];
     }
 
-    function getRiskView(address user) external view returns (RiskView memory) {
-        return RiskView({
+    function getRiskView(address user) external view returns (ILinearMarket.RiskView memory) {
+        return ILinearMarket.RiskView({
             netPositionDelta: _netDelta[user],
             unrealizedPnl: _unrealizedPnl[user],
             pendingFunding: _pendingFunding[user],
