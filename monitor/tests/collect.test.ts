@@ -47,12 +47,48 @@ const venueAbi = parseAbi([
   "function liquidatorShareBps() view returns (uint16)",
   "function deliverySchedule() view returns (uint256 currentSlot, uint256 pinnedCount, uint256 previousExpiry)",
   "function futureExpirationDatesCount() view returns (uint8)",
+  "struct ExposureView { int256 netPositionExposure; int256 unrealizedPnl; int256 pendingFunding; uint256 buyOrderExposure; uint256 sellOrderExposure; uint256 buyOrderFillLoss; uint256 sellOrderFillLoss; }",
+  "function getExposureView(address user) view returns (ExposureView)",
 ]);
 const mmAbi = parseAbi([
   "function balanceOf(address user) view returns (uint256)",
   "function computePortfolioIM(address user) view returns (uint256)",
+  "function computePortfolioMargins(address user) view returns (uint256 im, uint256 mm)",
   "function getEthBalance(address addr) view returns (uint256)",
 ]);
+/**
+ * N62: vault users ahead of the retarget. A is long 1,000 on perps with 200 of
+ * futures bids and a 20 cushion; B is long 4,000 and already below maintenance;
+ * C is short 1,000. USDC units.
+ */
+const ACCOUNTS: Record<
+  string,
+  {
+    balance: number;
+    mm: number;
+    perps: { net: number; pnl?: number; funding?: number };
+    futures: { net: number; bids?: number };
+  }
+> = {
+  "0x00000000000000000000000000000000000000a1": {
+    balance: 120,
+    mm: 100,
+    perps: { net: 1_000 },
+    futures: { net: 0, bids: 200 },
+  },
+  "0x00000000000000000000000000000000000000b1": {
+    balance: 250,
+    mm: 400,
+    perps: { net: 4_000, pnl: -10, funding: 2 },
+    futures: { net: 0 },
+  },
+  "0x00000000000000000000000000000000000000c1": {
+    balance: 100,
+    mm: 100,
+    perps: { net: -1_000 },
+    futures: { net: 0 },
+  },
+};
 const MARGIN_ENGINE = "0x0000000000000000000000000000000000000009";
 /** Perps' price oracle on the CF-321 venue: the halving glide. */
 const GLIDE_FEED = "0x00000000000000000000000000000000000000a7";
@@ -123,6 +159,7 @@ const vaultResponse = {
   ],
   futuresUser: { balance: u(7) },
   perpsUser: null,
+  vaultUsers: Object.keys(ACCOUNTS).map((id) => ({ id })),
 };
 
 const riskView = (unrealizedPnl: bigint, pendingFunding: bigint) => ({
@@ -206,13 +243,24 @@ function feedCall(to: string, data: `0x${string}`, block: string): `0x${string}`
 function ethCall(to: string, data: `0x${string}`): `0x${string}` {
   const address = to.toLowerCase();
   if (address === process.env.VAULT_ADDRESS) {
-    // Only the market maker's own vault balance is read from the vault.
+    // The market maker's own vault balance, and the N62 accounts'.
     const { args } = decodeFunctionData({ abi: mmAbi, data });
-    assert.equal(args?.[0], process.env.MM_ADDRESS);
+    const user = String(args?.[0]).toLowerCase();
+    const account = ACCOUNTS[user];
+    if (!account) assert.equal(user, process.env.MM_ADDRESS);
     return encodeFunctionResult({
       abi: mmAbi,
       functionName: "balanceOf",
-      result: BigInt(u(1_800)),
+      result: BigInt(u(account ? account.balance : 1_800)),
+    });
+  }
+  if (address === MARGIN_ENGINE && data.startsWith(toFunctionSelector("function computePortfolioMargins(address)"))) {
+    const { args } = decodeFunctionData({ abi: mmAbi, data });
+    const account = ACCOUNTS[String(args?.[0]).toLowerCase()];
+    return encodeFunctionResult({
+      abi: mmAbi,
+      functionName: "computePortfolioMargins",
+      result: [BigInt(u(account.mm * 1.5)), BigInt(u(account.mm))],
     });
   }
   if (address === MARGIN_ENGINE && data.startsWith(toFunctionSelector("function mmSpotShock()")))
@@ -310,6 +358,25 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
           ? riskView(-15_000_000n, 0n)
           : riskView(4_000_000n, 1_000_000n),
       });
+    case "getExposureView": {
+      const account = ACCOUNTS[String(args?.[0]).toLowerCase()];
+      const leg: { net: number; pnl?: number; funding?: number; bids?: number } = isFutures
+        ? account.futures
+        : account.perps;
+      return encodeFunctionResult({
+        abi: venueAbi,
+        functionName,
+        result: {
+          netPositionExposure: BigInt(Math.round(leg.net * 1e6)),
+          unrealizedPnl: BigInt(Math.round((leg.pnl ?? 0) * 1e6)),
+          pendingFunding: BigInt(Math.round((leg.funding ?? 0) * 1e6)),
+          buyOrderExposure: BigInt(Math.round((leg.bids ?? 0) * 1e6)),
+          sellOrderExposure: 0n,
+          buyOrderFillLoss: 0n,
+          sellOrderFillLoss: 0n,
+        },
+      });
+    }
     case "liquidationFeeBps":
       // futures keeps 200 × 80% = 160 bps, perps 300 × 80% = 240 bps.
       return encodeFunctionResult({
@@ -513,11 +580,36 @@ describe("collect", () => {
   });
 
   it("batches contract reads into two multicalls per check", () => {
-    // backstop 13 + 2 reads for each of 2 legs; market maker 7 + 3 reads for each of 3 expiries
+    // backstop 13 + 2 reads for each of 2 legs; market maker 7 + 3 reads for each of 3 expiries;
+    // N62 retarget risk 4 reads for each of 3 vault users
     assert.deepEqual(
       [...multicallSizes].sort((a, b) => a - b),
-      [4, 7, 9, 13],
+      [4, 7, 9, 12, 13],
     );
+  });
+
+  it("N62: projects the next retarget from the epoch's block times", () => {
+    // Tip 1,046,000 is 1,712 blocks into the epoch starting at 1,044,288, at 570 s a block.
+    const step = (BTC_BLOCK_SECONDS * 2015) / (2016 * 600) - 1;
+    assert.equal(value("RetargetBlocksLeft"), 304);
+    const near = (name: string, expected: number) => {
+      const actual = value(name) ?? Number.NaN;
+      assert.ok(Math.abs(actual - expected) < 1e-9, `${name} ${actual} vs ${expected}`);
+    };
+    near("RetargetProjectedStepPct", step * 100);
+    near("RetargetDifficultyChangePct", (1 / (1 + step) - 1) * 100);
+    // against the 10% MM spot shock
+    near("RetargetStepShockPct", (Math.abs(step) / 0.1) * 100);
+  });
+
+  it("N62: counts accounts the projected step would put below maintenance and their bad debt", () => {
+    const step = (BTC_BLOCK_SECONDS * 2015) / (2016 * 600) - 1;
+    // A (long 1,200 with its bids) and B are hit by the down-step; C is short.
+    assert.equal(value("RetargetAtRiskAccounts"), 2);
+    // Only B goes negative: equity 250 - 10 - 2, the step, then the 225 bps unwind.
+    const equityAfter = 250 - 10 - 2 + 4_000 * step - 4_000 * (1 + step) * 0.0225;
+    const badDebt = value("RetargetPotentialBadDebt") ?? Number.NaN;
+    assert.ok(Math.abs(badDebt + equityAfter) < 1e-6, `bad debt ${badDebt} vs ${-equityAfter}`);
   });
 
   it("converts vault balances to USDC units", () => {

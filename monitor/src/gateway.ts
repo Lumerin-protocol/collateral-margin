@@ -530,14 +530,96 @@ export async function readSubgraphMeta(url: string): Promise<{
   };
 }
 
+/** One vault user's margin inputs, both venues summed. Raw token units, exposures at each mark. */
+export interface AccountRisk {
+  user: Address;
+  balance: bigint;
+  maintenance: bigint;
+  netExposure: bigint;
+  buyOrderExposure: bigint;
+  sellOrderExposure: bigint;
+  unrealizedPnl: bigint;
+  /** Positive pending funding only: funding the account owes. */
+  fundingOwed: bigint;
+}
+
+/** Every vault user at the subgraph block, with its balance, maintenance and exposure (N62). */
+export async function readAccountRisks(
+  at: { blockNumber: bigint },
+  marginEngine: Address,
+): Promise<AccountRisk[]> {
+  const users: Address[] = [];
+  for (let last = "0x"; ; ) {
+    const { vaultUsers } = await gql(
+      VAULT_SUBGRAPH_URL,
+      `query Users($block: Int!, $last: Bytes!) {
+        vaultUsers(first: 1000, orderBy: id, where: { id_gt: $last }, block: { number: $block }) { id }
+      }`,
+      { block: Number(at.blockNumber), last },
+    );
+    const page = (vaultUsers as { id: Address }[]).map((user) => user.id);
+    users.push(...page);
+    if (page.length < 1000) break;
+    last = page[page.length - 1];
+  }
+  if (!users.length) return [];
+
+  const abi = parseAbi([
+    "struct ExposureView { int256 netPositionExposure; int256 unrealizedPnl; int256 pendingFunding; uint256 buyOrderExposure; uint256 sellOrderExposure; uint256 buyOrderFillLoss; uint256 sellOrderFillLoss; }",
+    "function getExposureView(address user) view returns (ExposureView)",
+    "function balanceOf(address user) view returns (uint256)",
+    "function computePortfolioMargins(address user) view returns (uint256 im, uint256 mm)",
+  ]);
+  const reads = await chain.multicall({
+    ...at,
+    multicallAddress: MULTICALL3,
+    allowFailure: false,
+    contracts: users.flatMap((user) => [
+      { address: VAULT_ADDRESS, abi, functionName: "balanceOf", args: [user] } as const,
+      { address: marginEngine, abi, functionName: "computePortfolioMargins", args: [user] } as const,
+      { address: PERPS_ADDRESS, abi, functionName: "getExposureView", args: [user] } as const,
+      { address: FUTURES_ADDRESS, abi, functionName: "getExposureView", args: [user] } as const,
+    ]),
+  });
+  return users.map((user, i) => {
+    const [balance, [, maintenance], ...views] = reads.slice(i * 4, i * 4 + 4) as [
+      bigint,
+      readonly [bigint, bigint],
+      ...{
+        netPositionExposure: bigint;
+        unrealizedPnl: bigint;
+        pendingFunding: bigint;
+        buyOrderExposure: bigint;
+        sellOrderExposure: bigint;
+      }[],
+    ];
+    const sum = (pick: (view: (typeof views)[number]) => bigint) =>
+      views.reduce((total, view) => total + pick(view), 0n);
+    return {
+      user,
+      balance,
+      maintenance,
+      netExposure: sum((view) => view.netPositionExposure),
+      buyOrderExposure: sum((view) => view.buyOrderExposure),
+      sellOrderExposure: sum((view) => view.sellOrderExposure),
+      unrealizedPnl: sum((view) => view.unrealizedPnl),
+      fundingOwed: sum((view) => (view.pendingFunding > 0n ? view.pendingFunding : 0n)),
+    };
+  });
+}
+
 /** Blocks between Bitcoin difficulty retargets; the block-time average spans one. */
 export const DIFFICULTY_PERIOD = 2016;
 
-/** Bitcoin tip height and the header times at the tip and one retarget period back. */
+/**
+ * Bitcoin tip height and the header times at the tip, one retarget period back,
+ * and the current difficulty epoch's first block.
+ */
 export interface BitcoinTip {
   height: number;
   time: number;
   periodStartTime: number;
+  epochStartTime: number;
 }
 
 /**
@@ -573,11 +655,12 @@ async function bitcoinHeaderTime(height: number): Promise<number> {
 
 export async function readBitcoinTip(): Promise<BitcoinTip> {
   const height = await bitcoinRpc<number>("getblockcount");
-  const [time, periodStartTime] = await Promise.all([
+  const [time, periodStartTime, epochStartTime] = await Promise.all([
     bitcoinHeaderTime(height),
     bitcoinHeaderTime(height - DIFFICULTY_PERIOD),
+    bitcoinHeaderTime(height - (height % DIFFICULTY_PERIOD)),
   ]);
-  return { height, time, periodStartTime };
+  return { height, time, periodStartTime, epochStartTime };
 }
 
 /**

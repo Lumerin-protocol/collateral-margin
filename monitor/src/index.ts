@@ -25,6 +25,7 @@ import {
   type MarketMakerHealth,
   type MarketMakerState,
   marketName,
+  readAccountRisks,
   readBitcoinTip,
   readBlockNumber,
   readBlockTimestamp,
@@ -50,6 +51,7 @@ import {
   toUnits,
   utilizationPct,
 } from "./lib.ts";
+import { projectRetarget, retargetRisk } from "./retarget.ts";
 
 // Terraform sets and validates this (var.vault_env); nothing is optional here.
 const { CW_NAMESPACE } = process.env as Record<string, string>;
@@ -99,6 +101,7 @@ export async function collect(): Promise<{
     prices,
     subgraphMetas,
     glide,
+    accounts,
   ] = await Promise.all([
       readChainState(at, vault.collateralToken),
       // Goldsky leaves _meta.block.timestamp null; the age alarm needs the real one.
@@ -158,6 +161,12 @@ export async function collect(): Promise<{
       readGlide(at).catch((error) => {
         failed.push("glide");
         log(`glide check failed: ${describeError(error)}`);
+        return null;
+      }),
+      // Best-effort: the retarget forecast must not fail the vault debt check.
+      readAccountRisks(at, vault.marginEngine).catch((error) => {
+        failed.push("retarget_accounts");
+        log(`retarget account check failed: ${describeError(error)}`);
         return null;
       }),
     ]);
@@ -319,6 +328,37 @@ export async function collect(): Promise<{
   }
 
   if (bitcoinTip) points.push(...halvingMetrics(bitcoinTip));
+  const retarget = bitcoinTip ? projectRetarget(bitcoinTip) : null;
+  if (retarget) {
+    points.push(
+      metric("RetargetBlocksLeft", retarget.blocksLeft, "Count"),
+      metric("RetargetDifficultyChangePct", retarget.difficultyChange * 100),
+      metric("RetargetProjectedStepPct", retarget.indexStep * 100),
+    );
+    if (prices && prices.mmSpotShock > 0n)
+      points.push(
+        metric("RetargetStepShockPct", (Math.abs(retarget.indexStep) / (Number(prices.mmSpotShock) / 1e18)) * 100),
+      );
+    if (accounts) {
+      const risk = retargetRisk(
+        accounts.map((account) => ({
+          balance: usdc(account.balance),
+          maintenance: usdc(account.maintenance),
+          netExposure: usdc(account.netExposure),
+          buyOrderExposure: usdc(account.buyOrderExposure),
+          sellOrderExposure: usdc(account.sellOrderExposure),
+          unrealizedPnl: usdc(account.unrealizedPnl),
+          fundingOwed: usdc(account.fundingOwed),
+        })),
+        retarget.indexStep,
+        vault.backstopUnwindBandBps + vault.backstopUnwindFeeBps,
+      );
+      points.push(
+        metric("RetargetAtRiskAccounts", risk.atRisk, "Count"),
+        metric("RetargetPotentialBadDebt", risk.potentialBadDebt),
+      );
+    }
+  }
   if (glide) {
     // WAD → percent. The glide runs over the last week before the halving; perps' mark
     // sits that share of the step below the index.
