@@ -11,7 +11,7 @@ import {
   http,
   parseAbi,
 } from "viem";
-import { gql, isUnset } from "./lib.ts";
+import { gql, isUnset, type PricePoint, type PriceMoves, priceMoves } from "./lib.ts";
 
 // Terraform sets and validates these (var.vault_env); nothing is optional here.
 const { VAULT_SUBGRAPH_URL, POINTS_SUBGRAPH_URL } = process.env as Record<
@@ -794,6 +794,8 @@ export async function readPrices(
   btcUsd: FeedHistory;
   spv: SpvState;
   mmSpotShock: bigint;
+  /** BTC/USD and `HashpriceBTC`, the inputs whose events `readPriceMoves` replays. */
+  feeds: { btcUsd: Address; spv: Address };
 }> {
   const hashpriceFeed = await chain.readContract({
     address: FUTURES_ADDRESS,
@@ -812,7 +814,87 @@ export async function readPrices(
     chain.readContract({ address: spvFeed, abi: feedAbi, functionName: "latestRoundData", ...at }),
   ]);
   const spv = { height: Number(spvRound[0]), updatedAt: Number(spvRound[3]) };
-  return { hashprice, btcUsd, spv, mmSpotShock };
+  return { hashprice, btcUsd, spv, mmSpotShock, feeds: { btcUsd: btcFeed, spv: spvFeed } };
+}
+
+/** The run interval: each run measures the price events since the previous one. */
+const PRICE_MOVE_LOOKBACK_SECONDS = BigInt(process.env.PRICE_MOVE_LOOKBACK_SECONDS ?? "300");
+/** N63: the keeper's liquidatable-to-liquidated window (DECISIONS.md). */
+const PRICE_MOVE_WINDOW_SECONDS = BigInt(process.env.PRICE_MOVE_WINDOW_SECONDS ?? "300");
+
+const priceEventAbi = parseAbi([
+  "function aggregator() view returns (address)",
+  "event AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)",
+  "event HashpriceUpdated(uint32 indexed confirmedHeight, int256 hashprice, uint256 avgFees)",
+]);
+
+/**
+ * Every hashprice-USD and BTC/USD price in force over the look-back plus one window,
+ * rebuilt from the inputs' events: neither `HashpriceUSD` nor `HashpriceBTC` serves
+ * past rounds. Hashprice USD is `HashpriceBTC × BTC/USD`; scale cancels in the moves.
+ */
+export async function readPriceMoves(
+  block: bigint,
+  feeds: { btcUsd: Address; spv: Address },
+): Promise<{ hashprice: PriceMoves; btc: PriceMoves }> {
+  const windowBlocks = PRICE_MOVE_WINDOW_SECONDS / BASE_BLOCK_SECONDS;
+  const measuredFrom = block - PRICE_MOVE_LOOKBACK_SECONDS / BASE_BLOCK_SECONDS;
+  const from = measuredFrom - windowBlocks;
+  // A Chainlink proxy emits no AnswerUpdated; its aggregator does. Mocks emit it themselves.
+  const btcEvents = await chain
+    .readContract({ address: feeds.btcUsd, abi: priceEventAbi, functionName: "aggregator", blockNumber: block })
+    .catch(() => feeds.btcUsd);
+  const answerAt = async (feed: Address) =>
+    (
+      (await chain.readContract({
+        address: feed,
+        abi: feedAbi,
+        functionName: "latestRoundData",
+        blockNumber: from,
+      })) as readonly [bigint, bigint, bigint, bigint, bigint]
+    )[1];
+  const [btcStart, hashpriceBtcStart, btcLogs, hashpriceLogs] = await Promise.all([
+    answerAt(feeds.btcUsd),
+    answerAt(feeds.spv),
+    chain.getLogs({
+      address: btcEvents,
+      event: priceEventAbi[1],
+      fromBlock: from,
+      toBlock: block,
+    }),
+    chain.getLogs({
+      address: feeds.spv,
+      event: priceEventAbi[2],
+      fromBlock: from,
+      toBlock: block,
+    }),
+  ]);
+  const events = [
+    ...btcLogs.map((log) => ({ log, btc: log.args.current, hashpriceBtc: undefined })),
+    ...hashpriceLogs.map((log) => ({ log, btc: undefined, hashpriceBtc: log.args.hashprice })),
+  ].sort((a, b) =>
+    a.log.blockNumber === b.log.blockNumber
+      ? a.log.logIndex - b.log.logIndex
+      : a.log.blockNumber < b.log.blockNumber
+        ? -1
+        : 1,
+  );
+  let btc = Number(btcStart);
+  let hashpriceBtc = Number(hashpriceBtcStart);
+  const btcSeries: PricePoint[] = [{ block: from, price: btc }];
+  const hashpriceSeries: PricePoint[] = [{ block: from, price: hashpriceBtc * btc }];
+  for (const event of events) {
+    const at = event.log.blockNumber;
+    if (event.btc !== undefined) {
+      btc = Number(event.btc);
+      btcSeries.push({ block: at, price: btc });
+    } else if (event.hashpriceBtc !== undefined) hashpriceBtc = Number(event.hashpriceBtc);
+    hashpriceSeries.push({ block: at, price: hashpriceBtc * btc });
+  }
+  return {
+    hashprice: priceMoves(hashpriceSeries, measuredFrom, windowBlocks),
+    btc: priceMoves(btcSeries, measuredFrom, windowBlocks),
+  };
 }
 
 /** The perps halving glide: how far down it is and the step it glides to, both WAD. */

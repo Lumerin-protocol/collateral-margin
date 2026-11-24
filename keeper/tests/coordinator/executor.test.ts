@@ -91,3 +91,58 @@ describe("CF-011 — a permanently failing account cannot starve the executor", 
     );
   });
 });
+
+/**
+ * N63: the price-move alarms are sized to the keeper's liquidatable-to-liquidated
+ * latency, so each executed liquidation logs that latency and the account's equity
+ * at execution (negative is bad debt) for the log group's metric filters.
+ */
+describe("N63 — logs latency and equity for each executed liquidation", () => {
+  it("measures from when the account was first queued underwater", async () => {
+    const config = {
+      coordinator: {
+        maxConcurrentAccounts: 1,
+        confirmationBlocks: 1,
+        retryBackoffBaseMs: BACKOFF_BASE_MS,
+        retryBackoffMaxMs: BACKOFF_MAX_MS,
+      },
+    } as unknown as Config;
+    const planner = {
+      async run(): Promise<PlanOutcome> {
+        await sleep(40);
+        return {
+          kind: "liquidated",
+          mmSurplus: 0n,
+          feeEarned: 0n,
+          positionsClosed: 1,
+          ordersClosed: 0,
+          equity: -5n,
+        };
+      },
+    } as unknown as Planner;
+    const lines: Record<string, unknown>[] = [];
+    const logger = pino(
+      { level: "info" },
+      { write: (line: string) => lines.push(JSON.parse(line)) },
+    );
+
+    const queue = new CoordinatorQueue();
+    queue.upsert(health(VICTIM, -10n));
+    // A later re-check of the same underwater account keeps the first sighting.
+    await sleep(20);
+    queue.upsert(health(VICTIM, -20n));
+
+    const executor = new CoordinatorExecutor(config, queue, planner, logger);
+    await executor.start();
+    await sleep(100);
+    await executor.stop();
+
+    const executed = lines.filter((l) => l.msg === "Liquidation executed");
+    assert.equal(executed.length, 1);
+    const [line] = executed;
+    assert.equal(line?.user, VICTIM);
+    assert.equal(line?.equity, -5);
+    const latencyMs = Number(line?.latencyMs);
+    assert.ok(latencyMs >= 60 && latencyMs < 100, `latencyMs ${latencyMs}`);
+  });
+});

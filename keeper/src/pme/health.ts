@@ -4,6 +4,8 @@ import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
 import { CollateralVaultAbi } from "collateral-margin-abi/CollateralVault.ts";
 import { PortfolioMarginEngineAbi } from "collateral-margin-abi/PortfolioMarginEngine.ts";
+import { HashPowerPerpsDEXAbi } from "derivatives-marketplace-abi/HashPowerPerpsDEX.ts";
+import { HashPowerFuturesAbi } from "../abi/HashPowerFutures.ts";
 
 /**
  * Snapshot of an account's portfolio-margin state at a single block.
@@ -104,6 +106,54 @@ export async function readAccountHealthBatch(
   }
 
   return result;
+}
+
+/**
+ * The account's equity in token units, as the engine nets it: vault balance plus
+ * each venue's unrealized PnL, less funding owed and account debt. Negative means
+ * closing everything leaves bad debt.
+ */
+export async function readAccountEquity(
+  chain: Chain,
+  config: Config,
+  user: Address,
+): Promise<bigint> {
+  const [balance, accountDebt, perps, futures] =
+    await chain.publicClient.multicall({
+      contracts: [
+        {
+          address: config.vault.address,
+          abi: CollateralVaultAbi,
+          functionName: "balanceOf" as const,
+          args: [user] as const,
+        },
+        {
+          address: config.vault.address,
+          abi: CollateralVaultAbi,
+          functionName: "accountDebt" as const,
+          args: [user] as const,
+        },
+        {
+          address: config.perps.address,
+          abi: HashPowerPerpsDEXAbi,
+          functionName: "getRiskView" as const,
+          args: [user] as const,
+        },
+        {
+          address: config.futures.address,
+          abi: HashPowerFuturesAbi,
+          functionName: "getRiskView" as const,
+          args: [user] as const,
+        },
+      ] as const,
+      allowFailure: false,
+    });
+  let equity = (balance as bigint) - (accountDebt as bigint);
+  for (const risk of [perps, futures]) {
+    equity += risk.unrealizedPnl;
+    if (risk.pendingFunding > 0n) equity -= risk.pendingFunding;
+  }
+  return equity;
 }
 
 /**
