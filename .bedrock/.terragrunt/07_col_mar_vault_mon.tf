@@ -52,6 +52,12 @@ locals {
     "btc-warn"       = { metric = "BtcChange24hPct", ratio = 0.5, severity = "warning" }
     "btc-crit"       = { metric = "BtcChange24hPct", ratio = 1, severity = "warning" }
   }
+  # Projected retarget step as a percent of the MM spot shock, and the blocks left
+  # (432 is about 3 days, 144 about 1) at which it starts to matter.
+  retarget_step_alarms = {
+    "warn" = { shock_pct = 50, blocks = 432, severity = "warning" }
+    "page" = { shock_pct = 80, blocks = 144, severity = "critical" }
+  }
   # Feed ages against MAX_ORACLE_STALENESS (2 h), past which the venues and the PME
   # reject the price and nothing liquidates. The hashprice feed reports the older of
   # its two inputs, so its 2 h alarm is the freeze itself. The hashprice-oracle repo
@@ -488,6 +494,98 @@ resource "aws_cloudwatch_metric_alarm" "price_move" {
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Price Move ${each.key}"
+    Capability = "Monitoring"
+  })
+}
+
+# N62: HashpriceBTC applies a difficulty retarget in one block, so the index steps
+# by the whole adjustment with no keeper window to liquidate in between.
+resource "aws_cloudwatch_metric_alarm" "retarget_step" {
+  for_each            = var.vault_monitoring.create ? local.retarget_step_alarms : {}
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-retarget-step-${each.key}-${local.vault_mon_env}"
+  alarm_description   = "The next Bitcoin difficulty retarget is projected to step the hashprice index by at least ${each.value.shock_pct}% of the MM spot shock, within ${each.value.blocks} blocks (RetargetStepShockPct, RetargetBlocksLeft). The step lands in one block, so an account whose cushion above maintenance is smaller than the step on its exposure goes straight to a loss. Check RetargetAtRiskAccounts and RetargetPotentialBadDebt, then follow docs/retarget-shocks.md to raise the shocks through the Safe before the retarget. ${each.value.severity == "critical" ? "Pages on lmn." : "Warning only."}"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  threshold           = 1
+  treat_missing_data  = "ignore"
+  alarm_actions       = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+  ok_actions          = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+
+  metric_query {
+    id = "shock"
+    metric {
+      metric_name = "RetargetStepShockPct"
+      namespace   = local.vault_mon_ns
+      period      = 300
+      stat        = "Maximum"
+    }
+  }
+
+  metric_query {
+    id = "blocks"
+    metric {
+      metric_name = "RetargetBlocksLeft"
+      namespace   = local.vault_mon_ns
+      period      = 300
+      stat        = "Minimum"
+    }
+  }
+
+  metric_query {
+    id          = "due"
+    expression  = "IF(shock >= ${each.value.shock_pct} AND blocks <= ${each.value.blocks}, 1, 0)"
+    label       = "Retarget step due"
+    return_data = true
+  }
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Retarget Step ${each.key}"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "retarget_bad_debt" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-retarget-bad-debt-${local.vault_mon_env}"
+  alarm_description   = "At the projected next difficulty retarget, accounts would go below zero equity by more than the insurance fund holds (RetargetPotentialBadDebt > InsuranceFundBalance), after the backstop unwind cost. The loss beyond the fund becomes insurance debt and can halt the vault. Follow docs/retarget-shocks.md: raise the shocks through the Safe before the retarget, or top up the insurance fund. Pages on lmn."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  threshold           = 0
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
+
+  metric_query {
+    id = "debt"
+    metric {
+      metric_name = "RetargetPotentialBadDebt"
+      namespace   = local.vault_mon_ns
+      period      = 300
+      stat        = "Maximum"
+    }
+  }
+
+  metric_query {
+    id = "fund"
+    metric {
+      metric_name = "InsuranceFundBalance"
+      namespace   = local.vault_mon_ns
+      period      = 300
+      stat        = "Minimum"
+    }
+  }
+
+  metric_query {
+    id          = "excess"
+    expression  = "debt - fund"
+    label       = "Retarget bad debt beyond the insurance fund"
+    return_data = true
+  }
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Retarget Bad Debt"
     Capability = "Monitoring"
   })
 }
@@ -1299,6 +1397,8 @@ resource "aws_cloudwatch_dashboard" "vault" {
               aws_cloudwatch_metric_alarm.vault_backstop_unfilled[*].arn,
               [for alarm in aws_cloudwatch_metric_alarm.btc_halving : alarm.arn],
               [for alarm in aws_cloudwatch_metric_alarm.price_move : alarm.arn],
+              [for alarm in aws_cloudwatch_metric_alarm.retarget_step : alarm.arn],
+              aws_cloudwatch_metric_alarm.retarget_bad_debt[*].arn,
               [for alarm in aws_cloudwatch_metric_alarm.price_feed_age : alarm.arn],
               aws_cloudwatch_composite_alarm.price_feed_frozen[*].arn,
               aws_cloudwatch_metric_alarm.spv_behind_bitcoin[*].arn,
@@ -1477,11 +1577,16 @@ resource "aws_cloudwatch_dashboard" "vault" {
           width  = 12
           height = 6
           properties = {
-            title  = "Bitcoin halving and the perps glide"
+            title  = "Bitcoin retarget, halving and the perps glide"
             region = var.default_region
             period = 3600
             view   = "singleValue"
             metrics = [
+              [local.vault_mon_ns, "RetargetBlocksLeft", { label = "Blocks to retarget", stat = "Minimum" }],
+              [local.vault_mon_ns, "RetargetProjectedStepPct", { label = "Projected index step %", stat = "Average" }],
+              [local.vault_mon_ns, "RetargetStepShockPct", { label = "Step / MM shock %", stat = "Maximum" }],
+              [local.vault_mon_ns, "RetargetAtRiskAccounts", { label = "Accounts at risk", stat = "Maximum" }],
+              [local.vault_mon_ns, "RetargetPotentialBadDebt", { label = "Potential bad debt", stat = "Maximum" }],
               [local.vault_mon_ns, "BtcDaysUntilHalving", { label = "Days", stat = "Minimum" }],
               [local.vault_mon_ns, "BtcBlocksUntilHalving", { label = "Blocks", stat = "Minimum" }],
               [local.vault_mon_ns, "GlideProgressPct", { label = "Glide progress %", stat = "Maximum" }],
