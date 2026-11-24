@@ -1,7 +1,8 @@
 import type pino from "pino";
+import type { Address } from "viem";
 import type { Chain } from "../chain.ts";
 import type { Config } from "../config.ts";
-import { AggregatorV3Abi } from "./abi.ts";
+import { AggregatorV3Abi, HashpriceBtcAbi } from "./abi.ts";
 
 /**
  * A single tick of the hashprice oracle, in token decimals (USDC = 6).
@@ -20,20 +21,22 @@ export interface PriceUpdate {
 
 export type PriceListener = (update: PriceUpdate) => void;
 
+type PriceSource = "btcUsd" | "hashpriceBtc";
+
 /**
- * Watches the BTC/USDC Chainlink feed for `AnswerUpdated` events and, on
- * each event, re-reads the current `HashpriceUSD` answer. Emits a
- * `PriceUpdate` to every subscribed listener.
+ * Watches the BTC/USDC Chainlink aggregator for `AnswerUpdated` and
+ * `HashpriceBTC` for `HashpriceUpdated` and, on each event, re-reads the
+ * current `HashpriceUSD` answer. Emits a `PriceUpdate` to every subscribed
+ * listener.
  *
  * Why this split:
  *   - `HashpriceUSD = HashpriceBTC × BTC/USD / scale`. BTC/USD moves on
  *     Chainlink's deviation/heartbeat triggers (often, sub-minute on
  *     volatile days); HashpriceBTC moves only when a BTC block is mined
  *     and `submitBlock` is called (~10 min cadence).
- *   - BTC/USD is therefore the dominant driver of HashpriceUSD changes.
- *     Subscribing to one feed and reading the aggregated value gives us
+ *   - Subscribing to both inputs and reading the aggregated value gives us
  *     fresh `HashpriceUSD` values without polling either upstream.
- *   - The slower HashpriceBTC drift falls to the periodic safety-net sweep.
+ *   - The periodic sweep stays the safety net for anything the events miss.
  *
  * The feed also handles the upstream-decimals → token-decimals rebase: the
  * aggregator answer is `oracle.decimals()` (typically 8 for HashpriceUSD);
@@ -51,7 +54,11 @@ export type PriceListener = (update: PriceUpdate) => void;
 export class PriceFeed {
   private listeners: Set<PriceListener> = new Set();
   private currentPrice: bigint | undefined;
-  private unwatch: (() => void) | undefined;
+  private running = false;
+  private resyncTimer: NodeJS.Timeout | undefined;
+  private watched: Partial<
+    Record<PriceSource, { address: Address; unwatch: () => void }>
+  > = {};
   /** 10^(oracleDecimals - tokenDecimals). Set during `start()`. */
   private rescaleDivisor: bigint = 1n;
 
@@ -74,7 +81,7 @@ export class PriceFeed {
   }
 
   async start(): Promise<void> {
-    if (this.unwatch !== undefined) {
+    if (this.running) {
       this.logger.warn("PriceFeed.start: already running");
       return;
     }
@@ -94,25 +101,30 @@ export class PriceFeed {
 
     await this.refresh("start");
 
-    // We watch BTC/USDC (not HashpriceUSD) because HashpriceUSD is a pure
-    // composite view and emits no events of its own. Any BTC/USDC tick
+    // We watch the inputs (not HashpriceUSD) because HashpriceUSD is a pure
+    // composite view and emits no events of its own. Any tick of either input
     // potentially shifts HashpriceUSD, so we re-read on every event.
-    this.unwatch = this.chain.publicClient.watchContractEvent({
-      address: this.config.oracle.btcUsdcFeedAddress,
-      abi: AggregatorV3Abi,
-      eventName: "AnswerUpdated",
-      onLogs: () => {
-        // Fire-and-forget: refresh runs in the background and dispatches to
-        // listeners. If a refresh is already in flight, the next event will
-        // overlap — that's fine, listeners only react to monotonic changes.
-        void this.refresh("event");
-      },
-    });
+    this.running = true;
+    await this.resyncSources();
+    if (!this.watched.hashpriceBtc)
+      this.logger.warn(
+        "PriceFeed: no hashpriceOracle(); HashpriceBTC moves wait for the sweep",
+      );
+    // Chainlink can point the proxy at a new aggregator; follow it at the sweep cadence.
+    const every = this.config.runtime?.sweepIntervalMs;
+    if (every)
+      this.resyncTimer = setInterval(() => {
+        this.resyncSources().catch((err) =>
+          this.logger.warn({ err }, "PriceFeed: event source resync failed"),
+        );
+      }, every);
 
     this.logger.info(
       {
         hashpriceUsdc: this.config.oracle.hashpriceUsdcAddress,
         btcUsdcFeed: this.config.oracle.btcUsdcFeedAddress,
+        btcUsdEvents: this.watched.btcUsd?.address,
+        hashpriceBtc: this.watched.hashpriceBtc?.address,
         oracleDecimals,
         tokenDecimals: this.tokenDecimals,
         currentPrice: this.currentPrice,
@@ -122,13 +134,87 @@ export class PriceFeed {
   }
 
   stop(): void {
-    if (this.unwatch !== undefined) {
-      try {
-        this.unwatch();
-      } catch (err) {
-        this.logger.warn({ err }, "PriceFeed.stop: unwatch threw");
-      }
-      this.unwatch = undefined;
+    this.running = false;
+    if (this.resyncTimer !== undefined) {
+      clearInterval(this.resyncTimer);
+      this.resyncTimer = undefined;
+    }
+    for (const source of ["btcUsd", "hashpriceBtc"] as const) {
+      const watched = this.watched[source];
+      if (watched) this.safeUnwatch(watched.unwatch);
+      this.watched[source] = undefined;
+    }
+  }
+
+  /**
+   * Point the watchers at the contracts that emit the events. A Chainlink proxy
+   * emits no AnswerUpdated; its aggregator does. Mocks without `aggregator()`
+   * emit it themselves. A failed read keeps the current watcher.
+   */
+  async resyncSources(): Promise<void> {
+    const [aggregator, hashpriceBtc] = await Promise.all([
+      this.optionalAddress(this.config.oracle.btcUsdcFeedAddress, "aggregator"),
+      this.optionalAddress(this.config.oracle.hashpriceUsdcAddress, "hashpriceOracle"),
+    ]);
+    if (!this.running) return;
+    const btcUsd =
+      aggregator ??
+      (this.watched.btcUsd ? undefined : this.config.oracle.btcUsdcFeedAddress);
+    if (btcUsd) this.watch("btcUsd", btcUsd);
+    if (hashpriceBtc) this.watch("hashpriceBtc", hashpriceBtc);
+  }
+
+  private watch(source: PriceSource, address: Address): void {
+    const current = this.watched[source];
+    if (current?.address.toLowerCase() === address.toLowerCase()) return;
+    if (current) this.safeUnwatch(current.unwatch);
+    // Fire-and-forget: refresh runs in the background and dispatches to
+    // listeners. If a refresh is already in flight, the next event will
+    // overlap — that's fine, listeners only react to monotonic changes.
+    const onLogs = () => void this.refresh("event");
+    const unwatch =
+      source === "btcUsd"
+        ? this.chain.publicClient.watchContractEvent({
+            address,
+            abi: AggregatorV3Abi,
+            eventName: "AnswerUpdated",
+            onLogs,
+          })
+        : this.chain.publicClient.watchContractEvent({
+            address,
+            abi: HashpriceBtcAbi,
+            eventName: "HashpriceUpdated",
+            onLogs,
+          });
+    this.watched[source] = { address, unwatch };
+    if (current)
+      this.logger.warn(
+        { source, from: current.address, to: address },
+        "PriceFeed: event source moved",
+      );
+  }
+
+  private safeUnwatch(unwatch: () => void): void {
+    try {
+      unwatch();
+    } catch (err) {
+      this.logger.warn({ err }, "PriceFeed.stop: unwatch threw");
+    }
+  }
+
+  /** `address.fn()`, or undefined when the contract has no such view. */
+  private async optionalAddress(
+    address: Address,
+    functionName: "aggregator" | "hashpriceOracle",
+  ): Promise<Address | undefined> {
+    try {
+      return (await this.chain.publicClient.readContract({
+        address,
+        abi: AggregatorV3Abi,
+        functionName,
+      })) as Address;
+    } catch {
+      return undefined;
     }
   }
 
