@@ -52,11 +52,15 @@ locals {
     "btc-warn"       = { metric = "BtcChange24hPct", ratio = 0.5, severity = "warning" }
     "btc-crit"       = { metric = "BtcChange24hPct", ratio = 1, severity = "warning" }
   }
-  # Feed age above which the price is treated as frozen. Hashprice updates per
-  # Bitcoin block, and hour-long gaps between blocks happen every few days.
+  # Feed ages against MAX_ORACLE_STALENESS (2 h), past which the venues and the PME
+  # reject the price and nothing liquidates. The hashprice feed reports the older of
+  # its two inputs, so its 2 h alarm is the freeze itself. The hashprice-oracle repo
+  # warns and pages on the HashpriceBTC input (hpo-oracle-warning, hpo-oracle-freeze);
+  # BTC/USD is only read here. Pages are silent and notify through price_feed_frozen.
   price_feed_age_alarms = {
-    "hashprice" = { metric = "HashpriceFeedAgeSeconds", seconds = 7200 }
-    "btc-usd"   = { metric = "BtcUsdFeedAgeSeconds", seconds = 3600 }
+    "hashprice"    = { metric = "HashpriceFeedAgeSeconds", seconds = 7200, severity = "critical" }
+    "btc-usd"      = { metric = "BtcUsdFeedAgeSeconds", seconds = 3600, severity = "warning" }
+    "btc-usd-page" = { metric = "BtcUsdFeedAgeSeconds", seconds = 5400, severity = "critical" }
   }
   # Subgraphs watched for lag and indexing errors beyond the vault one. Futures
   # and derivatives feed the UI's positions and orders; the market maker reads
@@ -492,20 +496,43 @@ resource "aws_cloudwatch_metric_alarm" "price_feed_age" {
   for_each            = var.vault_monitoring.create ? local.price_feed_age_alarms : {}
   provider            = aws.use1
   alarm_name          = "${local.shortname}-price-feed-age-${each.key}-${local.vault_mon_env}"
-  alarm_description   = "${each.value.metric} is above ${each.value.seconds / 60} minutes: the feed looks frozen, which hides price moves from margin and from the move alarms. Check the hashprice oracle keeper and the Chainlink BTC/USD feed. Warning only."
+  alarm_description   = "${each.value.metric} is above ${each.value.seconds / 60} minutes (missing data counts). The venues and the margin engine reject the price at 120 minutes and nothing liquidates until it updates. Check the hashprice oracle keeper and the Chainlink BTC/USD feed. ${each.value.severity == "critical" ? "Pages on lmn through ${local.shortname}-price-feed-frozen-${local.vault_mon_env}." : "Warning only."}"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = each.value.severity == "critical" ? 2 : 1
+  datapoints_to_alarm = each.value.severity == "critical" ? 2 : 1
   metric_name         = each.value.metric
   namespace           = local.vault_mon_ns
   period              = 300
   statistic           = "Minimum"
   threshold           = each.value.seconds
-  treat_missing_data  = "ignore"
-  alarm_actions       = local.vault_warning_actions
-  ok_actions          = local.vault_warning_actions
+  treat_missing_data  = "breaching"
+  alarm_actions       = each.value.severity == "critical" ? [] : local.vault_warning_actions
+  ok_actions          = each.value.severity == "critical" ? [] : local.vault_warning_actions
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Price Feed Age ${each.key}"
+    Capability = "Monitoring"
+  })
+}
+
+# AWS's notification carries this description and the triggering child, not the
+# child's own description.
+resource "aws_cloudwatch_composite_alarm" "price_feed_frozen" {
+  count             = var.vault_monitoring.create ? 1 : 0
+  provider          = aws.use1
+  alarm_name        = "${local.shortname}-price-feed-frozen-${local.vault_mon_env}"
+  alarm_description = "The hashprice price is about to freeze or has frozen; nothing liquidates while it is, so a move during the gap lands on the insurance fund. The child under 'Triggering children' says which: price-feed-age-btc-usd-page = Chainlink BTC/USD has not updated for 90 minutes (it normally does every 20), the venues and the margin engine reject the price at 120: check the Chainlink feed and status. price-feed-age-hashprice = the combined feed is past 120 minutes and the venues and the margin engine already reject it (OracleStale): if BTC/USD is fresh, the HashpriceBTC input is the cause, see hpo-oracle-freeze-${local.vault_mon_env}. Then check the most levered accounts against the MM shock and the insurance fund. Clears when the feed updates."
+
+  alarm_rule = join(" OR ", [
+    "ALARM(${aws_cloudwatch_metric_alarm.price_feed_age["btc-usd-page"].alarm_name})",
+    "ALARM(${aws_cloudwatch_metric_alarm.price_feed_age["hashprice"].alarm_name})",
+  ])
+
+  alarm_actions = local.vault_critical_actions
+  ok_actions    = local.vault_critical_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Price Feed Frozen"
     Capability = "Monitoring"
   })
 }
@@ -1273,6 +1300,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
               [for alarm in aws_cloudwatch_metric_alarm.btc_halving : alarm.arn],
               [for alarm in aws_cloudwatch_metric_alarm.price_move : alarm.arn],
               [for alarm in aws_cloudwatch_metric_alarm.price_feed_age : alarm.arn],
+              aws_cloudwatch_composite_alarm.price_feed_frozen[*].arn,
               aws_cloudwatch_metric_alarm.spv_behind_bitcoin[*].arn,
               aws_cloudwatch_metric_alarm.vault_util_warn[*].arn,
               aws_cloudwatch_metric_alarm.vault_util_crit[*].arn,
@@ -1322,7 +1350,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
           y          = 4
           width      = 24
           height     = 4
-          properties = { markdown = "## Price feed: nothing trades without it\n- Hashprice USD = hashprice BTC from our SPV oracle (Bitcoin headers relayed by the SPV keeper) × Chainlink BTC/USD. Margin, marks, liquidations and the market maker all read it.\n- **SPV relay delay**: Bitcoin blocks the oracle trails the tip, and minutes since the keeper's last header. **Chainlink BTC/USD**: minutes since its last update (each drop to 0 is an update) and updates per hour. On dev BTC/USD is a mock the SPV keeper updates.\n- **Price feed age**: the hashprice feed reports the older of its two inputs, so it rises when either stalls. **Moves vs MM spot shock**: a 24 h hashprice move of half the shock warns, the full shock pages." }
+          properties = { markdown = "## Price feed: nothing trades without it\n- Hashprice USD = hashprice BTC from our SPV oracle (Bitcoin headers relayed by the SPV keeper) × Chainlink BTC/USD. Margin, marks, liquidations and the market maker all read it.\n- **SPV relay delay**: Bitcoin blocks the oracle trails the tip, and minutes since the keeper's last header. **Chainlink BTC/USD**: minutes since its last update (each drop to 0 is an update) and updates per hour. On dev BTC/USD is a mock the SPV keeper updates.\n- **Price feed age**: the hashprice feed reports the older of its two inputs, so it rises when either stalls; past 120 min the venues reject it and nothing liquidates (pages). BTC/USD warns at 60 min and pages at 90; the HashpriceBTC input is paged by the hashprice-oracle repo. **Moves vs MM spot shock**: a 24 h hashprice move of half the shock warns, the full shock pages." }
         },
         {
           type   = "metric"
