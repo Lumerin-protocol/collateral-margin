@@ -70,6 +70,47 @@ export function utilizationPct(debt: bigint, cap: bigint): number {
   return (Number(debt) / Number(cap)) * 100;
 }
 
+/** A price that took effect at a block. Any scale; only ratios are used. */
+export interface PricePoint {
+  block: bigint;
+  price: number;
+}
+
+/** The largest moves that ended after the measured start, in percent (absolute). */
+export interface PriceMoves {
+  /** Between one price and the next. */
+  maxStepPct: number;
+  /** Between a price and any price in force within the window before it. */
+  maxWindowMovePct: number;
+}
+
+/**
+ * Moves ending in (measuredFrom, last block] of a block-ordered series. The window
+ * reference includes the price still in force at its start, so a move that began
+ * just before the window counts.
+ */
+export function priceMoves(
+  series: PricePoint[],
+  measuredFrom: bigint,
+  windowBlocks: bigint,
+): PriceMoves {
+  const pct = (from: number, to: number) =>
+    from > 0 ? Math.abs((to - from) / from) * 100 : 0;
+  let maxStepPct = 0;
+  let maxWindowMovePct = 0;
+  for (let i = 1; i < series.length; i++) {
+    const point = series[i] as PricePoint;
+    if (point.block <= measuredFrom) continue;
+    maxStepPct = Math.max(maxStepPct, pct((series[i - 1] as PricePoint).price, point.price));
+    for (let j = i - 1; j >= 0; j--) {
+      const ref = series[j] as PricePoint;
+      maxWindowMovePct = Math.max(maxWindowMovePct, pct(ref.price, point.price));
+      if (ref.block <= point.block - windowBlocks) break;
+    }
+  }
+  return { maxStepPct, maxWindowMovePct };
+}
+
 // ── CloudWatch ──────────────────────────────────────────────────────────────
 
 const cloudwatch = new CloudWatchClient({});

@@ -164,3 +164,97 @@ describe("oracle/priceFeed: lifecycle + dispatch", () => {
     feed.stop();
   });
 });
+
+/**
+ * N67: prd's BTC_USD_FEED_ADDRESS is a Chainlink proxy (0x64c9…848F). Proxies emit no
+ * AnswerUpdated; their aggregator (0xe5ec…9Df1, 59 events on 2026-11-23) does. The keeper
+ * watched the proxy, so price events never fired and only the 60 s sweep liquidated.
+ */
+describe("N67 — price events from the feeds that emit them", () => {
+  const AGGREGATOR = "0x000000000000000000000000000000000000aa04" as Address;
+  const HASHPRICE_BTC = "0x000000000000000000000000000000000000aa05" as Address;
+
+  function makeProxyChain(initialAnswer: bigint) {
+    let answer = initialAnswer;
+    let aggregator: Address = AGGREGATOR;
+    const watchers: { address: string; eventName: string; onLogs: () => void }[] = [];
+    const chain = {
+      publicClient: {
+        readContract: async ({ address, functionName }: { address: string; functionName: string }) => {
+          if (functionName === "decimals") return 8;
+          if (functionName === "latestRoundData") return [1n, answer, 1_000n, 1_000n, 1n] as const;
+          if (functionName === "aggregator" && address === BTC_FEED) return aggregator;
+          if (functionName === "hashpriceOracle" && address === HASHPRICE) return HASHPRICE_BTC;
+          throw new Error(`unexpected readContract: ${functionName} on ${address}`);
+        },
+        watchContractEvent: (w: { address: string; eventName: string; onLogs: () => void }) => {
+          watchers.push(w);
+          return () => {};
+        },
+      },
+    } as unknown as Chain;
+    const fire = async (address: string, eventName: string) => {
+      for (const w of watchers)
+        if (w.address.toLowerCase() === address.toLowerCase() && w.eventName === eventName) w.onLogs();
+      await new Promise((r) => setTimeout(r, 0));
+    };
+    return {
+      chain,
+      fire,
+      setAnswer: (a: bigint) => {
+        answer = a;
+      },
+      setAggregator: (a: Address) => {
+        aggregator = a;
+      },
+    };
+  }
+
+  it("refreshes on AnswerUpdated from the proxy's aggregator", async () => {
+    const stub = makeProxyChain(100_000_000n);
+    const feed = new PriceFeed(stub.chain, makeConfig(), silentLogger, 6);
+    await feed.start();
+    const updates: PriceUpdate[] = [];
+    feed.onUpdate((u) => updates.push(u));
+
+    stub.setAnswer(110_000_000n);
+    await stub.fire(AGGREGATOR, "AnswerUpdated");
+
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0]?.next, 1_100_000n);
+    feed.stop();
+  });
+
+  it("refreshes on HashpriceUpdated from HashpriceBTC", async () => {
+    const stub = makeProxyChain(100_000_000n);
+    const feed = new PriceFeed(stub.chain, makeConfig(), silentLogger, 6);
+    await feed.start();
+    const updates: PriceUpdate[] = [];
+    feed.onUpdate((u) => updates.push(u));
+
+    stub.setAnswer(90_000_000n);
+    await stub.fire(HASHPRICE_BTC, "HashpriceUpdated");
+
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0]?.next, 900_000n);
+    feed.stop();
+  });
+
+  it("follows the proxy to a new aggregator on the sweep interval", async () => {
+    const NEW_AGGREGATOR = "0x000000000000000000000000000000000000aa06" as Address;
+    const stub = makeProxyChain(100_000_000n);
+    const config = { ...makeConfig(), runtime: { sweepIntervalMs: 10 } } as Config;
+    const feed = new PriceFeed(stub.chain, config, silentLogger, 6);
+    await feed.start();
+    const updates: PriceUpdate[] = [];
+    feed.onUpdate((u) => updates.push(u));
+
+    stub.setAggregator(NEW_AGGREGATOR);
+    await new Promise((r) => setTimeout(r, 40));
+    stub.setAnswer(110_000_000n);
+    await stub.fire(NEW_AGGREGATOR, "AnswerUpdated");
+
+    assert.equal(updates.length, 1);
+    feed.stop();
+  });
+});

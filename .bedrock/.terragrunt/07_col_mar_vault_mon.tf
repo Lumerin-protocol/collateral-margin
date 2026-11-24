@@ -43,14 +43,15 @@ locals {
   vault_btc_rpc_url      = var.bitcoin_rpc_url != "" ? var.bitcoin_rpc_url : "https://bitcoin-mainnet.g.alchemy.com/v2/${var.alchemy_api_key}"
   # Days before the Bitcoin halving at which a reminder fires, and its severity.
   # 500 and 495 are temporary, to see the alarms fire (about 503 days out on 2026-10-31).
-  # 24 h price moves as a fraction of the PME MM spot shock (read on-chain, so
-  # the thresholds follow setShocks). BTC/USD is already inside hashprice USD,
-  # so its alarms are warnings.
+  # N63: the largest price move within the keeper's 5 min window as a fraction of
+  # the gap budget, MM spot shock less the backstop unwind band and fee (all read
+  # on-chain, so the thresholds follow setShocks). 24 h moves stay on the
+  # dashboard. BTC/USD is already inside hashprice USD, so its alarms are warnings.
   price_move_alarms = {
-    "hashprice-warn" = { metric = "HashpriceChange24hPct", ratio = 0.5, severity = "warning" }
-    "hashprice-crit" = { metric = "HashpriceChange24hPct", ratio = 1, severity = "critical" }
-    "btc-warn"       = { metric = "BtcChange24hPct", ratio = 0.5, severity = "warning" }
-    "btc-crit"       = { metric = "BtcChange24hPct", ratio = 1, severity = "warning" }
+    "hashprice-warn" = { metric = "HashpriceMoveBudgetRatio", ratio = 0.5, severity = "warning" }
+    "hashprice-crit" = { metric = "HashpriceMoveBudgetRatio", ratio = 1, severity = "critical" }
+    "btc-warn"       = { metric = "BtcMoveBudgetRatio", ratio = 0.5, severity = "warning" }
+    "btc-crit"       = { metric = "BtcMoveBudgetRatio", ratio = 1, severity = "warning" }
   }
   # Projected retarget step as a percent of the MM spot shock, and the blocks left
   # (432 is about 3 days, 144 about 1) at which it starts to matter.
@@ -294,6 +295,40 @@ resource "aws_cloudwatch_log_metric_filter" "keeper_error" {
   }
 }
 
+# N63: one "Liquidation executed" line per liquidation, with the time from the
+# keeper first queueing the account underwater and the equity before the first
+# tx (collateral token units; negative is bad debt). The latency checks the 5 min
+# window the price-move alarms assume.
+resource "aws_cloudwatch_log_metric_filter" "keeper_liquidation_latency" {
+  count          = var.vault_monitoring.create && var.keeper_service.create ? 1 : 0
+  provider       = aws.use1
+  name           = "${local.shortname}-keeper-liquidation-latency-${local.vault_mon_env}"
+  log_group_name = aws_cloudwatch_log_group.keeper_use1[0].name
+  pattern        = "{ $.msg = \"Liquidation executed\" && $.latencyMs = * }"
+
+  metric_transformation {
+    name      = "KeeperLiquidationLatencyMs"
+    namespace = local.vault_mon_ns
+    value     = "$.latencyMs"
+    unit      = "Milliseconds"
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "keeper_liquidation_equity" {
+  count          = var.vault_monitoring.create && var.keeper_service.create ? 1 : 0
+  provider       = aws.use1
+  name           = "${local.shortname}-keeper-liquidation-equity-${local.vault_mon_env}"
+  log_group_name = aws_cloudwatch_log_group.keeper_use1[0].name
+  pattern        = "{ $.msg = \"Liquidation executed\" && $.equity = * }"
+
+  metric_transformation {
+    name      = "KeeperLiquidationEquityRaw"
+    namespace = local.vault_mon_ns
+    value     = "$.equity"
+    unit      = "None"
+  }
+}
+
 ################################################################################
 # ALARMS
 # Value alarms ignore missing data and keep their last state. CheckSuccess
@@ -457,40 +492,17 @@ resource "aws_cloudwatch_metric_alarm" "price_move" {
   for_each            = var.vault_monitoring.create ? local.price_move_alarms : {}
   provider            = aws.use1
   alarm_name          = "${local.shortname}-price-move-${each.key}-${local.vault_mon_env}"
-  alarm_description   = "${each.value.metric} moved at least ${each.value.ratio * 100}% of the MM spot shock in 24 h (|change| / MmSpotShockPct >= ${each.value.ratio}). A move the size of the MM shock puts the most levered accounts at liquidation: check the keeper is liquidating, the insurance fund and backstop exposure, and whether to raise margins with setShocks. ${each.value.severity == "critical" ? "Pages on lmn." : "Warning only."}"
+  alarm_description   = "${each.value.metric} >= ${each.value.ratio}: a price moved at least ${each.value.ratio * 100}% of the gap budget (MM spot shock less the backstop unwind band and fee) within the keeper's 5 min liquidation window. A full-budget move can take an account from just above maintenance margin to bad debt before the keeper acts: check the keeper is liquidating, the insurance fund and backstop exposure, and whether to raise margins with setShocks. ${each.value.severity == "critical" ? "Pages on lmn." : "Warning only."}"
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods  = 1
   threshold           = each.value.ratio
   treat_missing_data  = "ignore"
   alarm_actions       = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
   ok_actions          = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
-
-  metric_query {
-    id = "change"
-    metric {
-      metric_name = each.value.metric
-      namespace   = local.vault_mon_ns
-      period      = 300
-      stat        = "Average"
-    }
-  }
-
-  metric_query {
-    id = "mm"
-    metric {
-      metric_name = "MmSpotShockPct"
-      namespace   = local.vault_mon_ns
-      period      = 300
-      stat        = "Maximum"
-    }
-  }
-
-  metric_query {
-    id          = "ratio"
-    expression  = "ABS(change) / mm"
-    label       = "24 h move / MM shock"
-    return_data = true
-  }
+  metric_name         = each.value.metric
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Price Move ${each.key}"
@@ -1450,7 +1462,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
           y          = 4
           width      = 24
           height     = 4
-          properties = { markdown = "## Price feed: nothing trades without it\n- Hashprice USD = hashprice BTC from our SPV oracle (Bitcoin headers relayed by the SPV keeper) × Chainlink BTC/USD. Margin, marks, liquidations and the market maker all read it.\n- **SPV relay delay**: Bitcoin blocks the oracle trails the tip, and minutes since the keeper's last header. **Chainlink BTC/USD**: minutes since its last update (each drop to 0 is an update) and updates per hour. On dev BTC/USD is a mock the SPV keeper updates.\n- **Price feed age**: the hashprice feed reports the older of its two inputs, so it rises when either stalls; past 120 min the venues reject it and nothing liquidates (pages). BTC/USD warns at 60 min and pages at 90; the HashpriceBTC input is paged by the hashprice-oracle repo. **Moves vs MM spot shock**: a 24 h hashprice move of half the shock warns, the full shock pages." }
+          properties = { markdown = "## Price feed: nothing trades without it\n- Hashprice USD = hashprice BTC from our SPV oracle (Bitcoin headers relayed by the SPV keeper) × Chainlink BTC/USD. Margin, marks, liquidations and the market maker all read it.\n- **SPV relay delay**: Bitcoin blocks the oracle trails the tip, and minutes since the keeper's last header. **Chainlink BTC/USD**: minutes since its last update (each drop to 0 is an update) and updates per hour. On dev BTC/USD is a mock the SPV keeper updates.\n- **Price feed age**: the hashprice feed reports the older of its two inputs, so it rises when either stalls; past 120 min the venues reject it and nothing liquidates (pages). BTC/USD warns at 60 min and pages at 90; the HashpriceBTC input is paged by the hashprice-oracle repo. **Moves vs the gap budget**: the largest move inside the keeper's 5 min window warns at half the budget (MM spot shock less the unwind band and fee) and pages at the full budget. 24 h moves stay on the chart." }
         },
         {
           type   = "metric"
@@ -1566,7 +1578,10 @@ resource "aws_cloudwatch_dashboard" "vault" {
               [local.vault_mon_ns, "HashpriceChange1hPct", { label = "Hashprice 1 h" }],
               [local.vault_mon_ns, "BtcChange24hPct", { label = "BTC 24 h" }],
               [local.vault_mon_ns, "BtcChange1hPct", { label = "BTC 1 h" }],
+              [local.vault_mon_ns, "HashpriceMaxMove5mPct", { label = "Hashprice max 5 min", stat = "Maximum" }],
+              [local.vault_mon_ns, "BtcMaxMove5mPct", { label = "BTC max 5 min", stat = "Maximum" }],
               [local.vault_mon_ns, "MmSpotShockPct", { label = "MM shock", stat = "Maximum", color = "#d62728" }],
+              [local.vault_mon_ns, "PriceMoveBudgetPct", { label = "Gap budget", stat = "Minimum", color = "#ff7f0e" }],
             ]
           }
         },
@@ -2030,10 +2045,29 @@ resource "aws_cloudwatch_dashboard" "vault" {
           }
         },
         {
-          type   = "log"
+          type   = "metric"
           x      = 0
           y      = 60
-          width  = 24
+          width  = 8
+          height = 6
+          properties = {
+            title  = "Liquidations: latency (s) and equity at execution (USDC)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "KeeperLiquidationLatencyMs", { id = "lat", stat = "Maximum", visible = false }],
+              [{ expression = "lat / 1000", label = "Max latency (s); alarms assume 300", id = "latency" }],
+              [local.vault_mon_ns, "KeeperLiquidationEquityRaw", { id = "eq", stat = "Minimum", visible = false }],
+              [{ expression = "eq / 1000000", label = "Min equity (USDC; below 0 is bad debt)", id = "equity", yAxis = "right" }],
+            ]
+          }
+        },
+        {
+          type   = "log"
+          x      = 8
+          y      = 60
+          width  = 16
           height = 6
           properties = {
             title  = "Keeper recent errors and warnings"

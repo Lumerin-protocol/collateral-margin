@@ -34,6 +34,7 @@ import {
   readMarketMaker,
   readMarketMakerHealth,
   readPointsMeta,
+  readPriceMoves,
   readPrices,
   readPublicBitcoinTips,
   readSubgraphMeta,
@@ -170,6 +171,14 @@ export async function collect(): Promise<{
         return null;
       }),
     ]);
+  // Best-effort: needs the feed addresses readPrices resolved.
+  const moves = prices
+    ? await readPriceMoves(at.blockNumber, prices.feeds).catch((error) => {
+        failed.push("price_moves");
+        log(`price move check failed: ${describeError(error)}`);
+        return null;
+      })
+    : null;
   const head = Number(headBlock);
 
   // Derived figures.
@@ -391,6 +400,23 @@ export async function collect(): Promise<{
     ]);
     if (tip !== null)
       points.push(metric("SpvBlocksBehind", Math.max(0, tip - prices.spv.height), "Count"));
+    if (moves) {
+      // N63: a move inside the keeper's window may take an account from just above MM
+      // past zero equity only if it exceeds the MM shock less what the unwind gives away.
+      const budget =
+        Number(prices.mmSpotShock) / 1e16 -
+        (vault.backstopUnwindBandBps + vault.backstopUnwindFeeBps) / 100;
+      const ratio = (pct: number) => (budget > 0 ? pct / budget : 1000);
+      points.push(
+        metric("HashpriceMaxStepPct", moves.hashprice.maxStepPct),
+        metric("HashpriceMaxMove5mPct", moves.hashprice.maxWindowMovePct),
+        metric("BtcMaxStepPct", moves.btc.maxStepPct),
+        metric("BtcMaxMove5mPct", moves.btc.maxWindowMovePct),
+        metric("PriceMoveBudgetPct", budget),
+        metric("HashpriceMoveBudgetRatio", ratio(moves.hashprice.maxWindowMovePct)),
+        metric("BtcMoveBudgetRatio", ratio(moves.btc.maxWindowMovePct)),
+      );
+    }
   }
   if (publicTips.errors.length) log(`bitcoin explorers failed: ${publicTips.errors.join("; ")}`);
   if (!publicTips.heights.length) failed.push("bitcoin_explorers");

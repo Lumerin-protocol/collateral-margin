@@ -17,4 +17,11 @@ export const AggregatorV3Abi = parseAbi([
   "event AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)",
   "function latestRoundData() view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)",
   "function decimals() view returns (uint8)",
+  "function aggregator() view returns (address)",
+  "function hashpriceOracle() view returns (address)",
+]);
+
+/** `HashpriceBTC` emits this on every Bitcoin block that moves hashprice. */
+export const HashpriceBtcAbi = parseAbi([
+  "event HashpriceUpdated(uint32 indexed confirmedHeight, int256 hashprice, uint256 avgFees)",
 ]);
