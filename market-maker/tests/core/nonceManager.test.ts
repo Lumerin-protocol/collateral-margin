@@ -503,3 +503,65 @@ describe("N11 — a late receipt is not sent again", () => {
     );
   });
 });
+
+/**
+ * N66: on lmn (2026-11-23 19:23 UTC, nonce 50424) a perps update was mined after the
+ * confirmation timeout. Its replacement then reverted in simulation with
+ * OrderNotBelongToSender, because the original had already removed the orders, and the
+ * manager retried, sent a cancel at the spent nonce and logged errors.
+ */
+describe("N66 — a late receipt ends a reverting replacement", () => {
+  it("returns the original tx when its replacement reverts", async () => {
+    const mined = new Set<string>();
+    const mocks = makeMocks({
+      startNonce: 7,
+      receiptFor: (hash) =>
+        new Promise((resolve) =>
+          setTimeout(
+            () => {
+              mined.add(hash);
+              resolve(RECEIPT);
+            },
+            hash === "0xa" ? 40 : 0,
+          ),
+        ),
+    });
+    mocks.publicClient.getTransactionReceipt = async ({ hash }) => {
+      if (!mined.has(hash))
+        throw new Error(
+          `Transaction receipt with hash "${hash}" could not be found.`,
+        );
+      return { ...RECEIPT, status: "success" } as TransactionReceipt;
+    };
+    const levels: string[] = [];
+    const record = (level: string) => () => levels.push(level);
+    const logger = {
+      child: () => ({ info: noop, debug: noop, warn: record("warn"), error: record("error") }),
+    } as never;
+    const nm = new NonceManager(
+      mocks.publicClient,
+      mocks.walletClient,
+      account,
+      chain,
+      { confirmationTimeoutMs: 20, maxReplacements: 2 },
+      logger,
+    );
+
+    const attempts: number[] = [];
+    const broadcast = async ({ nonce }: { nonce: number }) => {
+      attempts.push(nonce);
+      if (attempts.length === 1) return "0xa" as const;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      throw new Error("Execution reverted for an unknown reason. data: 0x92c441d9");
+    };
+
+    const outcome = await nm.submit(broadcast, {
+      maxFeePerGas: 100n,
+      label: "perps",
+    });
+    assert.equal(outcome.gasUsed, RECEIPT.gasUsed);
+    assert.deepEqual(attempts, [7, 7], "no further replacement once the original landed");
+    assert.equal(mocks.cancelCalls.length, 0, "no cancel-tx at a spent nonce");
+    assert.ok(!levels.includes("error"), "a landed update logs no error");
+  });
+});
