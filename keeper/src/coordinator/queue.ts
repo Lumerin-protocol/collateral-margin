@@ -23,6 +23,8 @@ import type { AccountHealth } from "../pme/health.ts";
  */
 export class CoordinatorQueue {
   private items: AccountHealth[] = [];
+  /** When each account was first queued underwater, kept across re-upserts. */
+  private readonly underwater = new Map<Address, number>();
 
   /**
    * Inserts or replaces (by user address) keeping the queue sorted by
@@ -33,7 +35,12 @@ export class CoordinatorQueue {
    */
   upsert(health: AccountHealth): boolean {
     this.removeUser(health.user);
-    if (health.mmSurplus >= 0n) return false;
+    if (health.mmSurplus >= 0n) {
+      this.underwater.delete(health.user);
+      return false;
+    }
+    if (!this.underwater.has(health.user))
+      this.underwater.set(health.user, Date.now());
     const insertAt = this.findInsertIndex(health);
     this.items.splice(insertAt, 0, health);
     return true;
@@ -41,6 +48,14 @@ export class CoordinatorQueue {
 
   remove(user: Address): void {
     this.removeUser(user);
+    this.underwater.delete(user);
+  }
+
+  /** Ends the account's underwater episode; returns when it was first queued. */
+  takeUnderwaterSince(user: Address): number | undefined {
+    const since = this.underwater.get(user);
+    this.underwater.delete(user);
+    return since;
   }
 
   /** Pops the most-underwater account (smallest mmSurplus first). */

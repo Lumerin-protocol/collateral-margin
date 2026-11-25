@@ -11,7 +11,7 @@ import {
   http,
   parseAbi,
 } from "viem";
-import { gql, isUnset } from "./lib.ts";
+import { gql, isUnset, type PricePoint, type PriceMoves, priceMoves } from "./lib.ts";
 
 // Terraform sets and validates these (var.vault_env); nothing is optional here.
 const { VAULT_SUBGRAPH_URL, POINTS_SUBGRAPH_URL } = process.env as Record<
@@ -530,14 +530,96 @@ export async function readSubgraphMeta(url: string): Promise<{
   };
 }
 
+/** One vault user's margin inputs, both venues summed. Raw token units, exposures at each mark. */
+export interface AccountRisk {
+  user: Address;
+  balance: bigint;
+  maintenance: bigint;
+  netExposure: bigint;
+  buyOrderExposure: bigint;
+  sellOrderExposure: bigint;
+  unrealizedPnl: bigint;
+  /** Positive pending funding only: funding the account owes. */
+  fundingOwed: bigint;
+}
+
+/** Every vault user at the subgraph block, with its balance, maintenance and exposure (N62). */
+export async function readAccountRisks(
+  at: { blockNumber: bigint },
+  marginEngine: Address,
+): Promise<AccountRisk[]> {
+  const users: Address[] = [];
+  for (let last = "0x"; ; ) {
+    const { vaultUsers } = await gql(
+      VAULT_SUBGRAPH_URL,
+      `query Users($block: Int!, $last: Bytes!) {
+        vaultUsers(first: 1000, orderBy: id, where: { id_gt: $last }, block: { number: $block }) { id }
+      }`,
+      { block: Number(at.blockNumber), last },
+    );
+    const page = (vaultUsers as { id: Address }[]).map((user) => user.id);
+    users.push(...page);
+    if (page.length < 1000) break;
+    last = page[page.length - 1];
+  }
+  if (!users.length) return [];
+
+  const abi = parseAbi([
+    "struct ExposureView { int256 netPositionExposure; int256 unrealizedPnl; int256 pendingFunding; uint256 buyOrderExposure; uint256 sellOrderExposure; uint256 buyOrderFillLoss; uint256 sellOrderFillLoss; }",
+    "function getExposureView(address user) view returns (ExposureView)",
+    "function balanceOf(address user) view returns (uint256)",
+    "function computePortfolioMargins(address user) view returns (uint256 im, uint256 mm)",
+  ]);
+  const reads = await chain.multicall({
+    ...at,
+    multicallAddress: MULTICALL3,
+    allowFailure: false,
+    contracts: users.flatMap((user) => [
+      { address: VAULT_ADDRESS, abi, functionName: "balanceOf", args: [user] } as const,
+      { address: marginEngine, abi, functionName: "computePortfolioMargins", args: [user] } as const,
+      { address: PERPS_ADDRESS, abi, functionName: "getExposureView", args: [user] } as const,
+      { address: FUTURES_ADDRESS, abi, functionName: "getExposureView", args: [user] } as const,
+    ]),
+  });
+  return users.map((user, i) => {
+    const [balance, [, maintenance], ...views] = reads.slice(i * 4, i * 4 + 4) as [
+      bigint,
+      readonly [bigint, bigint],
+      ...{
+        netPositionExposure: bigint;
+        unrealizedPnl: bigint;
+        pendingFunding: bigint;
+        buyOrderExposure: bigint;
+        sellOrderExposure: bigint;
+      }[],
+    ];
+    const sum = (pick: (view: (typeof views)[number]) => bigint) =>
+      views.reduce((total, view) => total + pick(view), 0n);
+    return {
+      user,
+      balance,
+      maintenance,
+      netExposure: sum((view) => view.netPositionExposure),
+      buyOrderExposure: sum((view) => view.buyOrderExposure),
+      sellOrderExposure: sum((view) => view.sellOrderExposure),
+      unrealizedPnl: sum((view) => view.unrealizedPnl),
+      fundingOwed: sum((view) => (view.pendingFunding > 0n ? view.pendingFunding : 0n)),
+    };
+  });
+}
+
 /** Blocks between Bitcoin difficulty retargets; the block-time average spans one. */
 export const DIFFICULTY_PERIOD = 2016;
 
-/** Bitcoin tip height and the header times at the tip and one retarget period back. */
+/**
+ * Bitcoin tip height and the header times at the tip, one retarget period back,
+ * and the current difficulty epoch's first block.
+ */
 export interface BitcoinTip {
   height: number;
   time: number;
   periodStartTime: number;
+  epochStartTime: number;
 }
 
 /**
@@ -573,11 +655,12 @@ async function bitcoinHeaderTime(height: number): Promise<number> {
 
 export async function readBitcoinTip(): Promise<BitcoinTip> {
   const height = await bitcoinRpc<number>("getblockcount");
-  const [time, periodStartTime] = await Promise.all([
+  const [time, periodStartTime, epochStartTime] = await Promise.all([
     bitcoinHeaderTime(height),
     bitcoinHeaderTime(height - DIFFICULTY_PERIOD),
+    bitcoinHeaderTime(height - (height % DIFFICULTY_PERIOD)),
   ]);
-  return { height, time, periodStartTime };
+  return { height, time, periodStartTime, epochStartTime };
 }
 
 /**
@@ -711,6 +794,8 @@ export async function readPrices(
   btcUsd: FeedHistory;
   spv: SpvState;
   mmSpotShock: bigint;
+  /** BTC/USD and `HashpriceBTC`, the inputs whose events `readPriceMoves` replays. */
+  feeds: { btcUsd: Address; spv: Address };
 }> {
   const hashpriceFeed = await chain.readContract({
     address: FUTURES_ADDRESS,
@@ -729,7 +814,87 @@ export async function readPrices(
     chain.readContract({ address: spvFeed, abi: feedAbi, functionName: "latestRoundData", ...at }),
   ]);
   const spv = { height: Number(spvRound[0]), updatedAt: Number(spvRound[3]) };
-  return { hashprice, btcUsd, spv, mmSpotShock };
+  return { hashprice, btcUsd, spv, mmSpotShock, feeds: { btcUsd: btcFeed, spv: spvFeed } };
+}
+
+/** The run interval: each run measures the price events since the previous one. */
+const PRICE_MOVE_LOOKBACK_SECONDS = BigInt(process.env.PRICE_MOVE_LOOKBACK_SECONDS ?? "300");
+/** N63: the keeper's liquidatable-to-liquidated window (DECISIONS.md). */
+const PRICE_MOVE_WINDOW_SECONDS = BigInt(process.env.PRICE_MOVE_WINDOW_SECONDS ?? "300");
+
+const priceEventAbi = parseAbi([
+  "function aggregator() view returns (address)",
+  "event AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)",
+  "event HashpriceUpdated(uint32 indexed confirmedHeight, int256 hashprice, uint256 avgFees)",
+]);
+
+/**
+ * Every hashprice-USD and BTC/USD price in force over the look-back plus one window,
+ * rebuilt from the inputs' events: neither `HashpriceUSD` nor `HashpriceBTC` serves
+ * past rounds. Hashprice USD is `HashpriceBTC × BTC/USD`; scale cancels in the moves.
+ */
+export async function readPriceMoves(
+  block: bigint,
+  feeds: { btcUsd: Address; spv: Address },
+): Promise<{ hashprice: PriceMoves; btc: PriceMoves }> {
+  const windowBlocks = PRICE_MOVE_WINDOW_SECONDS / BASE_BLOCK_SECONDS;
+  const measuredFrom = block - PRICE_MOVE_LOOKBACK_SECONDS / BASE_BLOCK_SECONDS;
+  const from = measuredFrom - windowBlocks;
+  // A Chainlink proxy emits no AnswerUpdated; its aggregator does. Mocks emit it themselves.
+  const btcEvents = await chain
+    .readContract({ address: feeds.btcUsd, abi: priceEventAbi, functionName: "aggregator", blockNumber: block })
+    .catch(() => feeds.btcUsd);
+  const answerAt = async (feed: Address) =>
+    (
+      (await chain.readContract({
+        address: feed,
+        abi: feedAbi,
+        functionName: "latestRoundData",
+        blockNumber: from,
+      })) as readonly [bigint, bigint, bigint, bigint, bigint]
+    )[1];
+  const [btcStart, hashpriceBtcStart, btcLogs, hashpriceLogs] = await Promise.all([
+    answerAt(feeds.btcUsd),
+    answerAt(feeds.spv),
+    chain.getLogs({
+      address: btcEvents,
+      event: priceEventAbi[1],
+      fromBlock: from,
+      toBlock: block,
+    }),
+    chain.getLogs({
+      address: feeds.spv,
+      event: priceEventAbi[2],
+      fromBlock: from,
+      toBlock: block,
+    }),
+  ]);
+  const events = [
+    ...btcLogs.map((log) => ({ log, btc: log.args.current, hashpriceBtc: undefined })),
+    ...hashpriceLogs.map((log) => ({ log, btc: undefined, hashpriceBtc: log.args.hashprice })),
+  ].sort((a, b) =>
+    a.log.blockNumber === b.log.blockNumber
+      ? a.log.logIndex - b.log.logIndex
+      : a.log.blockNumber < b.log.blockNumber
+        ? -1
+        : 1,
+  );
+  let btc = Number(btcStart);
+  let hashpriceBtc = Number(hashpriceBtcStart);
+  const btcSeries: PricePoint[] = [{ block: from, price: btc }];
+  const hashpriceSeries: PricePoint[] = [{ block: from, price: hashpriceBtc * btc }];
+  for (const event of events) {
+    const at = event.log.blockNumber;
+    if (event.btc !== undefined) {
+      btc = Number(event.btc);
+      btcSeries.push({ block: at, price: btc });
+    } else if (event.hashpriceBtc !== undefined) hashpriceBtc = Number(event.hashpriceBtc);
+    hashpriceSeries.push({ block: at, price: hashpriceBtc * btc });
+  }
+  return {
+    hashprice: priceMoves(hashpriceSeries, measuredFrom, windowBlocks),
+    btc: priceMoves(btcSeries, measuredFrom, windowBlocks),
+  };
 }
 
 /** The perps halving glide: how far down it is and the step it glides to, both WAD. */

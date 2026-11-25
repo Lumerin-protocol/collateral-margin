@@ -43,20 +43,31 @@ locals {
   vault_btc_rpc_url      = var.bitcoin_rpc_url != "" ? var.bitcoin_rpc_url : "https://bitcoin-mainnet.g.alchemy.com/v2/${var.alchemy_api_key}"
   # Days before the Bitcoin halving at which a reminder fires, and its severity.
   # 500 and 495 are temporary, to see the alarms fire (about 503 days out on 2026-10-31).
-  # 24 h price moves as a fraction of the PME MM spot shock (read on-chain, so
-  # the thresholds follow setShocks). BTC/USD is already inside hashprice USD,
-  # so its alarms are warnings.
+  # N63: the largest price move within the keeper's 5 min window as a fraction of
+  # the gap budget, MM spot shock less the backstop unwind band and fee (all read
+  # on-chain, so the thresholds follow setShocks). 24 h moves stay on the
+  # dashboard. BTC/USD is already inside hashprice USD, so its alarms are warnings.
   price_move_alarms = {
-    "hashprice-warn" = { metric = "HashpriceChange24hPct", ratio = 0.5, severity = "warning" }
-    "hashprice-crit" = { metric = "HashpriceChange24hPct", ratio = 1, severity = "critical" }
-    "btc-warn"       = { metric = "BtcChange24hPct", ratio = 0.5, severity = "warning" }
-    "btc-crit"       = { metric = "BtcChange24hPct", ratio = 1, severity = "warning" }
+    "hashprice-warn" = { metric = "HashpriceMoveBudgetRatio", ratio = 0.5, severity = "warning" }
+    "hashprice-crit" = { metric = "HashpriceMoveBudgetRatio", ratio = 1, severity = "critical" }
+    "btc-warn"       = { metric = "BtcMoveBudgetRatio", ratio = 0.5, severity = "warning" }
+    "btc-crit"       = { metric = "BtcMoveBudgetRatio", ratio = 1, severity = "warning" }
   }
-  # Feed age above which the price is treated as frozen. Hashprice updates per
-  # Bitcoin block, and hour-long gaps between blocks happen every few days.
+  # Projected retarget step as a percent of the MM spot shock, and the blocks left
+  # (432 is about 3 days, 144 about 1) at which it starts to matter.
+  retarget_step_alarms = {
+    "warn" = { shock_pct = 50, blocks = 432, severity = "warning" }
+    "page" = { shock_pct = 80, blocks = 144, severity = "critical" }
+  }
+  # Feed ages against MAX_ORACLE_STALENESS (2 h), past which the venues and the PME
+  # reject the price and nothing liquidates. The hashprice feed reports the older of
+  # its two inputs, so its 2 h alarm is the freeze itself. The hashprice-oracle repo
+  # warns and pages on the HashpriceBTC input (hpo-oracle-warning, hpo-oracle-freeze);
+  # BTC/USD is only read here. Pages are silent and notify through price_feed_frozen.
   price_feed_age_alarms = {
-    "hashprice" = { metric = "HashpriceFeedAgeSeconds", seconds = 7200 }
-    "btc-usd"   = { metric = "BtcUsdFeedAgeSeconds", seconds = 3600 }
+    "hashprice"    = { metric = "HashpriceFeedAgeSeconds", seconds = 7200, severity = "critical" }
+    "btc-usd"      = { metric = "BtcUsdFeedAgeSeconds", seconds = 3600, severity = "warning" }
+    "btc-usd-page" = { metric = "BtcUsdFeedAgeSeconds", seconds = 5400, severity = "critical" }
   }
   # Subgraphs watched for lag and indexing errors beyond the vault one. Futures
   # and derivatives feed the UI's positions and orders; the market maker reads
@@ -284,6 +295,40 @@ resource "aws_cloudwatch_log_metric_filter" "keeper_error" {
   }
 }
 
+# N63: one "Liquidation executed" line per liquidation, with the time from the
+# keeper first queueing the account underwater and the equity before the first
+# tx (collateral token units; negative is bad debt). The latency checks the 5 min
+# window the price-move alarms assume.
+resource "aws_cloudwatch_log_metric_filter" "keeper_liquidation_latency" {
+  count          = var.vault_monitoring.create && var.keeper_service.create ? 1 : 0
+  provider       = aws.use1
+  name           = "${local.shortname}-keeper-liquidation-latency-${local.vault_mon_env}"
+  log_group_name = aws_cloudwatch_log_group.keeper_use1[0].name
+  pattern        = "{ $.msg = \"Liquidation executed\" && $.latencyMs = * }"
+
+  metric_transformation {
+    name      = "KeeperLiquidationLatencyMs"
+    namespace = local.vault_mon_ns
+    value     = "$.latencyMs"
+    unit      = "Milliseconds"
+  }
+}
+
+resource "aws_cloudwatch_log_metric_filter" "keeper_liquidation_equity" {
+  count          = var.vault_monitoring.create && var.keeper_service.create ? 1 : 0
+  provider       = aws.use1
+  name           = "${local.shortname}-keeper-liquidation-equity-${local.vault_mon_env}"
+  log_group_name = aws_cloudwatch_log_group.keeper_use1[0].name
+  pattern        = "{ $.msg = \"Liquidation executed\" && $.equity = * }"
+
+  metric_transformation {
+    name      = "KeeperLiquidationEquityRaw"
+    namespace = local.vault_mon_ns
+    value     = "$.equity"
+    unit      = "None"
+  }
+}
+
 ################################################################################
 # ALARMS
 # Value alarms ignore missing data and keep their last state. CheckSuccess
@@ -447,28 +492,42 @@ resource "aws_cloudwatch_metric_alarm" "price_move" {
   for_each            = var.vault_monitoring.create ? local.price_move_alarms : {}
   provider            = aws.use1
   alarm_name          = "${local.shortname}-price-move-${each.key}-${local.vault_mon_env}"
-  alarm_description   = "${each.value.metric} moved at least ${each.value.ratio * 100}% of the MM spot shock in 24 h (|change| / MmSpotShockPct >= ${each.value.ratio}). A move the size of the MM shock puts the most levered accounts at liquidation: check the keeper is liquidating, the insurance fund and backstop exposure, and whether to raise margins with setShocks. ${each.value.severity == "critical" ? "Pages on lmn." : "Warning only."}"
+  alarm_description   = "${each.value.metric} >= ${each.value.ratio}: a price moved at least ${each.value.ratio * 100}% of the gap budget (MM spot shock less the backstop unwind band and fee) within the keeper's 5 min liquidation window. A full-budget move can take an account from just above maintenance margin to bad debt before the keeper acts: check the keeper is liquidating, the insurance fund and backstop exposure, and whether to raise margins with setShocks. ${each.value.severity == "critical" ? "Pages on lmn." : "Warning only."}"
   comparison_operator = "GreaterThanOrEqualToThreshold"
   evaluation_periods  = 1
   threshold           = each.value.ratio
   treat_missing_data  = "ignore"
   alarm_actions       = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
   ok_actions          = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+  metric_name         = each.value.metric
+  namespace           = local.vault_mon_ns
+  period              = 300
+  statistic           = "Maximum"
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Price Move ${each.key}"
+    Capability = "Monitoring"
+  })
+}
+
+# N62: HashpriceBTC applies a difficulty retarget in one block, so the index steps
+# by the whole adjustment with no keeper window to liquidate in between.
+resource "aws_cloudwatch_metric_alarm" "retarget_step" {
+  for_each            = var.vault_monitoring.create ? local.retarget_step_alarms : {}
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-retarget-step-${each.key}-${local.vault_mon_env}"
+  alarm_description   = "The next Bitcoin difficulty retarget is projected to step the hashprice index by at least ${each.value.shock_pct}% of the MM spot shock, within ${each.value.blocks} blocks (RetargetStepShockPct, RetargetBlocksLeft). The step lands in one block, so an account whose cushion above maintenance is smaller than the step on its exposure goes straight to a loss. Check RetargetAtRiskAccounts and RetargetPotentialBadDebt, then follow docs/retarget-shocks.md to raise the shocks through the Safe before the retarget. ${each.value.severity == "critical" ? "Pages on lmn." : "Warning only."}"
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  evaluation_periods  = 1
+  threshold           = 1
+  treat_missing_data  = "ignore"
+  alarm_actions       = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
+  ok_actions          = each.value.severity == "critical" ? local.vault_critical_actions : local.vault_warning_actions
 
   metric_query {
-    id = "change"
+    id = "shock"
     metric {
-      metric_name = each.value.metric
-      namespace   = local.vault_mon_ns
-      period      = 300
-      stat        = "Average"
-    }
-  }
-
-  metric_query {
-    id = "mm"
-    metric {
-      metric_name = "MmSpotShockPct"
+      metric_name = "RetargetStepShockPct"
       namespace   = local.vault_mon_ns
       period      = 300
       stat        = "Maximum"
@@ -476,14 +535,69 @@ resource "aws_cloudwatch_metric_alarm" "price_move" {
   }
 
   metric_query {
-    id          = "ratio"
-    expression  = "ABS(change) / mm"
-    label       = "24 h move / MM shock"
+    id = "blocks"
+    metric {
+      metric_name = "RetargetBlocksLeft"
+      namespace   = local.vault_mon_ns
+      period      = 300
+      stat        = "Minimum"
+    }
+  }
+
+  metric_query {
+    id          = "due"
+    expression  = "IF(shock >= ${each.value.shock_pct} AND blocks <= ${each.value.blocks}, 1, 0)"
+    label       = "Retarget step due"
     return_data = true
   }
 
   tags = merge(var.default_tags, var.foundation_tags, {
-    Name       = "Col-Mar Price Move ${each.key}"
+    Name       = "Col-Mar Retarget Step ${each.key}"
+    Capability = "Monitoring"
+  })
+}
+
+resource "aws_cloudwatch_metric_alarm" "retarget_bad_debt" {
+  count               = var.vault_monitoring.create ? 1 : 0
+  provider            = aws.use1
+  alarm_name          = "${local.shortname}-retarget-bad-debt-${local.vault_mon_env}"
+  alarm_description   = "At the projected next difficulty retarget, accounts would go below zero equity by more than the insurance fund holds (RetargetPotentialBadDebt > InsuranceFundBalance), after the backstop unwind cost. The loss beyond the fund becomes insurance debt and can halt the vault. Follow docs/retarget-shocks.md: raise the shocks through the Safe before the retarget, or top up the insurance fund. Pages on lmn."
+  comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = 1
+  threshold           = 0
+  treat_missing_data  = "ignore"
+  alarm_actions       = local.vault_critical_actions
+  ok_actions          = local.vault_critical_actions
+
+  metric_query {
+    id = "debt"
+    metric {
+      metric_name = "RetargetPotentialBadDebt"
+      namespace   = local.vault_mon_ns
+      period      = 300
+      stat        = "Maximum"
+    }
+  }
+
+  metric_query {
+    id = "fund"
+    metric {
+      metric_name = "InsuranceFundBalance"
+      namespace   = local.vault_mon_ns
+      period      = 300
+      stat        = "Minimum"
+    }
+  }
+
+  metric_query {
+    id          = "excess"
+    expression  = "debt - fund"
+    label       = "Retarget bad debt beyond the insurance fund"
+    return_data = true
+  }
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Retarget Bad Debt"
     Capability = "Monitoring"
   })
 }
@@ -492,20 +606,43 @@ resource "aws_cloudwatch_metric_alarm" "price_feed_age" {
   for_each            = var.vault_monitoring.create ? local.price_feed_age_alarms : {}
   provider            = aws.use1
   alarm_name          = "${local.shortname}-price-feed-age-${each.key}-${local.vault_mon_env}"
-  alarm_description   = "${each.value.metric} is above ${each.value.seconds / 60} minutes: the feed looks frozen, which hides price moves from margin and from the move alarms. Check the hashprice oracle keeper and the Chainlink BTC/USD feed. Warning only."
+  alarm_description   = "${each.value.metric} is above ${each.value.seconds / 60} minutes (missing data counts). The venues and the margin engine reject the price at 120 minutes and nothing liquidates until it updates. Check the hashprice oracle keeper and the Chainlink BTC/USD feed. ${each.value.severity == "critical" ? "Pages on lmn through ${local.shortname}-price-feed-frozen-${local.vault_mon_env}." : "Warning only."}"
   comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = 1
+  evaluation_periods  = each.value.severity == "critical" ? 2 : 1
+  datapoints_to_alarm = each.value.severity == "critical" ? 2 : 1
   metric_name         = each.value.metric
   namespace           = local.vault_mon_ns
   period              = 300
   statistic           = "Minimum"
   threshold           = each.value.seconds
-  treat_missing_data  = "ignore"
-  alarm_actions       = local.vault_warning_actions
-  ok_actions          = local.vault_warning_actions
+  treat_missing_data  = "breaching"
+  alarm_actions       = each.value.severity == "critical" ? [] : local.vault_warning_actions
+  ok_actions          = each.value.severity == "critical" ? [] : local.vault_warning_actions
 
   tags = merge(var.default_tags, var.foundation_tags, {
     Name       = "Col-Mar Price Feed Age ${each.key}"
+    Capability = "Monitoring"
+  })
+}
+
+# AWS's notification carries this description and the triggering child, not the
+# child's own description.
+resource "aws_cloudwatch_composite_alarm" "price_feed_frozen" {
+  count             = var.vault_monitoring.create ? 1 : 0
+  provider          = aws.use1
+  alarm_name        = "${local.shortname}-price-feed-frozen-${local.vault_mon_env}"
+  alarm_description = "The hashprice price is about to freeze or has frozen; nothing liquidates while it is, so a move during the gap lands on the insurance fund. The child under 'Triggering children' says which: price-feed-age-btc-usd-page = Chainlink BTC/USD has not updated for 90 minutes (it normally does every 20), the venues and the margin engine reject the price at 120: check the Chainlink feed and status. price-feed-age-hashprice = the combined feed is past 120 minutes and the venues and the margin engine already reject it (OracleStale): if BTC/USD is fresh, the HashpriceBTC input is the cause, see hpo-oracle-freeze-${local.vault_mon_env}. Then check the most levered accounts against the MM shock and the insurance fund. Clears when the feed updates."
+
+  alarm_rule = join(" OR ", [
+    "ALARM(${aws_cloudwatch_metric_alarm.price_feed_age["btc-usd-page"].alarm_name})",
+    "ALARM(${aws_cloudwatch_metric_alarm.price_feed_age["hashprice"].alarm_name})",
+  ])
+
+  alarm_actions = local.vault_critical_actions
+  ok_actions    = local.vault_critical_actions
+
+  tags = merge(var.default_tags, var.foundation_tags, {
+    Name       = "Col-Mar Price Feed Frozen"
     Capability = "Monitoring"
   })
 }
@@ -1272,7 +1409,10 @@ resource "aws_cloudwatch_dashboard" "vault" {
               aws_cloudwatch_metric_alarm.vault_backstop_unfilled[*].arn,
               [for alarm in aws_cloudwatch_metric_alarm.btc_halving : alarm.arn],
               [for alarm in aws_cloudwatch_metric_alarm.price_move : alarm.arn],
+              [for alarm in aws_cloudwatch_metric_alarm.retarget_step : alarm.arn],
+              aws_cloudwatch_metric_alarm.retarget_bad_debt[*].arn,
               [for alarm in aws_cloudwatch_metric_alarm.price_feed_age : alarm.arn],
+              aws_cloudwatch_composite_alarm.price_feed_frozen[*].arn,
               aws_cloudwatch_metric_alarm.spv_behind_bitcoin[*].arn,
               aws_cloudwatch_metric_alarm.vault_util_warn[*].arn,
               aws_cloudwatch_metric_alarm.vault_util_crit[*].arn,
@@ -1322,7 +1462,7 @@ resource "aws_cloudwatch_dashboard" "vault" {
           y          = 4
           width      = 24
           height     = 4
-          properties = { markdown = "## Price feed: nothing trades without it\n- Hashprice USD = hashprice BTC from our SPV oracle (Bitcoin headers relayed by the SPV keeper) × Chainlink BTC/USD. Margin, marks, liquidations and the market maker all read it.\n- **SPV relay delay**: Bitcoin blocks the oracle trails the tip, and minutes since the keeper's last header. **Chainlink BTC/USD**: minutes since its last update (each drop to 0 is an update) and updates per hour. On dev BTC/USD is a mock the SPV keeper updates.\n- **Price feed age**: the hashprice feed reports the older of its two inputs, so it rises when either stalls. **Moves vs MM spot shock**: a 24 h hashprice move of half the shock warns, the full shock pages." }
+          properties = { markdown = "## Price feed: nothing trades without it\n- Hashprice USD = hashprice BTC from our SPV oracle (Bitcoin headers relayed by the SPV keeper) × Chainlink BTC/USD. Margin, marks, liquidations and the market maker all read it.\n- **SPV relay delay**: Bitcoin blocks the oracle trails the tip, and minutes since the keeper's last header. **Chainlink BTC/USD**: minutes since its last update (each drop to 0 is an update) and updates per hour. On dev BTC/USD is a mock the SPV keeper updates.\n- **Price feed age**: the hashprice feed reports the older of its two inputs, so it rises when either stalls; past 120 min the venues reject it and nothing liquidates (pages). BTC/USD warns at 60 min and pages at 90; the HashpriceBTC input is paged by the hashprice-oracle repo. **Moves vs the gap budget**: the largest move inside the keeper's 5 min window warns at half the budget (MM spot shock less the unwind band and fee) and pages at the full budget. 24 h moves stay on the chart." }
         },
         {
           type   = "metric"
@@ -1438,7 +1578,10 @@ resource "aws_cloudwatch_dashboard" "vault" {
               [local.vault_mon_ns, "HashpriceChange1hPct", { label = "Hashprice 1 h" }],
               [local.vault_mon_ns, "BtcChange24hPct", { label = "BTC 24 h" }],
               [local.vault_mon_ns, "BtcChange1hPct", { label = "BTC 1 h" }],
+              [local.vault_mon_ns, "HashpriceMaxMove5mPct", { label = "Hashprice max 5 min", stat = "Maximum" }],
+              [local.vault_mon_ns, "BtcMaxMove5mPct", { label = "BTC max 5 min", stat = "Maximum" }],
               [local.vault_mon_ns, "MmSpotShockPct", { label = "MM shock", stat = "Maximum", color = "#d62728" }],
+              [local.vault_mon_ns, "PriceMoveBudgetPct", { label = "Gap budget", stat = "Minimum", color = "#ff7f0e" }],
             ]
           }
         },
@@ -1449,11 +1592,16 @@ resource "aws_cloudwatch_dashboard" "vault" {
           width  = 12
           height = 6
           properties = {
-            title  = "Bitcoin halving and the perps glide"
+            title  = "Bitcoin retarget, halving and the perps glide"
             region = var.default_region
             period = 3600
             view   = "singleValue"
             metrics = [
+              [local.vault_mon_ns, "RetargetBlocksLeft", { label = "Blocks to retarget", stat = "Minimum" }],
+              [local.vault_mon_ns, "RetargetProjectedStepPct", { label = "Projected index step %", stat = "Average" }],
+              [local.vault_mon_ns, "RetargetStepShockPct", { label = "Step / MM shock %", stat = "Maximum" }],
+              [local.vault_mon_ns, "RetargetAtRiskAccounts", { label = "Accounts at risk", stat = "Maximum" }],
+              [local.vault_mon_ns, "RetargetPotentialBadDebt", { label = "Potential bad debt", stat = "Maximum" }],
               [local.vault_mon_ns, "BtcDaysUntilHalving", { label = "Days", stat = "Minimum" }],
               [local.vault_mon_ns, "BtcBlocksUntilHalving", { label = "Blocks", stat = "Minimum" }],
               [local.vault_mon_ns, "GlideProgressPct", { label = "Glide progress %", stat = "Maximum" }],
@@ -1897,10 +2045,29 @@ resource "aws_cloudwatch_dashboard" "vault" {
           }
         },
         {
-          type   = "log"
+          type   = "metric"
           x      = 0
           y      = 60
-          width  = 24
+          width  = 8
+          height = 6
+          properties = {
+            title  = "Liquidations: latency (s) and equity at execution (USDC)"
+            region = var.default_region
+            period = 300
+            view   = "timeSeries"
+            metrics = [
+              [local.vault_mon_ns, "KeeperLiquidationLatencyMs", { id = "lat", stat = "Maximum", visible = false }],
+              [{ expression = "lat / 1000", label = "Max latency (s); alarms assume 300", id = "latency" }],
+              [local.vault_mon_ns, "KeeperLiquidationEquityRaw", { id = "eq", stat = "Minimum", visible = false }],
+              [{ expression = "eq / 1000000", label = "Min equity (USDC; below 0 is bad debt)", id = "equity", yAxis = "right" }],
+            ]
+          }
+        },
+        {
+          type   = "log"
+          x      = 8
+          y      = 60
+          width  = 16
           height = 6
           properties = {
             title  = "Keeper recent errors and warnings"

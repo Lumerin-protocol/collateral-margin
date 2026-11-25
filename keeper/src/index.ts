@@ -114,7 +114,8 @@ async function main(): Promise<void> {
     logger,
   );
 
-  // Predictive layer: subscribes to BTC/USDC AnswerUpdated events, reads
+  // Predictive layer: subscribes to BTC/USDC AnswerUpdated (on the proxy's
+  // aggregator) and HashpriceBTC HashpriceUpdated events, reads
   // the current HashpriceUSDC value, and pre-computes per-user liquidation
   // thresholds so price ticks feed the coordinator queue directly. The
   // periodic Scheduler stays as a safety net at a relaxed cadence.

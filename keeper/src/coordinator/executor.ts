@@ -1,4 +1,5 @@
 import type pino from "pino";
+import type { Address } from "viem";
 import type { Config } from "../config.ts";
 import type { CoordinatorQueue } from "./queue.ts";
 import type { Planner, PlanOutcome } from "./planner.ts";
@@ -194,10 +195,24 @@ export class CoordinatorExecutor {
   }
 
   private handleOutcome(
-    user: string,
+    user: Address,
     outcome: PlanOutcome,
     log: pino.Logger,
   ): void {
+    if (outcome.kind !== "stalled") {
+      const since = this.queue.takeUnderwaterSince(user);
+      // N63: metric filters on the keeper log group read latencyMs and equity.
+      if (outcome.kind === "liquidated" || outcome.kind === "badDebt")
+        log.info(
+          {
+            user,
+            kind: outcome.kind,
+            latencyMs: since === undefined ? undefined : Date.now() - since,
+            equity: outcome.equity,
+          },
+          "Liquidation executed",
+        );
+    }
     switch (outcome.kind) {
       case "healthy":
       case "liquidated":

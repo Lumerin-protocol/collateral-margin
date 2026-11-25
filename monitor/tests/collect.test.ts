@@ -8,6 +8,8 @@ import { before, describe, it } from "node:test";
 import { CloudWatchClient } from "@aws-sdk/client-cloudwatch";
 import {
   decodeFunctionData,
+  encodeAbiParameters,
+  encodeEventTopics,
   encodeFunctionResult,
   erc20Abi,
   multicall3Abi,
@@ -47,12 +49,48 @@ const venueAbi = parseAbi([
   "function liquidatorShareBps() view returns (uint16)",
   "function deliverySchedule() view returns (uint256 currentSlot, uint256 pinnedCount, uint256 previousExpiry)",
   "function futureExpirationDatesCount() view returns (uint8)",
+  "struct ExposureView { int256 netPositionExposure; int256 unrealizedPnl; int256 pendingFunding; uint256 buyOrderExposure; uint256 sellOrderExposure; uint256 buyOrderFillLoss; uint256 sellOrderFillLoss; }",
+  "function getExposureView(address user) view returns (ExposureView)",
 ]);
 const mmAbi = parseAbi([
   "function balanceOf(address user) view returns (uint256)",
   "function computePortfolioIM(address user) view returns (uint256)",
+  "function computePortfolioMargins(address user) view returns (uint256 im, uint256 mm)",
   "function getEthBalance(address addr) view returns (uint256)",
 ]);
+/**
+ * N62: vault users ahead of the retarget. A is long 1,000 on perps with 200 of
+ * futures bids and a 20 cushion; B is long 4,000 and already below maintenance;
+ * C is short 1,000. USDC units.
+ */
+const ACCOUNTS: Record<
+  string,
+  {
+    balance: number;
+    mm: number;
+    perps: { net: number; pnl?: number; funding?: number };
+    futures: { net: number; bids?: number };
+  }
+> = {
+  "0x00000000000000000000000000000000000000a1": {
+    balance: 120,
+    mm: 100,
+    perps: { net: 1_000 },
+    futures: { net: 0, bids: 200 },
+  },
+  "0x00000000000000000000000000000000000000b1": {
+    balance: 250,
+    mm: 400,
+    perps: { net: 4_000, pnl: -10, funding: 2 },
+    futures: { net: 0 },
+  },
+  "0x00000000000000000000000000000000000000c1": {
+    balance: 100,
+    mm: 100,
+    perps: { net: -1_000 },
+    futures: { net: 0 },
+  },
+};
 const MARGIN_ENGINE = "0x0000000000000000000000000000000000000009";
 /** Perps' price oracle on the CF-321 venue: the halving glide. */
 const GLIDE_FEED = "0x00000000000000000000000000000000000000a7";
@@ -123,6 +161,7 @@ const vaultResponse = {
   ],
   futuresUser: { balance: u(7) },
   perpsUser: null,
+  vaultUsers: Object.keys(ACCOUNTS).map((id) => ({ id })),
 };
 
 const riskView = (unrealizedPnl: bigint, pendingFunding: bigint) => ({
@@ -182,7 +221,55 @@ const FEEDS: Record<
   },
 };
 
+/** The Chainlink aggregator behind the BTC/USD proxy; only it emits AnswerUpdated. */
+const BTC_AGGREGATOR = "0x00000000000000000000000000000000000000f4";
+const eventAbi = parseAbi([
+  "function aggregator() view returns (address)",
+  "event AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)",
+  "event HashpriceUpdated(uint32 indexed confirmedHeight, int256 hashprice, uint256 avgFees)",
+]);
+/**
+ * N63: price events in the look-back (300 s run interval + 300 s window = 300 blocks, so
+ * from block 700; only events after block 850 are measured). Prices at block 700 are the
+ * feeds' `past` answers: hashprice 41,250,000 sat, BTC $76,000.
+ *   820 BTC $78,000 (before the measured interval; a reference only)
+ *   900 BTC $80,000: step +2.56%, +5.26% against $76,000 still in force 150 blocks back
+ *   950 hashprice 39,187,500 sat: hashprice USD step -5%
+ */
+const PRICE_LOGS: { block: number; address: string; event: "AnswerUpdated" | "HashpriceUpdated"; value: bigint }[] = [
+  { block: 820, address: BTC_AGGREGATOR, event: "AnswerUpdated", value: 7_800_000_000_000n },
+  { block: 900, address: BTC_AGGREGATOR, event: "AnswerUpdated", value: 8_000_000_000_000n },
+  { block: 950, address: SPV_FEED, event: "HashpriceUpdated", value: 39_187_500n },
+];
+
+function getLogs(filter: { address: string; fromBlock: string; toBlock: string }) {
+  assert.equal(filter.fromBlock, toHex(BLOCK - 300));
+  assert.equal(filter.toBlock, toHex(BLOCK));
+  return PRICE_LOGS.filter((log) => log.address === filter.address.toLowerCase()).map((log, i) => {
+    const encoded =
+      log.event === "AnswerUpdated"
+        ? encodeEventTopics({ abi: eventAbi, eventName: "AnswerUpdated", args: { current: log.value, roundId: BigInt(i) } })
+        : encodeEventTopics({ abi: eventAbi, eventName: "HashpriceUpdated", args: { confirmedHeight: BTC_TIP - 1 } });
+    return {
+      address: log.address,
+      blockHash: toHex(log.block, { size: 32 }),
+      blockNumber: toHex(log.block),
+      data:
+        log.event === "AnswerUpdated"
+          ? encodeAbiParameters([{ type: "uint256" }], [0n])
+          : encodeAbiParameters([{ type: "int256" }, { type: "uint256" }], [log.value, 0n]),
+      logIndex: toHex(i),
+      removed: false,
+      topics: encoded,
+      transactionHash: toHex(log.block, { size: 32 }),
+      transactionIndex: "0x0",
+    };
+  });
+}
+
 function feedCall(to: string, data: `0x${string}`, block: string): `0x${string}` {
+  if (to === BTC_FEED && data.startsWith(toFunctionSelector("function aggregator()")))
+    return encodeFunctionResult({ abi: eventAbi, functionName: "aggregator", result: BTC_AGGREGATOR });
   const { functionName } = decodeFunctionData({ abi: feedAbi, data });
   if (functionName === "btcUsdOracle")
     return encodeFunctionResult({ abi: feedAbi, functionName, result: BTC_FEED });
@@ -206,13 +293,24 @@ function feedCall(to: string, data: `0x${string}`, block: string): `0x${string}`
 function ethCall(to: string, data: `0x${string}`): `0x${string}` {
   const address = to.toLowerCase();
   if (address === process.env.VAULT_ADDRESS) {
-    // Only the market maker's own vault balance is read from the vault.
+    // The market maker's own vault balance, and the N62 accounts'.
     const { args } = decodeFunctionData({ abi: mmAbi, data });
-    assert.equal(args?.[0], process.env.MM_ADDRESS);
+    const user = String(args?.[0]).toLowerCase();
+    const account = ACCOUNTS[user];
+    if (!account) assert.equal(user, process.env.MM_ADDRESS);
     return encodeFunctionResult({
       abi: mmAbi,
       functionName: "balanceOf",
-      result: BigInt(u(1_800)),
+      result: BigInt(u(account ? account.balance : 1_800)),
+    });
+  }
+  if (address === MARGIN_ENGINE && data.startsWith(toFunctionSelector("function computePortfolioMargins(address)"))) {
+    const { args } = decodeFunctionData({ abi: mmAbi, data });
+    const account = ACCOUNTS[String(args?.[0]).toLowerCase()];
+    return encodeFunctionResult({
+      abi: mmAbi,
+      functionName: "computePortfolioMargins",
+      result: [BigInt(u(account.mm * 1.5)), BigInt(u(account.mm))],
     });
   }
   if (address === MARGIN_ENGINE && data.startsWith(toFunctionSelector("function mmSpotShock()")))
@@ -310,6 +408,25 @@ function ethCall(to: string, data: `0x${string}`): `0x${string}` {
           ? riskView(-15_000_000n, 0n)
           : riskView(4_000_000n, 1_000_000n),
       });
+    case "getExposureView": {
+      const account = ACCOUNTS[String(args?.[0]).toLowerCase()];
+      const leg: { net: number; pnl?: number; funding?: number; bids?: number } = isFutures
+        ? account.futures
+        : account.perps;
+      return encodeFunctionResult({
+        abi: venueAbi,
+        functionName,
+        result: {
+          netPositionExposure: BigInt(Math.round(leg.net * 1e6)),
+          unrealizedPnl: BigInt(Math.round((leg.pnl ?? 0) * 1e6)),
+          pendingFunding: BigInt(Math.round((leg.funding ?? 0) * 1e6)),
+          buyOrderExposure: BigInt(Math.round((leg.bids ?? 0) * 1e6)),
+          sellOrderExposure: 0n,
+          buyOrderFillLoss: 0n,
+          sellOrderFillLoss: 0n,
+        },
+      });
+    }
     case "liquidationFeeBps":
       // futures keeps 200 × 80% = 160 bps, perps 300 × 80% = 240 bps.
       return encodeFunctionResult({
@@ -394,6 +511,9 @@ function rpc(request: { id: number; method: string; params: unknown[] }) {
       result = ethCall(call.to, call.data);
       break;
     }
+    case "eth_getLogs":
+      result = getLogs(params[0] as { address: string; fromBlock: string; toBlock: string });
+      break;
     default:
       throw new Error(`unexpected rpc ${method}`);
   }
@@ -513,11 +633,36 @@ describe("collect", () => {
   });
 
   it("batches contract reads into two multicalls per check", () => {
-    // backstop 13 + 2 reads for each of 2 legs; market maker 7 + 3 reads for each of 3 expiries
+    // backstop 13 + 2 reads for each of 2 legs; market maker 7 + 3 reads for each of 3 expiries;
+    // N62 retarget risk 4 reads for each of 3 vault users
     assert.deepEqual(
       [...multicallSizes].sort((a, b) => a - b),
-      [4, 7, 9, 13],
+      [4, 7, 9, 12, 13],
     );
+  });
+
+  it("N62: projects the next retarget from the epoch's block times", () => {
+    // Tip 1,046,000 is 1,712 blocks into the epoch starting at 1,044,288, at 570 s a block.
+    const step = (BTC_BLOCK_SECONDS * 2015) / (2016 * 600) - 1;
+    assert.equal(value("RetargetBlocksLeft"), 304);
+    const near = (name: string, expected: number) => {
+      const actual = value(name) ?? Number.NaN;
+      assert.ok(Math.abs(actual - expected) < 1e-9, `${name} ${actual} vs ${expected}`);
+    };
+    near("RetargetProjectedStepPct", step * 100);
+    near("RetargetDifficultyChangePct", (1 / (1 + step) - 1) * 100);
+    // against the 10% MM spot shock
+    near("RetargetStepShockPct", (Math.abs(step) / 0.1) * 100);
+  });
+
+  it("N62: counts accounts the projected step would put below maintenance and their bad debt", () => {
+    const step = (BTC_BLOCK_SECONDS * 2015) / (2016 * 600) - 1;
+    // A (long 1,200 with its bids) and B are hit by the down-step; C is short.
+    assert.equal(value("RetargetAtRiskAccounts"), 2);
+    // Only B goes negative: equity 250 - 10 - 2, the step, then the 225 bps unwind.
+    const equityAfter = 250 - 10 - 2 + 4_000 * step - 4_000 * (1 + step) * 0.0225;
+    const badDebt = value("RetargetPotentialBadDebt") ?? Number.NaN;
+    assert.ok(Math.abs(badDebt + equityAfter) < 1e-6, `bad debt ${badDebt} vs ${-equityAfter}`);
   });
 
   it("converts vault balances to USDC units", () => {
@@ -606,6 +751,21 @@ describe("collect", () => {
     assert.equal(value("MmSpotShockPct"), 10);
     assert.ok(Math.abs((value("HashpriceFeedAgeSeconds") ?? 0) - 120) <= 5);
     assert.ok(Math.abs((value("BtcUsdFeedAgeSeconds") ?? 0) - 60) <= 5);
+  });
+
+  it("N63: measures price moves between rounds and within the keeper's window against the budget", () => {
+    const near = (name: string, expected: number) => {
+      const actual = value(name) ?? Number.NaN;
+      assert.ok(Math.abs(actual - expected) < 1e-9, `${name} ${actual} != ${expected}`);
+    };
+    near("HashpriceMaxStepPct", 5);
+    near("HashpriceMaxMove5mPct", 400 / 76);
+    near("BtcMaxStepPct", 200 / 78);
+    near("BtcMaxMove5mPct", 400 / 76);
+    // MM shock 10% less the unwind band 200 bps and fee 25 bps.
+    near("PriceMoveBudgetPct", 7.75);
+    near("HashpriceMoveBudgetRatio", 400 / 76 / 7.75);
+    near("BtcMoveBudgetRatio", 400 / 76 / 7.75);
   });
 
   it("reports the SPV relay delay and how often Chainlink BTC/USD updates", () => {

@@ -148,7 +148,9 @@ export class NonceManager {
           continue;
         }
       } catch (err) {
-        if (isNonceDesyncError(err)) receipt = await this.landedReceipt(sent);
+        // An earlier broadcast may have landed after its timeout; a replacement then
+        // fails on the spent nonce or reverts against the state it already changed.
+        if (sent.length > 0) receipt = await this.landedReceipt(sent);
         // Not one of ours: a *third party* (e.g. a keeper sharing this wallet)
         // consumed the nonce. Fee-bumping or cancelling a spent nonce is pointless
         // and only burns gas, so re-read the live nonce and retry at the fresh value.

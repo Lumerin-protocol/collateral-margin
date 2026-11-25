@@ -25,6 +25,7 @@ import {
   type MarketMakerHealth,
   type MarketMakerState,
   marketName,
+  readAccountRisks,
   readBitcoinTip,
   readBlockNumber,
   readBlockTimestamp,
@@ -33,6 +34,7 @@ import {
   readMarketMaker,
   readMarketMakerHealth,
   readPointsMeta,
+  readPriceMoves,
   readPrices,
   readPublicBitcoinTips,
   readSubgraphMeta,
@@ -50,6 +52,7 @@ import {
   toUnits,
   utilizationPct,
 } from "./lib.ts";
+import { projectRetarget, retargetRisk } from "./retarget.ts";
 
 // Terraform sets and validates this (var.vault_env); nothing is optional here.
 const { CW_NAMESPACE } = process.env as Record<string, string>;
@@ -99,6 +102,7 @@ export async function collect(): Promise<{
     prices,
     subgraphMetas,
     glide,
+    accounts,
   ] = await Promise.all([
       readChainState(at, vault.collateralToken),
       // Goldsky leaves _meta.block.timestamp null; the age alarm needs the real one.
@@ -160,7 +164,21 @@ export async function collect(): Promise<{
         log(`glide check failed: ${describeError(error)}`);
         return null;
       }),
+      // Best-effort: the retarget forecast must not fail the vault debt check.
+      readAccountRisks(at, vault.marginEngine).catch((error) => {
+        failed.push("retarget_accounts");
+        log(`retarget account check failed: ${describeError(error)}`);
+        return null;
+      }),
     ]);
+  // Best-effort: needs the feed addresses readPrices resolved.
+  const moves = prices
+    ? await readPriceMoves(at.blockNumber, prices.feeds).catch((error) => {
+        failed.push("price_moves");
+        log(`price move check failed: ${describeError(error)}`);
+        return null;
+      })
+    : null;
   const head = Number(headBlock);
 
   // Derived figures.
@@ -319,6 +337,37 @@ export async function collect(): Promise<{
   }
 
   if (bitcoinTip) points.push(...halvingMetrics(bitcoinTip));
+  const retarget = bitcoinTip ? projectRetarget(bitcoinTip) : null;
+  if (retarget) {
+    points.push(
+      metric("RetargetBlocksLeft", retarget.blocksLeft, "Count"),
+      metric("RetargetDifficultyChangePct", retarget.difficultyChange * 100),
+      metric("RetargetProjectedStepPct", retarget.indexStep * 100),
+    );
+    if (prices && prices.mmSpotShock > 0n)
+      points.push(
+        metric("RetargetStepShockPct", (Math.abs(retarget.indexStep) / (Number(prices.mmSpotShock) / 1e18)) * 100),
+      );
+    if (accounts) {
+      const risk = retargetRisk(
+        accounts.map((account) => ({
+          balance: usdc(account.balance),
+          maintenance: usdc(account.maintenance),
+          netExposure: usdc(account.netExposure),
+          buyOrderExposure: usdc(account.buyOrderExposure),
+          sellOrderExposure: usdc(account.sellOrderExposure),
+          unrealizedPnl: usdc(account.unrealizedPnl),
+          fundingOwed: usdc(account.fundingOwed),
+        })),
+        retarget.indexStep,
+        vault.backstopUnwindBandBps + vault.backstopUnwindFeeBps,
+      );
+      points.push(
+        metric("RetargetAtRiskAccounts", risk.atRisk, "Count"),
+        metric("RetargetPotentialBadDebt", risk.potentialBadDebt),
+      );
+    }
+  }
   if (glide) {
     // WAD → percent. The glide runs over the last week before the halving; perps' mark
     // sits that share of the step below the index.
@@ -351,6 +400,23 @@ export async function collect(): Promise<{
     ]);
     if (tip !== null)
       points.push(metric("SpvBlocksBehind", Math.max(0, tip - prices.spv.height), "Count"));
+    if (moves) {
+      // N63: a move inside the keeper's window may take an account from just above MM
+      // past zero equity only if it exceeds the MM shock less what the unwind gives away.
+      const budget =
+        Number(prices.mmSpotShock) / 1e16 -
+        (vault.backstopUnwindBandBps + vault.backstopUnwindFeeBps) / 100;
+      const ratio = (pct: number) => (budget > 0 ? pct / budget : 1000);
+      points.push(
+        metric("HashpriceMaxStepPct", moves.hashprice.maxStepPct),
+        metric("HashpriceMaxMove5mPct", moves.hashprice.maxWindowMovePct),
+        metric("BtcMaxStepPct", moves.btc.maxStepPct),
+        metric("BtcMaxMove5mPct", moves.btc.maxWindowMovePct),
+        metric("PriceMoveBudgetPct", budget),
+        metric("HashpriceMoveBudgetRatio", ratio(moves.hashprice.maxWindowMovePct)),
+        metric("BtcMoveBudgetRatio", ratio(moves.btc.maxWindowMovePct)),
+      );
+    }
   }
   if (publicTips.errors.length) log(`bitcoin explorers failed: ${publicTips.errors.join("; ")}`);
   if (!publicTips.heights.length) failed.push("bitcoin_explorers");

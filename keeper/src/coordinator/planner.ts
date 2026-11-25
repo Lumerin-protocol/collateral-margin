@@ -4,7 +4,7 @@ import type { Chain } from "../chain.ts";
 import type { Venue } from "../venues/types.ts";
 import type { Config } from "../config.ts";
 import type { AccountHealth } from "../pme/health.ts";
-import { readAccountHealthBatch } from "../pme/health.ts";
+import { readAccountEquity, readAccountHealthBatch } from "../pme/health.ts";
 
 /** What happened at the end of a single `Planner.run(user)` call. */
 export type PlanOutcome =
@@ -15,8 +15,10 @@ export type PlanOutcome =
       feeEarned: bigint;
       positionsClosed: number;
       ordersClosed: number;
+      /** Equity before the first liquidation tx; undefined if the read failed. */
+      equity?: bigint;
     }
-  | { kind: "badDebt"; mmSurplus: bigint; feeEarned: bigint }
+  | { kind: "badDebt"; mmSurplus: bigint; feeEarned: bigint; equity?: bigint }
   | { kind: "standingDebt"; mmSurplus: bigint; feeEarned: bigint }
   | { kind: "stalled"; reason: string; mmSurplus: bigint };
 
@@ -121,6 +123,13 @@ export class Planner {
       { mmSurplus: health.mmSurplus },
       "Planner.run: account underwater, running coordinated plan",
     );
+    // Best-effort: it only feeds the "Liquidation executed" log line.
+    const equity = await readAccountEquity(this.chain, this.config, user).catch(
+      (err) => {
+        log.warn({ err }, "Planner.run: equity read failed");
+        return undefined;
+      },
+    );
 
     // Step 3: orders-leg across every venue. Each venue's `liquidateOrders`
     // is permissionless and natively handles "no open orders" via the
@@ -144,6 +153,7 @@ export class Planner {
         feeEarned: totalFee,
         positionsClosed: 0,
         ordersClosed,
+        equity,
       };
     }
 
@@ -185,6 +195,7 @@ export class Planner {
           kind: "badDebt",
           mmSurplus: health.mmSurplus,
           feeEarned: totalFee,
+          equity,
         };
       }
       if (actionable.length === 0) {
@@ -274,6 +285,7 @@ export class Planner {
           feeEarned: totalFee,
           positionsClosed,
           ordersClosed,
+          equity,
         };
       }
     }
